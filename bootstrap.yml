@@ -1,0 +1,8 @@
+---
+- name: Bootstrap Desk Cluster access
+  hosts: deskboxes
+  gather_facts: false
+  become: false
+
+  roles:
+    - access

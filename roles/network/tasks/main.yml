@@ -1,0 +1,15 @@
+---
+- name: Configure cluster LAN
+  community.general.nmcli:
+    conn_name: "{{ cluster_connection }}"
+    ifname: "{{ cluster_interface }}"
+    type: ethernet
+    ip4:
+      - "{{ cluster_ip }}/24"
+    method4: manual
+    never_default4: true
+    dns4: []
+    dns4_search: []
+    method6: disabled
+    autoconnect: true
+    state: present

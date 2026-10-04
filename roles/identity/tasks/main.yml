@@ -1,0 +1,17 @@
+---
+- name: Set hostname
+  ansible.builtin.hostname:
+    name: "{{ inventory_hostname }}"
+
+- name: Set local hostname entry
+  ansible.builtin.lineinfile:
+    path: /etc/hosts
+    regexp: '^127\.0\.1\.1\s+'
+    line: "127.0.1.1   {{ inventory_hostname }}"
+
+- name: Ensure cluster host mappings exist
+  ansible.builtin.lineinfile:
+    path: /etc/hosts
+    regexp: "^{{ hostvars[item].cluster_ip | regex_escape }}\\s+"
+    line: "{{ hostvars[item].cluster_ip }} {{ item }}"
+  loop: "{{ groups['deskboxes'] }}"

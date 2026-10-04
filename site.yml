@@ -1,0 +1,19 @@
+---
+- name: Configure Desk Cluster
+  hosts: deskboxes
+  become: true
+  gather_facts: false
+
+  roles:
+    - identity
+    - network
+    - access
+
+- name: Harden Desk Cluster SSH
+  hosts: deskboxes
+  become: true
+  gather_facts: false
+  serial: 1
+
+  roles:
+    - ssh

@@ -1,0 +1,61 @@
+---
+- name: Install SSH hardening configuration
+  ansible.builtin.copy:
+    dest: /etc/ssh/sshd_config.d/90-cluster-hardening.conf
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      PermitRootLogin no
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+      PubkeyAuthentication yes
+  register: ssh_hardening
+
+- name: Validate current SSH configuration
+  ansible.builtin.command:
+    cmd: /usr/sbin/sshd -t
+  changed_when: false
+  check_mode: false
+
+- name: Reload SSH
+  ansible.builtin.service:
+    name: ssh
+    state: reloaded
+  when:
+    - ssh_hardening.changed
+    - not ansible_check_mode
+
+- name: Reset Ansible SSH connection
+  ansible.builtin.meta: reset_connection
+  when:
+    - ssh_hardening.changed
+    - not ansible_check_mode
+
+- name: Wait for SSH connection
+  ansible.builtin.wait_for_connection:
+    timeout: 20
+  when:
+    - ssh_hardening.changed
+    - not ansible_check_mode
+
+- name: Read effective SSH configuration
+  ansible.builtin.shell:
+    cmd: >
+      /usr/sbin/sshd -T |
+      grep -E '^(permitrootlogin|passwordauthentication|kbdinteractiveauthentication|pubkeyauthentication) '
+  register: ssh_effective
+  changed_when: false
+  check_mode: false
+
+- name: Verify SSH hardening
+  ansible.builtin.assert:
+    that:
+      - "'permitrootlogin no' in ssh_effective.stdout"
+      - "'passwordauthentication no' in ssh_effective.stdout"
+      - "'kbdinteractiveauthentication no' in ssh_effective.stdout"
+      - "'pubkeyauthentication yes' in ssh_effective.stdout"
+    fail_msg: "SSH hardening did not become effective on {{ inventory_hostname }}"
+    success_msg: "SSH hardening verified on {{ inventory_hostname }}"
+  when:
+    - not ansible_check_mode or not ssh_hardening.changed
