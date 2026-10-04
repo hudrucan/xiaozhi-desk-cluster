@@ -4,6 +4,9 @@
   become: true
   gather_facts: false
 
+  vars_files:
+    - vars/vault.yml
+
   roles:
     - identity
     - network

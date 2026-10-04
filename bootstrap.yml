@@ -4,5 +4,8 @@
   gather_facts: false
   become: false
 
+  vars_files:
+    - vars/vault.yml
+
   roles:
     - access
