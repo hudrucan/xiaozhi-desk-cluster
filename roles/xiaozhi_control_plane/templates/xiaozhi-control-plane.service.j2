@@ -1,0 +1,41 @@
+# Managed by Ansible.
+[Unit]
+Description=Xiaozhi standalone Settings and cluster control plane
+Wants=network-online.target nats-server.service
+After=network-online.target nats-server.service
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User={{ xiaozhi_control_plane_service_user }}
+Group={{ xiaozhi_control_plane_service_user }}
+WorkingDirectory={{ xiaozhi_control_plane_repo_dir }}/main/xiaozhi-server
+EnvironmentFile=/etc/xiaozhi-control-plane.env
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart={{ xiaozhi_control_plane_venv_dir }}/bin/python control_plane.py
+Restart=on-failure
+RestartSec=3s
+KillSignal=SIGTERM
+TimeoutStopSec=120s
+StandardInput=null
+StandardOutput=journal
+StandardError=journal
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectHome=true
+ProtectSystem=strict
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths={{ xiaozhi_control_plane_repo_dir }}/main/xiaozhi-server/data/cloud-config
+ReadWritePaths={{ xiaozhi_control_plane_repo_dir }}/main/xiaozhi-server/data/node-secrets
+ReadWritePaths={{ xiaozhi_control_plane_repo_dir }}/main/xiaozhi-server/data/cloud-soundbank
+
+[Install]
+WantedBy=multi-user.target

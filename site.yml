@@ -64,3 +64,36 @@
 
   roles:
     - xiaozhi_worker
+
+- name: Deploy standalone Xiaozhi control planes one node at a time
+  hosts: xiaozhi_control_planes
+  become: true
+  gather_facts: true
+  gather_subset:
+    - min
+  serial: 1
+  any_errors_fatal: true
+  tags:
+    - control-plane
+
+  vars_files:
+    - vars/vault.yml
+
+  roles:
+    - xiaozhi_control_plane
+
+- name: Verify shared desired state after all control planes are configured
+  hosts: xiaozhi_control_planes
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  tags:
+    - control-plane
+
+  tasks:
+    - name: Run read-only control-plane cluster verification from one deskbox
+      ansible.builtin.include_role:
+        name: xiaozhi_control_plane
+        tasks_from: verify_cluster
+      run_once: true
+      when: not ansible_check_mode

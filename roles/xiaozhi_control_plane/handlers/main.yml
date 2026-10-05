@@ -1,0 +1,13 @@
+---
+# Reload precedes restart when both are notified; check mode changes no services.
+- name: Reload control-plane systemd units
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+  when: not ansible_check_mode
+
+- name: Restart Xiaozhi control plane
+  ansible.builtin.systemd_service:
+    name: xiaozhi-control-plane
+    enabled: true
+    state: restarted
+  when: not ansible_check_mode

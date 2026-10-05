@@ -1,0 +1,10 @@
+{{ {
+  'config_provider': 'google_drive',
+  'node_id': inventory_hostname,
+  'google_drive': {
+    'folder_id': vault_xiaozhi_cloud_folder_id,
+    'manifest_file_id': vault_xiaozhi_cloud_manifest_file_id,
+    'credentials_path': '/etc/xiaozhi-control-plane/drive-credentials.json'
+  } | combine({'memory_manifest_file_id': vault_xiaozhi_cloud_memory_manifest_file_id}
+              if vault_xiaozhi_cloud_memory_manifest_file_id is defined else {})
+} | to_nice_yaml(indent=2, sort_keys=false) }}

@@ -1,0 +1,11 @@
+---
+xiaozhi_control_plane_repo_url: https://github.com/hudrucan/xiaozhi-desk-robot-server.git
+xiaozhi_control_plane_revision: fda3c3c62e79e8ad3d03f7346203694feef2f9ab
+xiaozhi_control_plane_root: /opt/xiaozhi-control-plane
+xiaozhi_control_plane_repo_dir: "{{ xiaozhi_control_plane_root }}/repo"
+xiaozhi_control_plane_venv_dir: "{{ xiaozhi_control_plane_root }}/venv"
+xiaozhi_control_plane_service_user: xiaozhi-control-plane
+xiaozhi_control_plane_port: 8004
+xiaozhi_control_plane_reconcile_seconds: 45
+xiaozhi_control_plane_verify_retries: 30
+xiaozhi_control_plane_verify_delay: 2

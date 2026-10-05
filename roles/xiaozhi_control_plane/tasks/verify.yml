@@ -1,0 +1,65 @@
+---
+# Called after handlers and start; every operation is read-only and apply-only.
+- name: Verify local service and validated live Cloud desired state
+  when: not ansible_check_mode
+  block:
+    - name: Wait for the local control-plane service to be active
+      ansible.builtin.command:
+        argv: [systemctl, is-active, xiaozhi-control-plane]
+      register: xiaozhi_control_plane_service_active
+      changed_when: false
+      until: xiaozhi_control_plane_service_active.rc == 0 and xiaozhi_control_plane_service_active.stdout == 'active'
+      retries: "{{ xiaozhi_control_plane_verify_retries }}"
+      delay: "{{ xiaozhi_control_plane_verify_delay }}"
+
+    - name: Wait for cheap health on the local private address
+      ansible.builtin.uri:
+        url: "http://{{ cluster_ip }}:{{ xiaozhi_control_plane_port }}/healthz"
+        use_proxy: false
+        return_content: true
+        status_code: 200
+        timeout: 3
+      register: xiaozhi_control_plane_local_health
+      until: xiaozhi_control_plane_local_health.status | default(0) == 200
+      retries: "{{ xiaozhi_control_plane_verify_retries }}"
+      delay: "{{ xiaozhi_control_plane_verify_delay }}"
+      changed_when: false
+      no_log: true
+
+    - name: Wait for local Cloud reconciliation and NATS startup convergence
+      ansible.builtin.uri:
+        url: "http://{{ cluster_ip }}:{{ xiaozhi_control_plane_port }}/api/cluster"
+        use_proxy: false
+        return_content: true
+        status_code: 200
+        timeout: 3
+      register: xiaozhi_control_plane_local_status
+      until:
+        - xiaozhi_control_plane_local_status.status | default(0) == 200
+        - xiaozhi_control_plane_local_status.json is defined
+        - xiaozhi_control_plane_local_status.json.nats.state | default('') == 'connected'
+        - xiaozhi_control_plane_local_status.json.reconciliation.state | default('') == 'ready'
+        - xiaozhi_control_plane_local_status.json.reconciliation.last_success_at | default(none) is not none
+        - xiaozhi_control_plane_local_status.json.configuration.sync_status | default('') == 'synced'
+      retries: "{{ xiaozhi_control_plane_verify_retries }}"
+      delay: "{{ xiaozhi_control_plane_verify_delay }}"
+      changed_when: false
+      no_log: true
+
+    - name: Require this node identity and no conversation runtime in the control plane
+      ansible.builtin.assert:
+        that:
+          - xiaozhi_control_plane_local_status.json.protocol == 'xiaozhi-control-plane-v1'
+          - xiaozhi_control_plane_local_status.json.node_id == inventory_hostname
+          - xiaozhi_control_plane_local_status.json.configuration.node_id == inventory_hostname
+          - xiaozhi_control_plane_local_status.json.configuration.config_provider == 'google_drive'
+          - xiaozhi_control_plane_local_status.json.configuration.desired_revision is integer
+          - xiaozhi_control_plane_local_status.json.configuration.desired_revision > 0
+          - xiaozhi_control_plane_local_status.json.configuration.runtime_revision is none
+          - xiaozhi_control_plane_local_status.json.capabilities.runtime_status == false
+        quiet: true
+      no_log: true
+  rescue:
+    - name: Stop rollout with a credential-safe local readiness error
+      ansible.builtin.fail:
+        msg: "Control-plane readiness failed on {{ inventory_hostname }}. Require an active service, a successful live Cloud refresh with this node assignment, and connected NATS at the private backend. Check private node-local diagnostics; Ansible will not create Cloud assignments or migrate state."

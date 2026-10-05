@@ -1,0 +1,103 @@
+---
+# Included once after all serial deployment batches. Probes originate on the
+# first sorted deskbox over end0, never on the Mac or via management addresses.
+- name: Require the complete control-plane group for final verification
+  ansible.builtin.assert:
+    that:
+      - groups.get('xiaozhi_control_planes', []) | sort == ['deskb1x', 'deskb2x', 'deskb3x']
+      - ansible_play_hosts_all | sort == groups['xiaozhi_control_planes'] | sort
+    fail_msg: Control-plane rollout and final verification require all three selected deskboxes.
+
+- name: Probe every control-plane backend from one private cluster node
+  when: not ansible_check_mode
+  block:
+    - name: Require healthy HTTP on all private backend addresses
+      ansible.builtin.uri:
+        url: "http://{{ hostvars[item].cluster_ip }}:{{ xiaozhi_control_plane_port }}/healthz"
+        use_proxy: false
+        return_content: true
+        status_code: 200
+        timeout: 3
+      delegate_to: "{{ groups['xiaozhi_control_planes'] | sort | first }}"
+      loop: "{{ groups['xiaozhi_control_planes'] | sort }}"
+      register: xiaozhi_control_plane_cluster_health
+      until: xiaozhi_control_plane_cluster_health.status | default(0) == 200
+      retries: "{{ xiaozhi_control_plane_verify_retries }}"
+      delay: "{{ xiaozhi_control_plane_verify_delay }}"
+      changed_when: false
+      no_log: true
+
+    - name: Wait for connected NATS and successful live reconciliation on all backends
+      ansible.builtin.uri:
+        url: "http://{{ hostvars[item].cluster_ip }}:{{ xiaozhi_control_plane_port }}/api/cluster"
+        use_proxy: false
+        return_content: true
+        status_code: 200
+        timeout: 3
+      delegate_to: "{{ groups['xiaozhi_control_planes'] | sort | first }}"
+      loop: "{{ groups['xiaozhi_control_planes'] | sort }}"
+      register: xiaozhi_control_plane_cluster_status
+      until:
+        - xiaozhi_control_plane_cluster_status.status | default(0) == 200
+        - xiaozhi_control_plane_cluster_status.json is defined
+        - xiaozhi_control_plane_cluster_status.json.nats.state | default('') == 'connected'
+        - xiaozhi_control_plane_cluster_status.json.reconciliation.state | default('') == 'ready'
+        - xiaozhi_control_plane_cluster_status.json.reconciliation.last_success_at | default(none) is not none
+        - xiaozhi_control_plane_cluster_status.json.configuration.sync_status | default('') == 'synced'
+      retries: "{{ xiaozhi_control_plane_verify_retries }}"
+      delay: "{{ xiaozhi_control_plane_verify_delay }}"
+      changed_when: false
+      no_log: true
+
+    - name: Verify all node identities and desired-only control-plane capabilities
+      ansible.builtin.assert:
+        that:
+          - item.json.protocol == 'xiaozhi-control-plane-v1'
+          - item.json.node_id == item.item
+          - item.json.configuration.node_id == item.item
+          - item.json.configuration.config_provider == 'google_drive'
+          - item.json.configuration.desired_revision is integer
+          - item.json.configuration.desired_revision > 0
+          - item.json.configuration.runtime_revision is none
+          - item.json.capabilities.runtime_status == false
+          - item.json.ingress.state == 'desired_only'
+        quiet: true
+      loop: "{{ xiaozhi_control_plane_cluster_status.results }}"
+      no_log: true
+  rescue:
+    - name: Fail read-only backend verification without exposing response bodies
+      ansible.builtin.fail:
+        msg: Control-plane private backend verification failed. Require all three healthy local assignments, live Cloud desired snapshots and connected NATS. No topology, runtime or ingress state was changed by verification.
+
+- name: Require shared V2 Settings before any future ingress deployment
+  when: not ansible_check_mode
+  block:
+    - name: Check the Settings scope of every backend
+      ansible.builtin.assert:
+        that:
+          - item.json.configuration.settings_scope == 'cluster'
+          - item.json.configuration.schema_version == 2
+        quiet: true
+      loop: "{{ xiaozhi_control_plane_cluster_status.results }}"
+      no_log: true
+  rescue:
+    - name: Report that explicit Cloud migration is required
+      ansible.builtin.fail:
+        msg: Cloud Settings is still V1/legacy or not shared V2 on every node. Perform a separate explicitly reviewed V1-to-V2 migration/topology operation, then rerun control-plane verification. Ansible never migrates Cloud state automatically.
+
+- name: Require one shared desired revision and the configured future VIP
+  when: not ansible_check_mode
+  block:
+    - name: Compare revisions and desired VIP across all three nodes
+      ansible.builtin.assert:
+        that:
+          - xiaozhi_control_plane_cluster_status.results | map(attribute='json.configuration.desired_revision') | unique | list | length == 1
+          - xiaozhi_control_plane_cluster_status.results | map(attribute='json.ingress.configured_vip') | unique | list | length == 1
+          - xiaozhi_control_plane_cluster_status.results | map(attribute='json.ingress.configured_vip') | first is string
+          - xiaozhi_control_plane_cluster_status.results | map(attribute='json.ingress.configured_vip') | first | trim | length > 0
+        quiet: true
+      no_log: true
+  rescue:
+    - name: Report shared desired-state divergence without changing Cloud state
+      ansible.builtin.fail:
+        msg: Nodes do not agree on one shared desired revision and a non-empty Cloud-configured VIP. Wait for reconciliation or correct the separately managed Cloud desired state and rerun; VIP assignment/failover is not deployed.
