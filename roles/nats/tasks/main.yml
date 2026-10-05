@@ -99,7 +99,9 @@
   check_mode: false
 
 - name: Install the pinned official release when the package differs
-  when: nats_installed_package.stdout != 'installed ' ~ nats_version
+  when:
+    - not ansible_check_mode
+    - nats_installed_package.stdout != 'installed ' ~ nats_version
   block:
     - name: Create the NATS package cache
       ansible.builtin.file:
