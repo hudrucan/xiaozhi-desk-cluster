@@ -1,0 +1,38 @@
+# Managed by Ansible.
+[Unit]
+Description=Xiaozhi standalone Core NATS worker
+Wants=network-online.target
+After=network-online.target nats-server.service
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User={{ xiaozhi_worker_service_user }}
+Group={{ xiaozhi_worker_service_user }}
+WorkingDirectory={{ xiaozhi_worker_repo_dir }}/main/xiaozhi-server
+EnvironmentFile=/etc/xiaozhi-worker.env
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart={{ xiaozhi_worker_venv_dir }}/bin/python worker.py
+Restart=on-failure
+RestartSec=3s
+KillSignal=SIGTERM
+TimeoutStopSec=60s
+StandardInput=null
+StandardOutput=journal
+StandardError=journal
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectHome=true
+ProtectSystem=strict
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_UNIX AF_INET
+
+[Install]
+WantedBy=multi-user.target

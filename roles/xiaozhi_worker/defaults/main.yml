@@ -1,0 +1,9 @@
+---
+xiaozhi_worker_repo_url: https://github.com/hudrucan/xiaozhi-desk-robot-server.git
+xiaozhi_worker_revision: e586c725600dd79a3e24ec7f763bb32d7f9e3c9f
+xiaozhi_worker_root: /opt/xiaozhi-worker
+xiaozhi_worker_repo_dir: "{{ xiaozhi_worker_root }}/repo"
+xiaozhi_worker_venv_dir: "{{ xiaozhi_worker_root }}/venv"
+xiaozhi_worker_service_user: xiaozhi-worker
+xiaozhi_worker_verify_retries: 10
+xiaozhi_worker_verify_delay: 2

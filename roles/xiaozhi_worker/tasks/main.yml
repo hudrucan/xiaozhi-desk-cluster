@@ -1,0 +1,173 @@
+---
+- name: Read shared NATS public defaults without deploying NATS
+  ansible.builtin.include_vars:
+    file: "{{ role_path }}/../nats/defaults/main.yml"
+    name: xiaozhi_worker_nats_defaults
+
+- name: Use the existing NATS application username unless overridden
+  ansible.builtin.set_fact:
+    nats_client_user: "{{ xiaozhi_worker_nats_defaults.nats_client_user }}"
+  when: nats_client_user is not defined
+
+- name: Use the existing NATS client port unless overridden
+  ansible.builtin.set_fact:
+    nats_client_port: "{{ xiaozhi_worker_nats_defaults.nats_client_port }}"
+  when: nats_client_port is not defined
+
+- name: Validate worker membership, platform and pinned source revision
+  ansible.builtin.assert:
+    that:
+      - inventory_hostname in groups.get('xiaozhi_workers', [])
+      - inventory_hostname in groups.get('deskboxes', [])
+      - groups.get('deskboxes', []) | sort == ['deskb1x', 'deskb2x', 'deskb3x']
+      - inventory_hostname is match('^[A-Za-z0-9_-]{1,192}$')
+      - cluster_ip is defined
+      - ansible_facts.os_family == 'Debian'
+      - ansible_facts.architecture in ['aarch64', 'arm64']
+      - ansible_facts.python.version.major == 3
+      - ansible_facts.python.version.minor == 11
+      - xiaozhi_worker_revision is string
+      - xiaozhi_worker_revision is match('^[0-9a-f]{40}$')
+      - nats_client_user is string and nats_client_user | trim | length > 0
+      - nats_client_port | int > 0 and nats_client_port | int < 65536
+    fail_msg: Worker deployment requires an explicit worker member, three Desk NATS nodes, Debian ARM64 Python 3.11 and a full pinned Git SHA.
+
+- name: Validate the existing private NATS node addresses
+  ansible.builtin.assert:
+    that:
+      - hostvars[item].cluster_ip is defined
+      - hostvars[item].cluster_ip is string
+      - hostvars[item].cluster_ip is match('^10\.10\.10\.(?:[1-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-4])$')
+    fail_msg: Every NATS deskbox must have a private cluster_ip in host_vars.
+  loop: "{{ groups['deskboxes'] | sort }}"
+
+- name: Require distinct NATS addresses
+  ansible.builtin.assert:
+    that:
+      - groups['deskboxes'] | map('extract', hostvars, 'cluster_ip') | unique | list | length == 3
+
+- name: Require the existing Vault application credentials
+  ansible.builtin.assert:
+    that:
+      - vault_nats_client_password is defined
+      - vault_nats_client_password is string
+      - vault_nats_client_password | trim | length > 0
+      - nats_client_password is defined
+      - nats_client_password is string
+      - nats_client_password | trim | length > 0
+      - nats_client_password == vault_nats_client_password
+      - nats_client_password is not search('\x00')
+      - nats_client_user is not search('\x00')
+    quiet: true
+    fail_msg: Provide the existing nonempty Vault NATS client password; environment values cannot contain NUL.
+  no_log: true
+
+- name: Derive the worker server list from sorted NATS inventory members
+  ansible.builtin.set_fact:
+    xiaozhi_worker_nats_servers: "nats://{{ groups['deskboxes'] | sort | map('extract', hostvars, 'cluster_ip') | join(':' ~ (nats_client_port | string) ~ ',nats://') }}:{{ nats_client_port }}"
+
+# These steps depend on packages/accounts/directories created earlier in the
+# block. Do not execute them against nonexistent apply-time state in --check.
+- name: Converge worker prerequisites, pinned source and minimal venv
+  when: not ansible_check_mode
+  block:
+    - name: Install only worker deployment prerequisites
+      ansible.builtin.apt:
+        name:
+          - git
+          - python3
+          - python3-venv
+          - python3-packaging
+          - ca-certificates
+        state: present
+        install_recommends: false
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Create the worker system group
+      ansible.builtin.group:
+        name: "{{ xiaozhi_worker_service_user }}"
+        system: true
+
+    - name: Create the unprivileged worker system user
+      ansible.builtin.user:
+        name: "{{ xiaozhi_worker_service_user }}"
+        group: "{{ xiaozhi_worker_service_user }}"
+        system: true
+        shell: /usr/sbin/nologin
+        home: /nonexistent
+        create_home: false
+
+    - name: Create the root-owned worker installation directory
+      ansible.builtin.file:
+        path: "{{ xiaozhi_worker_root }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Check out the exact worker source revision
+      ansible.builtin.git:
+        repo: "{{ xiaozhi_worker_repo_url }}"
+        dest: "{{ xiaozhi_worker_repo_dir }}"
+        version: "{{ xiaozhi_worker_revision }}"
+        update: true
+        force: false
+        recursive: false
+        umask: "0022"
+      environment:
+        GIT_TERMINAL_PROMPT: "0"
+      notify: Restart Xiaozhi worker
+
+    - name: Install only pinned worker requirements into the dedicated venv
+      ansible.builtin.pip:
+        requirements: "{{ xiaozhi_worker_repo_dir }}/main/xiaozhi-server/requirements-worker.txt"
+        virtualenv: "{{ xiaozhi_worker_venv_dir }}"
+        virtualenv_command: /usr/bin/python3 -m venv
+        virtualenv_site_packages: false
+        state: present
+        umask: "0022"
+      environment:
+        PIP_DISABLE_PIP_VERSION_CHECK: "1"
+      notify: Restart Xiaozhi worker
+
+- name: Report worker source and venv desired state during check mode
+  ansible.builtin.debug:
+    msg: "Worker {{ inventory_hostname }} would use {{ xiaozhi_worker_repo_url }} @ {{ xiaozhi_worker_revision }} under {{ xiaozhi_worker_root }}, with a dedicated venv and requirements-worker.txt only. Prerequisite/source/venv mutations and live verification are skipped in check mode."
+  when: ansible_check_mode
+
+- name: Render the root-only worker environment with existing NATS credentials
+  ansible.builtin.template:
+    src: xiaozhi-worker.env.j2
+    dest: /etc/xiaozhi-worker.env
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: true
+  diff: false
+  notify: Restart Xiaozhi worker
+
+- name: Install the standalone worker systemd unit
+  ansible.builtin.template:
+    src: xiaozhi-worker.service.j2
+    dest: /etc/systemd/system/xiaozhi-worker.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify:
+    - Reload worker systemd units
+    - Restart Xiaozhi worker
+
+- name: Apply material worker changes before readiness verification
+  ansible.builtin.meta: flush_handlers
+
+- name: Keep the worker enabled and started without restarting unchanged state
+  ansible.builtin.systemd_service:
+    name: xiaozhi-worker
+    enabled: true
+    state: started
+  when: not ansible_check_mode
+
+- name: Verify the deployed worker with a targeted read-only probe
+  ansible.builtin.include_tasks: verify.yml
+  when: not ansible_check_mode

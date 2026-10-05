@@ -47,3 +47,20 @@
         name: nats
         tasks_from: verify
       when: not ansible_check_mode
+
+- name: Deploy standalone Xiaozhi workers one node at a time
+  hosts: xiaozhi_workers
+  become: true
+  gather_facts: true
+  gather_subset:
+    - min
+  serial: 1
+  any_errors_fatal: true
+  tags:
+    - worker
+
+  vars_files:
+    - vars/vault.yml
+
+  roles:
+    - xiaozhi_worker

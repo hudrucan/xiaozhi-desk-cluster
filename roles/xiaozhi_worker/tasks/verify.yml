@@ -1,0 +1,79 @@
+---
+- name: Verify the worker service is active
+  ansible.builtin.command:
+    argv: [systemctl, is-active, xiaozhi-worker]
+  register: xiaozhi_worker_service_active
+  changed_when: false
+  until: xiaozhi_worker_service_active.rc == 0 and xiaozhi_worker_service_active.stdout == 'active'
+  retries: "{{ xiaozhi_worker_verify_retries }}"
+  delay: "{{ xiaozhi_worker_verify_delay }}"
+  when: not ansible_check_mode
+
+- name: Request and validate the targeted worker V1 ping using nats-py
+  ansible.builtin.command:
+    argv: ["{{ xiaozhi_worker_venv_dir }}/bin/python", "-"]
+    stdin: |
+      import asyncio
+      import json
+      import logging
+      import os
+      import sys
+      from nats.aio.client import Client
+
+      nats_logger = logging.getLogger('nats')
+      nats_logger.addHandler(logging.NullHandler())
+      nats_logger.propagate = False
+
+      async def silent_error(error):
+          pass
+
+      async def probe():
+          client = Client()
+          try:
+              await asyncio.wait_for(client.connect(
+                  servers=os.environ['XIAOZHI_NATS_SERVERS'].split(','),
+                  user=os.environ['XIAOZHI_NATS_USER'],
+                  password=os.environ['XIAOZHI_NATS_PASSWORD'],
+                  name='xiaozhi-worker-verification',
+                  error_cb=silent_error,
+                  connect_timeout=2,
+                  max_reconnect_attempts=1,
+                  reconnect_time_wait=0.2,
+              ), timeout=8)
+              worker_id = os.environ['XIAOZHI_WORKER_ID']
+              response = await client.request(
+                  f'xiaozhi.v1.worker.{worker_id}.ping', b'', timeout=3
+              )
+              if len(response.data) > 1024:
+                  raise ValueError('Oversized worker response')
+              expected = {
+                  'protocol': 'xiaozhi-worker-v1',
+                  'worker_id': worker_id,
+                  'status': 'ok',
+                  'capabilities': [],
+              }
+              if json.loads(response.data.decode('utf-8')) != expected:
+                  raise ValueError('Unexpected worker response')
+          finally:
+              await asyncio.wait_for(client.close(), timeout=2)
+
+      try:
+          asyncio.run(asyncio.wait_for(probe(), timeout=15))
+      except Exception:
+          print('Targeted worker probe failed', file=sys.stderr)
+          sys.exit(1)
+      print('Targeted worker probe passed')
+  environment:
+    XIAOZHI_NATS_SERVERS: "{{ xiaozhi_worker_nats_servers }}"
+    XIAOZHI_NATS_USER: "{{ nats_client_user }}"
+    XIAOZHI_NATS_PASSWORD: "{{ nats_client_password }}"
+    XIAOZHI_WORKER_ID: "{{ inventory_hostname }}"
+    PYTHONDONTWRITEBYTECODE: "1"
+  register: xiaozhi_worker_targeted_probe
+  changed_when: false
+  until: xiaozhi_worker_targeted_probe.rc == 0
+  retries: "{{ xiaozhi_worker_verify_retries }}"
+  delay: "{{ xiaozhi_worker_verify_delay }}"
+  no_log: true
+  diff: false
+  when: not ansible_check_mode

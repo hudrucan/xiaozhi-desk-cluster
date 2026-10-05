@@ -112,6 +112,7 @@ five-second grace and a thirty-second drain, with a forty-five-second stop timeo
 2. Existing SSH hardening with `serial: 1`, unchanged.
 3. The NATS role in its own `serial: 1` play, stopping the rollout on failure.
 4. A separate read-only NATS verification play after all serial batches finish.
+5. A separate `worker`-tagged play for the explicit `xiaozhi_workers` group.
 
 The config template uses `nats-server -t -c <candidate>` before replacing the
 live config. Ordered handlers validate `/etc/nats-server.conf` again before
@@ -134,7 +135,7 @@ cover all three nodes before full-cluster route verification can succeed.
 
 ## Verification
 
-The final play includes `roles/nats/tasks/verify.yml`, a separate read-only entry
+The NATS verification play includes `roles/nats/tasks/verify.yml`, a separate read-only entry
 point that reuses role defaults without rerunning installation tasks. From each
 managed node it checks:
 
@@ -162,3 +163,79 @@ playbook that omits `vars_files` solely for structural syntax checking; that
 cannot prove Vault values resolve. Do not weaken the real playbook or decrypt
 Vault merely for static review. Runtime config validation, systemd compatibility
 and route/health checks still require a separately approved deployment.
+
+## Standalone worker canary
+
+The explicit `[xiaozhi_workers]` inventory group currently contains only
+`deskb1x`. **`deskb2x` and `deskb3x` are not workers yet.** Worker membership
+is not inferred from `deskboxes`; expanding this group is the future rollout
+step after canary verification.
+
+`roles/xiaozhi_worker` deploys source from
+[`hudrucan/xiaozhi-desk-robot-server`](https://github.com/hudrucan/xiaozhi-desk-robot-server)
+at the full, immutable commit
+`e586c725600dd79a3e24ec7f763bb32d7f9e3c9f`. The public
+`xiaozhi_worker_revision` must be a full 40-character SHA, never a branch or
+`latest`. A future source update changes that pin deliberately. Checkout is
+root-owned; local working copies and rsync are not deployment sources.
+
+| Path | Purpose |
+| --- | --- |
+| `/opt/xiaozhi-worker/repo` | Pinned source checkout |
+| `/opt/xiaozhi-worker/venv` | Dedicated Python 3.11 environment |
+| `/etc/xiaozhi-worker.env` | Existing NATS client credentials, root:root `0600` |
+| `/etc/systemd/system/xiaozhi-worker.service` | Managed worker service |
+
+Only `main/xiaozhi-server/requirements-worker.txt` is installed into the venv:
+currently `nats-py==2.16.0`. Full `requirements.txt`, providers, FFmpeg, Opus
+and model packages are not installed. APT prerequisites are `git`, `python3`,
+`python3-venv`, `ca-certificates` and `python3-packaging`; the last supports
+Ansible's pip module on the system interpreter. Pinned requirements use
+`state: present`, without upgrades or forced reinstalls.
+
+The environment's three NATS URLs are derived from sorted `deskboxes` and
+their existing `hostvars[host].cluster_ip`; no address copies are added to vars.
+The worker reuses `nats_client_user` (default `xiaozhi`) and
+`nats_client_password`, which must equal `vault_nats_client_password`. The role
+reads the NATS role's public username/port defaults without executing NATS
+deployment and honors existing overrides. No separate worker password is added.
+`XIAOZHI_WORKER_ID` is `inventory_hostname`. The environment template quotes
+values and escapes backslashes/double quotes for systemd; secret assertions,
+rendering and the request probe use `no_log`, with secret diffs disabled.
+
+The unprivileged `xiaozhi-worker` system user/group has no login or home.
+Systemd runs `/opt/xiaozhi-worker/venv/bin/python worker.py` from
+`/opt/xiaozhi-worker/repo/main/xiaozhi-server`, with no stdin/TTY and journald
+output. The service starts after network-online and local NATS, is enabled at
+boot, and restarts on failure after three seconds. SIGTERM permits worker drain,
+with a sixty-second stop timeout. Hardening includes `NoNewPrivileges`,
+`PrivateTmp`, `ProtectHome`, `ProtectSystem=strict`, no capabilities and only
+Unix/IPv4 sockets. Python bytecode writes are disabled; no runtime write path is
+added. Source, venv dependency, environment or unit changes notify restart;
+only unit changes notify daemon-reload. Unchanged services remain started.
+
+The worker play loads the existing encrypted `vars/vault.yml`. Preflight checks
+explicit membership, the three private NATS nodes, nonempty matching Vault
+credentials, the full source SHA, Debian ARM64 and Python 3.11 before mutations.
+For check/apply, limit to the worker group as well as selecting its tag so
+unrelated plays cannot gather facts on non-worker hosts:
+
+```sh
+ansible-playbook -i inventory.ini site.yml --check --tags worker --limit xiaozhi_workers --ask-vault-pass
+ansible-playbook -i inventory.ini site.yml --tags worker --limit xiaozhi_workers --ask-vault-pass
+```
+
+Check mode reports the source/venv desired state and evaluates environment/unit
+templates without creating accounts/directories, installing packages, checking
+out source, invoking pip or running service handlers/probes. These dependent
+steps wait for a real apply; `check_mode: false` is not used to force mutations.
+
+After deployment, `tasks/verify.yml` checks `systemctl is-active xiaozhi-worker`
+and uses the worker venv's `nats-py` for a read-only targeted request to
+`xiaozhi.v1.worker.deskb1x.ping` (derived from the host name). It requires the
+JSON object to equal protocol `xiaozhi-worker-v1`, worker ID `deskb1x`, status
+`ok` and `capabilities: []`. Request timeout is three seconds, connect timeout
+is eight seconds overall, and each probe is bounded to fifteen seconds with
+finite retries. No NATS CLI or balanced queue-distribution check is added for
+the single canary. This deploys only the transport skeleton; no normal `app.py`,
+providers, core dispatcher, gateway, JetStream or containers are started.
