@@ -1,0 +1,31 @@
+# Managed by Ansible. Core NATS only; no persistence or JetStream configuration.
+server_name: {{ inventory_hostname | to_json }}
+listen: {{ (cluster_ip ~ ':' ~ nats_client_port) | to_json }}
+http: {{ (cluster_ip ~ ':' ~ nats_monitor_port) | to_json }}
+max_payload: {{ nats_max_payload }}
+debug: false
+trace: false
+
+lame_duck_duration: "30s"
+lame_duck_grace_period: "5s"
+
+authorization {
+  users: [
+    { user: {{ nats_client_user | to_json }}, password: {{ nats_client_password | to_json }} }
+  ]
+}
+
+cluster {
+  name: {{ nats_cluster_name | to_json }}
+  listen: {{ (cluster_ip ~ ':' ~ nats_cluster_port) | to_json }}
+  advertise: {{ (cluster_ip ~ ':' ~ nats_cluster_port) | to_json }}
+  authorization {
+    user: {{ nats_route_user | to_json }}
+    password: {{ nats_route_password | to_json }}
+  }
+  routes: [
+{% for peer in groups['deskboxes'] | sort if peer != inventory_hostname %}
+    {{ ('nats://' ~ nats_route_user ~ ':' ~ nats_route_password ~ '@' ~ hostvars[peer].cluster_ip ~ ':' ~ nats_cluster_port) | to_json }}{% if not loop.last %},{% endif %}
+{% endfor %}
+  ]
+}

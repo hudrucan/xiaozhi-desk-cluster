@@ -20,3 +20,30 @@
 
   roles:
     - ssh
+
+- name: Deploy Desk Cluster Core NATS one node at a time
+  hosts: deskboxes
+  become: true
+  gather_facts: true
+  gather_subset:
+    - min
+  serial: 1
+  any_errors_fatal: true
+
+  vars_files:
+    - vars/vault.yml
+
+  roles:
+    - nats
+
+- name: Verify the complete Desk Core NATS cluster
+  hosts: deskboxes
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: Run read-only verification after all NATS nodes are configured
+      ansible.builtin.include_role:
+        name: nats
+        tasks_from: verify
+      when: not ansible_check_mode

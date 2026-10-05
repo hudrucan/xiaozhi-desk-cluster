@@ -1,0 +1,36 @@
+# Managed by Ansible.
+[Unit]
+Description=Desk Cluster Core NATS
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=nats
+Group=nats
+ExecStartPre=/usr/sbin/nats-server -t -c /etc/nats-server.conf
+ExecStart=/usr/sbin/nats-server -c /etc/nats-server.conf
+Restart=on-failure
+RestartSec=3s
+KillSignal=SIGUSR2
+KillMode=mixed
+TimeoutStopSec=45s
+StandardOutput=journal
+StandardError=journal
+UMask=0077
+LimitNOFILE=65536
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX AF_INET
+
+[Install]
+WantedBy=multi-user.target

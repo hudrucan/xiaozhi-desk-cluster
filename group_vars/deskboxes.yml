@@ -1,3 +1,7 @@
 ---
 cluster_interface: end0
 cluster_connection: cluster-lan
+
+# Secret values are supplied only by the encrypted Vault file.
+nats_client_password: "{{ vault_nats_client_password }}"
+nats_route_password: "{{ vault_nats_route_password }}"

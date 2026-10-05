@@ -1,0 +1,17 @@
+---
+nats_version: "2.15.0"
+nats_client_port: 4222
+nats_cluster_port: 6222
+nats_monitor_port: 8222
+nats_cluster_name: desk-cluster
+nats_max_payload: 8MB
+nats_client_user: xiaozhi
+nats_route_user: nats-route
+
+nats_deb_filename: "nats-server-v{{ nats_version }}-arm64.deb"
+nats_deb_url: "https://github.com/nats-io/nats-server/releases/download/v{{ nats_version }}/{{ nats_deb_filename }}"
+nats_deb_sha256: "7e37abbab18910ebc6d7a4733546d061d1098c7ee35881a92ce9d451f5804d92"
+nats_cache_dir: /var/cache/nats-server
+
+nats_verify_retries: 30
+nats_verify_delay: 2

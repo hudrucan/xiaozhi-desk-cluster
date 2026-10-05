@@ -1,0 +1,29 @@
+---
+# Handler definition order guarantees validation before daemon-reload/restart.
+# Candidate configuration is also validated by template before replacing the file.
+- name: Validate NATS before applying changes
+  ansible.builtin.command:
+    argv: [/usr/sbin/nats-server, -t, -c, /etc/nats-server.conf]
+  register: nats_config_validation
+  changed_when: false
+  no_log: true
+  when: not ansible_check_mode
+  listen: Apply validated NATS changes
+
+- name: Reload systemd after validated NATS changes
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+  when:
+    - not ansible_check_mode
+    - nats_config_validation is defined and nats_config_validation.rc | default(1) == 0
+  listen: Apply validated NATS changes
+
+- name: Restart NATS after successful configuration validation
+  ansible.builtin.systemd_service:
+    name: nats-server
+    enabled: true
+    state: restarted
+  when:
+    - not ansible_check_mode
+    - nats_config_validation is defined and nats_config_validation.rc | default(1) == 0
+  listen: Apply validated NATS changes

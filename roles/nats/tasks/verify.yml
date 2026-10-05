@@ -1,0 +1,53 @@
+---
+# Included only by the final read-only play, after every serial role batch finishes.
+- name: Verify NATS is active
+  ansible.builtin.command:
+    argv: [systemctl, is-active, nats-server]
+  register: nats_service_active
+  changed_when: false
+  failed_when: nats_service_active.rc != 0 or nats_service_active.stdout != 'active'
+
+- name: Verify the local private health endpoint
+  ansible.builtin.uri:
+    url: "http://{{ cluster_ip }}:{{ nats_monitor_port }}/healthz"
+    use_proxy: false
+    return_content: true
+    status_code: 200
+    timeout: 3
+  register: nats_cluster_health
+  until: nats_cluster_health.status | default(0) == 200
+  retries: "{{ nats_verify_retries }}"
+  delay: "{{ nats_verify_delay }}"
+  changed_when: false
+
+- name: Determine the expected two private peers
+  ansible.builtin.set_fact:
+    nats_expected_peers: "{{ groups['deskboxes'] | difference([inventory_hostname]) | sort }}"
+    nats_expected_peer_ips: "{{ groups['deskboxes'] | difference([inventory_hostname]) | map('extract', hostvars, 'cluster_ip') | sort }}"
+
+# v2.15.0 Routez.routes contains remote_name, remote_id and ip. num_routes counts
+# TCP routes, including pooled connections, so it must not be compared to two.
+- name: Wait for routes to both distinct private NATS peers
+  ansible.builtin.uri:
+    url: "http://{{ cluster_ip }}:{{ nats_monitor_port }}/routez"
+    use_proxy: false
+    return_content: true
+    status_code: 200
+    timeout: 3
+  register: nats_routez
+  until:
+    - nats_routez.status | default(0) == 200
+    - nats_routez.json is defined
+    - nats_routez.json.routes is defined
+    - nats_routez.json.routes | map(attribute='remote_name') | unique | sort | list == nats_expected_peers
+    - nats_routez.json.routes | map(attribute='ip') | unique | sort | list == nats_expected_peer_ips
+  retries: "{{ nats_verify_retries }}"
+  delay: "{{ nats_verify_delay }}"
+  changed_when: false
+
+- name: Verify the local identity and two distinct remote server IDs
+  ansible.builtin.assert:
+    that:
+      - nats_routez.json.server_name == inventory_hostname
+      - nats_routez.json.routes | map(attribute='remote_id') | unique | list | length == 2
+    fail_msg: NATS must report this inventory hostname and both distinct private cluster peers.

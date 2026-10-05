@@ -1,0 +1,219 @@
+---
+- name: Validate Debian ARM64 platform and three-node membership
+  ansible.builtin.assert:
+    that:
+      - ansible_facts.os_family == 'Debian'
+      - ansible_facts.architecture in ['aarch64', 'arm64']
+      - groups['deskboxes'] | length == 3
+      - inventory_hostname in groups['deskboxes']
+      - nats_version == '2.15.0'
+      - nats_deb_sha256 == '7e37abbab18910ebc6d7a4733546d061d1098c7ee35881a92ce9d451f5804d92'
+      - nats_deb_url == 'https://github.com/nats-io/nats-server/releases/download/v2.15.0/nats-server-v2.15.0-arm64.deb'
+    fail_msg: NATS requires the pinned v2.15.0 release on three Debian ARM64 deskboxes.
+
+- name: Read Debian package architecture
+  ansible.builtin.command:
+    argv: [dpkg, --print-architecture]
+  register: nats_dpkg_architecture
+  changed_when: false
+  check_mode: false
+
+- name: Require native ARM64 Debian packages
+  ansible.builtin.assert:
+    that:
+      - nats_dpkg_architecture.stdout == 'arm64'
+    fail_msg: The official NATS package requires native Debian arm64 architecture.
+
+- name: Require private cluster addresses for every member
+  ansible.builtin.assert:
+    that:
+      - hostvars[item].cluster_ip is defined
+      - hostvars[item].cluster_ip is string
+      - hostvars[item].cluster_ip is match('^10\.10\.10\.(?:[1-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-4])$')
+    fail_msg: Every deskbox must have a private 10.10.10.0/24 cluster_ip in host_vars.
+  loop: "{{ groups['deskboxes'] }}"
+
+- name: Require distinct private addresses and listener ports
+  ansible.builtin.assert:
+    that:
+      - groups['deskboxes'] | map('extract', hostvars, 'cluster_ip') | unique | list | length == 3
+      - nats_client_port | int > 0 and nats_client_port | int < 65536
+      - nats_cluster_port | int > 0 and nats_cluster_port | int < 65536
+      - nats_monitor_port | int > 0 and nats_monitor_port | int < 65536
+      - '[nats_client_port | int, nats_cluster_port | int, nats_monitor_port | int] | unique | list | length == 3'
+
+- name: Verify the private interface has the configured address
+  ansible.builtin.command:
+    argv: [ip, -4, -o, addr, show, dev, "{{ cluster_interface }}"]
+  register: nats_private_interface
+  changed_when: false
+  check_mode: false
+
+- name: Require the listener address on the private interface
+  ansible.builtin.assert:
+    that:
+      - "('inet ' ~ cluster_ip ~ '/24 ') in nats_private_interface.stdout"
+    fail_msg: The private interface must have cluster_ip/24 before deploying NATS.
+
+- name: Require Vault passwords and URL-safe route credentials
+  ansible.builtin.assert:
+    that:
+      - vault_nats_client_password is defined
+      - vault_nats_client_password is string
+      - vault_nats_client_password | length > 0
+      - vault_nats_route_password is defined
+      - vault_nats_route_password is string
+      - vault_nats_route_password | length > 0
+      - nats_client_password is string and nats_client_password | length > 0
+      - nats_route_password is string and nats_route_password | length > 0
+      - nats_client_password == vault_nats_client_password
+      - nats_route_password == vault_nats_route_password
+      - nats_client_user is string and nats_client_user | length > 0
+      - nats_route_user is string and nats_route_user is match('^[A-Za-z0-9._~-]+$')
+      - nats_route_password is match('^[A-Za-z0-9._~-]+$')
+      - nats_client_user != nats_route_user
+    quiet: true
+    fail_msg: Provide nonempty Vault passwords; route username/password must use only ASCII letters, digits, dot, underscore, tilde or hyphen.
+  no_log: true
+
+- name: Ensure the NATS system group exists
+  ansible.builtin.group:
+    name: nats
+    system: true
+
+- name: Ensure the unprivileged NATS system user exists
+  ansible.builtin.user:
+    name: nats
+    group: nats
+    system: true
+    shell: /usr/sbin/nologin
+    home: /nonexistent
+    create_home: false
+
+- name: Read installed NATS package status and version
+  ansible.builtin.command:
+    argv: [dpkg-query, -W, '-f=${db:Status-Status} ${Version}', nats-server]
+  register: nats_installed_package
+  changed_when: false
+  failed_when: nats_installed_package.rc not in [0, 1]
+  check_mode: false
+
+- name: Install the pinned official release when the package differs
+  when: nats_installed_package.stdout != 'installed ' ~ nats_version
+  block:
+    - name: Create the NATS package cache
+      ansible.builtin.file:
+        path: "{{ nats_cache_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Download the checksum-pinned official ARM64 package
+      ansible.builtin.get_url:
+        url: "{{ nats_deb_url }}"
+        dest: "{{ nats_cache_dir }}/{{ nats_deb_filename }}"
+        checksum: "sha256:{{ nats_deb_sha256 }}"
+        owner: root
+        group: root
+        mode: "0644"
+        force: false
+
+    - name: Verify the cached package checksum before installation
+      ansible.builtin.stat:
+        path: "{{ nats_cache_dir }}/{{ nats_deb_filename }}"
+        checksum_algorithm: sha256
+      register: nats_cached_package
+
+    - name: Require the exact release checksum
+      ansible.builtin.assert:
+        that:
+          - nats_cached_package.stat.checksum == nats_deb_sha256
+      when: not ansible_check_mode
+
+    - name: Install the verified package without package-driven service actions
+      ansible.builtin.apt:
+        deb: "{{ nats_cache_dir }}/{{ nats_deb_filename }}"
+        allow_downgrade: true
+        allow_change_held_packages: true
+        install_recommends: false
+        policy_rc_d: 101
+      when: not ansible_check_mode
+      notify: Apply validated NATS changes
+
+- name: Hold the NATS package against repository-driven upgrades
+  ansible.builtin.dpkg_selections:
+    name: nats-server
+    selection: hold
+  when: not ansible_check_mode
+
+# The official release installs /usr/bin/nats-server, not /usr/sbin/nats-server.
+- name: Provide the managed service executable path
+  ansible.builtin.file:
+    src: /usr/bin/nats-server
+    dest: /usr/sbin/nats-server
+    state: link
+    owner: root
+    group: root
+  when: not ansible_check_mode
+  notify: Apply validated NATS changes
+
+- name: Verify the installed executable version
+  ansible.builtin.command:
+    argv: [/usr/sbin/nats-server, -v]
+  register: nats_binary_version
+  changed_when: false
+  when: not ansible_check_mode
+
+- name: Require the pinned running binary version
+  ansible.builtin.assert:
+    that:
+      - "nats_binary_version.stdout == 'nats-server: v' ~ nats_version"
+    fail_msg: The installed NATS executable does not match the pinned release.
+  when: not ansible_check_mode
+
+- name: Render and validate private Core NATS configuration before replacement
+  ansible.builtin.template:
+    src: nats-server.conf.j2
+    dest: /etc/nats-server.conf
+    owner: nats
+    group: nats
+    mode: "0600"
+    validate: /usr/sbin/nats-server -t -c %s
+  no_log: true
+  diff: false
+  when: not ansible_check_mode
+  notify: Apply validated NATS changes
+
+- name: Install the managed systemd unit
+  ansible.builtin.template:
+    src: nats-server.service.j2
+    dest: /etc/systemd/system/nats-server.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Apply validated NATS changes
+
+- name: Apply validated changes before checking local readiness
+  ansible.builtin.meta: flush_handlers
+
+- name: Keep NATS enabled and started without restarting unchanged configuration
+  ansible.builtin.systemd_service:
+    name: nats-server
+    enabled: true
+    state: started
+  when: not ansible_check_mode
+
+- name: Wait for local private NATS health without requiring peers yet
+  ansible.builtin.uri:
+    url: "http://{{ cluster_ip }}:{{ nats_monitor_port }}/healthz"
+    use_proxy: false
+    return_content: true
+    status_code: 200
+    timeout: 3
+  register: nats_local_health
+  until: nats_local_health.status | default(0) == 200
+  retries: "{{ nats_verify_retries }}"
+  delay: "{{ nats_verify_delay }}"
+  changed_when: false
+  when: not ansible_check_mode
