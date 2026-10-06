@@ -1,0 +1,28 @@
+# Managed by Ansible; VIP is a deployment snapshot of Cloud desired state.
+global
+    log /dev/log local0
+    user haproxy
+    group haproxy
+    stats socket {{ xiaozhi_ingress_stats_socket }} mode 600 level user
+
+defaults
+    mode http
+    log global
+    option httplog
+    timeout connect 3s
+    timeout client 60s
+    timeout server 60s
+    timeout check 3s
+
+frontend xiaozhi_settings
+    bind {{ xiaozhi_ingress_vip }}:{{ xiaozhi_ingress_port }}
+    default_backend xiaozhi_control_planes
+
+backend xiaozhi_control_planes
+    balance roundrobin
+    option httpchk
+    http-check send meth GET uri /healthz ver HTTP/1.1 hdr Host localhost
+    http-check expect status 200
+{% for node in groups['xiaozhi_ingress'] | sort %}
+    server {{ node }} {{ hostvars[node].cluster_ip }}:{{ xiaozhi_ingress_backend_port }} check inter 2s fall 2 rise 2
+{% endfor %}

@@ -1,0 +1,35 @@
+---
+- name: Sample the whole cluster only until ownership converges
+  when: not xiaozhi_ingress_owner_ready
+  block:
+    - name: Sample VIP addresses on every eligible node
+      ansible.builtin.command:
+        argv: [ip, -j, -4, address, show]
+      delegate_to: "{{ item }}"
+      loop: "{{ groups['xiaozhi_ingress'] | sort }}"
+      register: xiaozhi_ingress_owner_addresses
+      changed_when: false
+
+    - name: Count every observed VIP assignment across the entire cluster
+      ansible.builtin.set_fact:
+        xiaozhi_ingress_owners: >-
+          {%- set owners = [] -%}
+          {%- for result in xiaozhi_ingress_owner_addresses.results -%}
+          {%- for link in result.stdout | from_json -%}
+          {%- for address in link.addr_info | default([]) -%}
+          {%- if address.local | default('') == xiaozhi_ingress_vip -%}
+          {%- set _ = owners.append(result.item) -%}
+          {%- endif -%}
+          {%- endfor -%}
+          {%- endfor -%}
+          {%- endfor -%}
+          {{ owners }}
+
+    - name: Record whether the VIP has converged to exactly one allowed owner
+      ansible.builtin.set_fact:
+        xiaozhi_ingress_owner_ready: "{{ xiaozhi_ingress_owners | length == 1 and (xiaozhi_ingress_excluded_owner | default('')) not in xiaozhi_ingress_owners }}"
+
+    - name: Wait briefly for VRRP convergence before the next whole-cluster sample
+      ansible.builtin.pause:
+        seconds: "{{ xiaozhi_ingress_verify_delay }}"
+      when: not xiaozhi_ingress_owner_ready

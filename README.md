@@ -115,6 +115,7 @@ five-second grace and a thirty-second drain, with a forty-five-second stop timeo
 5. A separate `worker`-tagged play for the explicit `xiaozhi_workers` group.
 6. A `control-plane`-tagged `serial: 1` play for `xiaozhi_control_planes`.
 7. Final read-only control-plane verification from one deskbox over the private LAN.
+8. An `ingress`-tagged all-node preflight, serial ingress rollout and final verification.
 
 The config template uses `nats-server -t -c <candidate>` before replacing the
 live config. Ordered handlers validate `/etc/nats-server.conf` again before
@@ -298,11 +299,11 @@ credentials path `/etc/xiaozhi-control-plane/drive-credentials.json`.
 Each backend binds **only** its `cluster_ip:8004` on `end0` with
 `XIAOZHI_CONTROL_PLANE_ALLOW_REMOTE=true`. Reconciliation defaults to 45 seconds.
 No control-plane listener binds `0.0.0.0` or the `wlan0` management address.
-Settings APIs are unauthenticated within this trusted private backend segment;
-do not route/expose them to an untrusted network. There is no VIP endpoint yet.
-HAProxy, unicast Keepalived, address assignment and failover are the next iteration.
+Settings APIs are unauthenticated within this trusted private backend segment.
+The ingress foundation below exposes them to the trusted management LAN;
+do not route/expose either segment to an untrusted network.
 The current initial Cloud desired VIP is `192.168.1.186`; it is desired state,
-not an active address. Ansible does not own or pin the VIP value. Verification
+not proof of an active address. Ansible does not own or pin the VIP value. Verification
 requires all three nodes to report the same non-empty value and trusts server-side
 Cloud Config validation for address validity. Changing VIP through unified Settings
 does not require an Ansible expected-value change.
@@ -346,4 +347,115 @@ V1/legacy scope fails final verification with an explicit migration message.
 Missing topology assignments, divergence or Cloud access errors also fail read-only.
 Handle these in a separate explicitly reviewed Cloud migration/topology operation,
 then rerun; this role does not POST sync/migration or change Cloud state. Only
-healthy shared V2 revision agreement on all three nodes permits future ingress work.
+healthy shared V2 revision agreement on all three nodes permits ingress deployment.
+
+## Management ingress foundation
+
+`[xiaozhi_ingress]` explicitly contains all three control-plane nodes. Run
+`ingress.yml` to deploy only this foundation, or select the `ingress` tag in
+`site.yml`. Ingress is intentionally part of default full-site convergence:
+an untagged `site.yml` apply includes it after control-plane verification.
+The `ingress` tag selects these plays; it does not make them opt-in. Use
+`--skip-tags ingress` to omit ingress from a full-site run.
+No Vault credentials are needed by the standalone ingress playbooks;
+they read only the safe local control-plane status API. All three backends must
+already be deployed, healthy, reconciled to shared V2, and agree on one revision
+and a non-empty `ingress.configured_vip`. Legacy migration is a separate operation.
+
+The VIP comes from **Cloud desired state**, never an Ansible default/expected
+address. `192.168.1.186` is the current initial Cloud value only. Preflight reads
+all three local `/api/cluster` endpoints before any mutation and freezes the
+agreed value for that rollout. Immediately before each serial node's first
+mutation, a read-only local status check requires its current desired revision
+and configured VIP to match its frozen preflight values. Final verification
+re-reads all three control planes and requires the same frozen revision/VIP
+before reporting success. These checks never update the frozen values; drift or
+an unreadable status stops rollout/verification without dynamic VIP migration.
+It does not PUT Config, migrate Cloud state, or
+materialize Soundbank assets. The interface/prefix is discovered from the unique
+local IPv4 address matching `ansible_host` in inventory (currently `wlan0`),
+rather than assuming a NIC name or using the private Ethernet default route.
+Every management address and the VIP must share a usable management subnet;
+the VIP cannot equal any node address. Server-side Cloud validation remains the
+authority for the configured address contract.
+
+The role installs Debian `haproxy` and `keepalived` packages with automatic service
+starts suppressed. It owns `/etc/haproxy/haproxy.cfg`,
+`/etc/keepalived/keepalived.conf`, a root-owned Python standard-library readiness
+probe and a sysctl file enabling IPv4 nonlocal binding. This lets HAProxy bind
+only `VIP:80` on standby nodes as well as the owner. Port 80 is configurable via
+`xiaozhi_ingress_port`; backend port defaults to the existing control-plane port
+8004. Backends come from sorted inventory `cluster_ip` values: currently
+`10.10.10.11:8004`, `10.10.10.12:8004`, `10.10.10.13:8004`. HTTP round-robin health
+checks require `/healthz` status 200. No public stats/admin listener is added;
+HAProxy stats are available only through a root-accessible Unix socket.
+
+Keepalived uses unicast VRRP between the three inventory management addresses,
+VRID 51 by default (`xiaozhi_ingress_vrid`; reserve a unique VRID on this LAN).
+All instances start in `BACKUP`; sorted-node priorities 150/140/130 are election
+preferences, with `nopreempt` to avoid automatic failback to a recovered node.
+There is no permanent master. A bounded readiness script enters FAULT when
+HAProxy has no open frontend or no healthy backend; at least one healthy backend
+keeps ingress eligible. A failed local control-plane alone therefore need not
+remove a working proxy serving another node. Deployment verification is stricter:
+every proxy must see all three named backends UP. Cached `/healthz` validates the
+local desired snapshot/assignment and does not require NATS to remain connected.
+
+Management LAN devices can access Settings through `http://<Cloud VIP>/settings/`.
+This foundation provides HTTP without authentication/TLS, using the existing
+trusted-LAN Settings contract. It requires LAN/AP support for moving IPv4/GARP,
+and bidirectional VRRP IP protocol 112 between the management peers. It does not
+change firewall, Wi-Fi, private Ethernet, workers, providers or conversation
+runtime. The control-plane status/UI still reports Cloud ingress as desired-only;
+Ansible's address/service verification is what establishes actual VIP ownership.
+
+After review, from a controller with direct management-LAN reachability:
+
+```sh
+ansible-playbook -i inventory.ini ingress.yml --check
+ansible-playbook -i inventory.ini ingress.yml
+ansible-playbook -i inventory.ini verify-ingress.yml
+```
+
+Select all three nodes; limited/partial deployment is rejected. Check mode makes
+only read-only local status/health GETs, address queries and snapshot reads, then
+renders candidates. It installs/downloads nothing, writes nothing, and changes no
+services/sysctls. A static syntax check (`--syntax-check`) does not contact nodes.
+During apply, package config validators run before candidate replacement;
+HAProxy is started/reloaded and all three expected backends must be UP before
+the validated Keepalived candidate is installed and its service explicitly
+started/restarted. Keepalived has no restart handler: failed backend verification
+cannot newly activate/restart it or replace its configuration. Changed
+Keepalived configuration restarts the service; unchanged configuration only
+ensures it is started. Rollout uses `serial: 1` with failure stopping further
+nodes. Unchanged configuration does not
+reload/restart services. Final read-only checks sample all three address lists
+until exactly one VIP assignment is observed, require all three proxy backend
+pools UP, and GET VIP `/healthz` and `/settings/` from the management controller.
+
+Failover is a separate, explicit service interruption exercise, never part of
+normal apply or check mode:
+
+```sh
+ansible-playbook -i inventory.ini verify-ingress-failover.yml
+```
+
+It verifies the initial cluster, discovers the actual owner, stops only that
+node's Keepalived, requires exactly one different owner and working VIP HTTP,
+and restores the original service in an `always` block even when verification
+fails. Successful completion rechecks the whole restored cluster. This proves
+service-level failover, not a physical power-loss test. If the controller is
+killed or loses SSH during the exercise, restore Keepalived on the reported
+original node with `systemctl start keepalived` before repeating verification.
+
+`/etc/xiaozhi-ingress.json` records the public deployment VIP before configuration
+replacement, including partial attempts. It is a safety guard, not Cloud desired
+state. A rerun with a changed Cloud VIP stops before mutations; this iteration
+does not perform live VIP migration, old/new two-phase cutover or runtime watching.
+Changing Settings remains valid, but applying that change to existing ingress
+requires a separately reviewed migration. Never delete this guard to force a
+live cutover. Configuration changes other than the VIP can still be rerun.
+
+Configuration references: [HAProxy 2.6 manual](https://docs.haproxy.org/2.6/configuration.html),
+[Keepalived VRRP configuration](https://www.keepalived.org/documentation/keepalived-conf/),
+and [Linux nonlocal binding](https://kernel.org/doc/html/latest/networking/ip-sysctl.html).

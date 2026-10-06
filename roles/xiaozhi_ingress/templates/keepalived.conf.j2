@@ -1,0 +1,39 @@
+# Managed by Ansible. All nodes are eligible; none is a permanent master.
+global_defs {
+    router_id {{ inventory_hostname }}
+    enable_script_security
+    script_user root
+}
+
+vrrp_script xiaozhi_haproxy_ready {
+    script "{{ xiaozhi_ingress_probe }} stats --socket {{ xiaozhi_ingress_stats_socket }} --nodes {{ groups['xiaozhi_ingress'] | sort | join(' ') }}"
+    interval 2
+    timeout 3
+    fall 2
+    rise 2
+    weight 0
+    init_fail
+}
+
+vrrp_instance XIAOZHI_SETTINGS {
+    state BACKUP
+    interface {{ xiaozhi_ingress_management.interface }}
+    virtual_router_id {{ xiaozhi_ingress_vrid }}
+    priority {{ 150 - 10 * (groups['xiaozhi_ingress'] | sort).index(inventory_hostname) }}
+    advert_int 1
+    nopreempt
+    unicast_src_ip {{ ansible_host }}
+    check_unicast_src
+    track_src_ip
+    unicast_peer {
+{% for node in groups['xiaozhi_ingress'] | sort if node != inventory_hostname %}
+        {{ hostvars[node].ansible_host }}
+{% endfor %}
+    }
+    virtual_ipaddress {
+        {{ xiaozhi_ingress_vip }}/{{ xiaozhi_ingress_management.prefix }} dev {{ xiaozhi_ingress_management.interface }}
+    }
+    track_script {
+        xiaozhi_haproxy_ready
+    }
+}

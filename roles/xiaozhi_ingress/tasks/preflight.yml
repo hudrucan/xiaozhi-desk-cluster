@@ -1,0 +1,118 @@
+---
+- name: Require the complete symmetric ingress membership
+  ansible.builtin.assert:
+    that:
+      - groups.get('xiaozhi_ingress', []) | sort == ['deskb1x', 'deskb2x', 'deskb3x']
+      - groups['xiaozhi_ingress'] | sort == groups.get('xiaozhi_control_planes', []) | sort
+      - ansible_play_hosts_all | sort == groups['xiaozhi_ingress'] | sort
+      - xiaozhi_ingress_port is integer
+      - xiaozhi_ingress_port > 0 and xiaozhi_ingress_port <= 65535
+      - xiaozhi_ingress_vrid is integer
+      - xiaozhi_ingress_vrid > 0 and xiaozhi_ingress_vrid < 256
+      - groups['xiaozhi_ingress'] | map('extract', hostvars, 'ansible_host') | unique | list | length == 3
+      - groups['xiaozhi_ingress'] | map('extract', hostvars, 'cluster_ip') | unique | list | length == 3
+    fail_msg: Ingress requires all three control-plane nodes and valid shared port/VRID settings.
+
+- name: Read public control-plane defaults without deploying it
+  ansible.builtin.include_vars:
+    file: "{{ role_path }}/../xiaozhi_control_plane/defaults/main.yml"
+    name: xiaozhi_ingress_control_defaults
+
+- name: Resolve the existing private backend port
+  ansible.builtin.set_fact:
+    xiaozhi_ingress_listener_settings: "{{ {'port': xiaozhi_ingress_port, 'vrid': xiaozhi_ingress_vrid} }}"
+    xiaozhi_ingress_backend_port: "{{ xiaozhi_control_plane_port | default(xiaozhi_ingress_control_defaults.xiaozhi_control_plane_port) }}"
+
+# check_mode:false is only for read-only commands/GETs, never host mutations.
+- name: Read the local validated Cloud desired state
+  ansible.builtin.uri:
+    url: "http://{{ cluster_ip }}:{{ xiaozhi_ingress_backend_port }}/api/cluster"
+    use_proxy: false
+    return_content: true
+    status_code: 200
+    timeout: 3
+  register: xiaozhi_ingress_cloud
+  changed_when: false
+  check_mode: false
+  no_log: true
+
+- name: Require shared V2 desired state and a usable local assignment
+  ansible.builtin.assert:
+    that:
+      - xiaozhi_ingress_cloud.json.protocol == 'xiaozhi-control-plane-v1'
+      - xiaozhi_ingress_cloud.json.node_id == inventory_hostname
+      - xiaozhi_ingress_cloud.json.configuration.config_provider == 'google_drive'
+      - xiaozhi_ingress_cloud.json.configuration.settings_scope == 'cluster'
+      - xiaozhi_ingress_cloud.json.configuration.schema_version == 2
+      - xiaozhi_ingress_cloud.json.configuration.desired_revision is integer
+      - xiaozhi_ingress_cloud.json.configuration.desired_revision > 0
+      - xiaozhi_ingress_cloud.json.configuration.sync_status == 'synced'
+      - xiaozhi_ingress_cloud.json.configuration.runtime_revision is none
+      - xiaozhi_ingress_cloud.json.reconciliation.state == 'ready'
+      - xiaozhi_ingress_cloud.json.reconciliation.last_success_at is not none
+      - xiaozhi_ingress_cloud.json.ingress.configured_vip is string
+      - xiaozhi_ingress_cloud.json.ingress.configured_vip | trim | length > 0
+    fail_msg: Require healthy shared V2 Cloud assignments before ingress; migration remains a separate operation.
+    quiet: true
+  no_log: true
+
+- name: Check local cached health without live Cloud I/O
+  ansible.builtin.uri:
+    url: "http://{{ cluster_ip }}:{{ xiaozhi_ingress_backend_port }}/healthz"
+    use_proxy: false
+    status_code: 200
+    timeout: 3
+  changed_when: false
+  check_mode: false
+
+- name: Freeze only public desired ingress metadata for this rollout
+  ansible.builtin.set_fact:
+    xiaozhi_ingress_vip: "{{ xiaozhi_ingress_cloud.json.ingress.configured_vip }}"
+    xiaozhi_ingress_revision: "{{ xiaozhi_ingress_cloud.json.configuration.desired_revision }}"
+
+- name: Read IPv4 addresses for management interface autodetection
+  ansible.builtin.command:
+    argv: [ip, -j, -4, address, show]
+  register: xiaozhi_ingress_addresses
+  changed_when: false
+  check_mode: false
+
+- name: Validate management LAN and discover interface and prefix
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/python3
+      - -c
+      - "{{ lookup('ansible.builtin.file', role_path + '/files/ingress_probe.py') }}"
+      - topology
+      - --management
+      - "{{ ansible_host }}"
+      - --vip
+      - "{{ xiaozhi_ingress_vip }}"
+      - --private-interface
+      - "{{ cluster_interface }}"
+    stdin: "{{ xiaozhi_ingress_addresses.stdout }}"
+  register: xiaozhi_ingress_topology
+  changed_when: false
+  check_mode: false
+
+- name: Retain the discovered management topology
+  ansible.builtin.set_fact:
+    xiaozhi_ingress_management: "{{ xiaozhi_ingress_topology.stdout | from_json }}"
+
+- name: Check for an existing applied ingress snapshot
+  ansible.builtin.stat:
+    path: "{{ xiaozhi_ingress_state_file }}"
+  register: xiaozhi_ingress_previous
+
+- name: Read the public applied snapshot if ingress already exists
+  ansible.builtin.slurp:
+    src: "{{ xiaozhi_ingress_state_file }}"
+  register: xiaozhi_ingress_previous_content
+  when: xiaozhi_ingress_previous.stat.exists
+
+- name: Reject unsupported live VIP migration before any node changes
+  ansible.builtin.assert:
+    that:
+      - (xiaozhi_ingress_previous_content.content | b64decode | from_json).vip == xiaozhi_ingress_vip
+    fail_msg: Cloud desired VIP differs from the applied ingress snapshot. Dynamic VIP migration and two-phase cutover require a separate reviewed operation; this foundation rollout cannot perform that migration.
+  when: xiaozhi_ingress_previous.stat.exists

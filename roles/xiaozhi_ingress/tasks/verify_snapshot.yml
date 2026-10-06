@@ -1,0 +1,33 @@
+---
+# Both callers only compare; neither refreshes the frozen preflight facts.
+- name: Check live Cloud desired metadata without changing the rollout snapshot
+  block:
+    - name: Read current local control-plane status
+      ansible.builtin.uri:
+        url: "http://{{ hostvars[xiaozhi_ingress_snapshot_node | default(inventory_hostname)].cluster_ip }}:{{ hostvars[xiaozhi_ingress_snapshot_node | default(inventory_hostname)].xiaozhi_ingress_backend_port }}/api/cluster"
+        use_proxy: false
+        return_content: true
+        status_code: 200
+        timeout: 3
+      delegate_to: "{{ xiaozhi_ingress_snapshot_node | default(inventory_hostname) }}"
+      register: xiaozhi_ingress_live_snapshot
+      changed_when: false
+      check_mode: false
+      no_log: true
+
+    - name: Require live desired revision and VIP to equal the frozen node values
+      ansible.builtin.assert:
+        that:
+          - xiaozhi_ingress_live_snapshot.json.protocol == 'xiaozhi-control-plane-v1'
+          - xiaozhi_ingress_live_snapshot.json.node_id == (xiaozhi_ingress_snapshot_node | default(inventory_hostname))
+          - xiaozhi_ingress_live_snapshot.json.configuration.settings_scope == 'cluster'
+          - xiaozhi_ingress_live_snapshot.json.configuration.schema_version == 2
+          - xiaozhi_ingress_live_snapshot.json.configuration.desired_revision is integer
+          - xiaozhi_ingress_live_snapshot.json.configuration.desired_revision == hostvars[xiaozhi_ingress_snapshot_node | default(inventory_hostname)].xiaozhi_ingress_revision
+          - xiaozhi_ingress_live_snapshot.json.ingress.configured_vip == hostvars[xiaozhi_ingress_snapshot_node | default(inventory_hostname)].xiaozhi_ingress_vip
+        quiet: true
+      no_log: true
+  rescue:
+    - name: Stop rollout on Cloud drift or unreadable current desired state
+      ansible.builtin.fail:
+        msg: "Current control-plane desired state no longer matches the frozen rollout snapshot, or could not be verified. Stop and review Cloud state before rerunning; this check never updates the frozen revision/VIP or migrates ingress."

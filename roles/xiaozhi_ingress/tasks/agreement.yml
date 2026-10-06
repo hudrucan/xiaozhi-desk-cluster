@@ -1,0 +1,14 @@
+- name: Require all nodes to agree before the serial rollout
+  ansible.builtin.assert:
+    that:
+    - groups['xiaozhi_ingress'] | map('extract', hostvars, 'xiaozhi_ingress_vip') | unique | list | length == 1
+    - groups['xiaozhi_ingress'] | map('extract', hostvars, 'xiaozhi_ingress_revision') | unique | list | length == 1
+    - groups['xiaozhi_ingress'] | map('extract', hostvars, 'xiaozhi_ingress_management') | map(attribute='network') | unique
+      | list | length == 1
+    - groups['xiaozhi_ingress'] | map('extract', hostvars, 'xiaozhi_ingress_backend_port') | unique | list | length == 1
+    - groups['xiaozhi_ingress'] | map('extract', hostvars, 'xiaozhi_ingress_listener_settings') | unique | list | length ==
+      1
+    - xiaozhi_ingress_vip not in (groups['xiaozhi_ingress'] | map('extract', hostvars, 'ansible_host') | list)
+    - xiaozhi_ingress_backend_port is integer
+    - xiaozhi_ingress_backend_port > 0 and xiaozhi_ingress_backend_port <= 65535
+    fail_msg: Ingress requires the same Cloud desired VIP/revision and management subnet on all three nodes.

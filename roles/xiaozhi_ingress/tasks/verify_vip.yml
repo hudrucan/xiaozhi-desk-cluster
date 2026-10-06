@@ -1,0 +1,27 @@
+---
+- name: Require healthy VIP access from the management LAN controller
+  ansible.builtin.uri:
+    url: "http://{{ xiaozhi_ingress_vip }}:{{ xiaozhi_ingress_port }}/healthz"
+    status_code: 200
+    return_content: true
+    use_proxy: false
+    timeout: 3
+  delegate_to: localhost
+  become: false
+  register: xiaozhi_ingress_vip_health
+  until:
+    - xiaozhi_ingress_vip_health.status | default(0) == 200
+    - xiaozhi_ingress_vip_health.json.healthy | default(false) == true
+  retries: "{{ xiaozhi_ingress_verify_retries }}"
+  delay: "{{ xiaozhi_ingress_verify_delay }}"
+  changed_when: false
+
+- name: Require the Settings page through the floating VIP
+  ansible.builtin.uri:
+    url: "http://{{ xiaozhi_ingress_vip }}:{{ xiaozhi_ingress_port }}/settings/"
+    status_code: 200
+    use_proxy: false
+    timeout: 3
+  delegate_to: localhost
+  become: false
+  changed_when: false

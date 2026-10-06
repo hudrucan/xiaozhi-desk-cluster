@@ -1,0 +1,16 @@
+---
+- name: Reset VIP convergence state
+  ansible.builtin.set_fact:
+    xiaozhi_ingress_owner_ready: false
+
+- name: Poll whole-cluster ownership with a bounded number of samples
+  ansible.builtin.include_tasks: owner_sample.yml
+  loop: "{{ range(xiaozhi_ingress_verify_retries) | list }}"
+  loop_control:
+    loop_var: xiaozhi_ingress_attempt
+  when: not xiaozhi_ingress_owner_ready
+
+- name: Require exactly one VIP assignment and the expected election outcome
+  ansible.builtin.assert:
+    that: xiaozhi_ingress_owner_ready
+    fail_msg: VIP did not converge to exactly one eligible owner; inspect VRRP connectivity and HAProxy health.

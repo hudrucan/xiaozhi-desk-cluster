@@ -1,0 +1,21 @@
+---
+- name: Read current ingress desired state without deployment
+  hosts: xiaozhi_ingress
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  tasks:
+    - name: Read local Cloud snapshots and management topology
+      ansible.builtin.include_role:
+        name: xiaozhi_ingress
+        tasks_from: preflight
+    - name: Require shared desired agreement
+      ansible.builtin.include_role:
+        name: xiaozhi_ingress
+        tasks_from: agreement
+      run_once: true
+    - name: Verify existing services and floating VIP
+      ansible.builtin.include_role:
+        name: xiaozhi_ingress
+        tasks_from: verify_cluster
+      run_once: true

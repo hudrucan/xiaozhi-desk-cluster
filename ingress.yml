@@ -1,0 +1,40 @@
+---
+- name: Read all Cloud ingress snapshots before changing any node
+  hosts: xiaozhi_ingress
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  tags: [ingress]
+  tasks:
+    - name: Preflight all three nodes without mutating Cloud or hosts
+      ansible.builtin.include_role:
+        name: xiaozhi_ingress
+        tasks_from: preflight
+    - name: Compare frozen desired state and management topology
+      ansible.builtin.include_role:
+        name: xiaozhi_ingress
+        tasks_from: agreement
+      run_once: true
+
+- name: Deploy symmetric Desk ingress one node at a time
+  hosts: xiaozhi_ingress
+  become: true
+  gather_facts: true
+  gather_subset: [min]
+  serial: 1
+  any_errors_fatal: true
+  tags: [ingress]
+  roles: [xiaozhi_ingress]
+
+- name: Verify the complete management ingress
+  hosts: xiaozhi_ingress
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  tags: [ingress]
+  tasks:
+    - name: Verify services, private backends, single ownership and LAN access
+      ansible.builtin.include_role:
+        name: xiaozhi_ingress
+        tasks_from: verify_cluster
+      run_once: true

@@ -1,0 +1,10 @@
+---
+- name: Check all expected HAProxy servers are UP through its private stats socket
+  ansible.builtin.command:
+    argv: "{{ [xiaozhi_ingress_probe, 'stats', '--socket', xiaozhi_ingress_stats_socket, '--all', '--nodes'] + (groups['xiaozhi_ingress'] | sort) }}"
+  register: xiaozhi_ingress_backend_check
+  until: xiaozhi_ingress_backend_check.rc == 0
+  retries: "{{ xiaozhi_ingress_verify_retries }}"
+  delay: "{{ xiaozhi_ingress_verify_delay }}"
+  changed_when: false
+  when: not ansible_check_mode

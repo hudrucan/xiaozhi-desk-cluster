@@ -1,0 +1,33 @@
+---
+- name: Verify the whole ingress cluster after the serial rollout
+  when: not ansible_check_mode
+  block:
+    - name: Require active Keepalived on every eligible node
+      ansible.builtin.command:
+        argv: [systemctl, is-active, keepalived]
+      delegate_to: "{{ item }}"
+      loop: "{{ groups['xiaozhi_ingress'] | sort }}"
+      changed_when: false
+
+    - name: Require HAProxy on each node to reach all private backends
+      ansible.builtin.command:
+        argv: "{{ [xiaozhi_ingress_probe, 'stats', '--socket', xiaozhi_ingress_stats_socket, '--all', '--nodes'] + (groups['xiaozhi_ingress'] | sort) }}"
+      delegate_to: "{{ item }}"
+      loop: "{{ groups['xiaozhi_ingress'] | sort }}"
+      register: xiaozhi_ingress_all_backends
+      until: xiaozhi_ingress_all_backends.rc == 0
+      retries: "{{ xiaozhi_ingress_verify_retries }}"
+      delay: "{{ xiaozhi_ingress_verify_delay }}"
+      changed_when: false
+
+    - name: Check exactly one current VIP owner
+      ansible.builtin.include_tasks: verify_owner.yml
+
+    - name: Check VIP HTTP from the Ansible controller on the management LAN
+      ansible.builtin.include_tasks: verify_vip.yml
+
+    - name: Re-read every control plane against its frozen rollout snapshot before success
+      ansible.builtin.include_tasks: verify_snapshot.yml
+      loop: "{{ groups['xiaozhi_ingress'] | sort }}"
+      loop_control:
+        loop_var: xiaozhi_ingress_snapshot_node

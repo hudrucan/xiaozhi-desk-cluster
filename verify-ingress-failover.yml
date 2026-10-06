@@ -1,0 +1,48 @@
+---
+- name: Verify existing ingress before an explicit service failover exercise
+  ansible.builtin.import_playbook: verify-ingress.yml
+
+- name: Move the VIP away from its current owner and restore that service
+  hosts: xiaozhi_ingress
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  tasks:
+    - name: Exercise failover only on real apply, never in check mode
+      when: not ansible_check_mode
+      run_once: true
+      block:
+        - name: Capture the elected owner instead of choosing a master
+          ansible.builtin.set_fact:
+            xiaozhi_ingress_original_owner: "{{ xiaozhi_ingress_owners | first }}"
+
+        - name: Stop owner Keepalived and verify a different elected owner
+          block:
+            - name: Stop only Keepalived on the current VIP owner
+              ansible.builtin.systemd_service:
+                name: keepalived
+                state: stopped
+              delegate_to: "{{ xiaozhi_ingress_original_owner }}"
+
+            - name: Require a single VIP on one of the other two nodes
+              ansible.builtin.include_role:
+                name: xiaozhi_ingress
+                tasks_from: verify_owner
+              vars:
+                xiaozhi_ingress_excluded_owner: "{{ xiaozhi_ingress_original_owner }}"
+
+            - name: Check management LAN HTTP after failover
+              ansible.builtin.include_role:
+                name: xiaozhi_ingress
+                tasks_from: verify_vip
+          always:
+            - name: Restore Keepalived on the original owner even after verification failure
+              ansible.builtin.systemd_service:
+                name: keepalived
+                state: started
+              delegate_to: "{{ xiaozhi_ingress_original_owner }}"
+
+        - name: Verify the restored cluster remains available with one owner
+          ansible.builtin.include_role:
+            name: xiaozhi_ingress
+            tasks_from: verify_cluster

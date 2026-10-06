@@ -1,0 +1,112 @@
+---
+# Preflight is a separate, non-serial play: no first-node mutation before all agree.
+- name: Require completed whole-cluster preflight
+  ansible.builtin.assert:
+    that:
+      - xiaozhi_ingress_vip is defined
+      - xiaozhi_ingress_management is defined
+      - ansible_facts.os_family == 'Debian'
+      - ansible_facts.architecture in ['aarch64', 'arm64']
+    fail_msg: Run ingress.yml with all three nodes, on Debian ARM64.
+
+- name: Evaluate public configuration candidates in check mode
+  ansible.builtin.set_fact:
+    xiaozhi_ingress_candidate_haproxy: "{{ lookup('ansible.builtin.template', 'haproxy.cfg.j2') }}"
+    xiaozhi_ingress_candidate_keepalived: "{{ lookup('ansible.builtin.template', 'keepalived.conf.j2') }}"
+  when: ansible_check_mode
+
+- name: Deploy the ingress foundation only during a real apply
+  when: not ansible_check_mode
+  block:
+    - name: Require the live local Cloud snapshot to match preflight before any mutation
+      ansible.builtin.include_tasks: verify_snapshot.yml
+
+    - name: Install Debian ingress packages without automatic service startup
+      ansible.builtin.apt:
+        name: [haproxy, keepalived]
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+        policy_rc_d: 101
+
+    - name: Create the root-owned probe directory
+      ansible.builtin.file:
+        path: /usr/local/libexec
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Install the bounded HAProxy readiness probe
+      ansible.builtin.copy:
+        src: ingress_probe.py
+        dest: "{{ xiaozhi_ingress_probe }}"
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Persist standby binding support
+      ansible.builtin.copy:
+        content: "# Managed by Xiaozhi ingress: bind the VIP on standby nodes.\nnet.ipv4.ip_nonlocal_bind = 1\n"
+        dest: /etc/sysctl.d/90-xiaozhi-ingress.conf
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Read the current nonlocal bind setting
+      ansible.builtin.command:
+        argv: [sysctl, -n, net.ipv4.ip_nonlocal_bind]
+      register: xiaozhi_ingress_nonlocal_bind
+      changed_when: false
+
+    - name: Enable nonlocal binding before starting HAProxy
+      ansible.builtin.command:
+        argv: [sysctl, -w, net.ipv4.ip_nonlocal_bind=1]
+      when: xiaozhi_ingress_nonlocal_bind.stdout | trim != '1'
+      changed_when: true
+
+    - name: Record the public deployment VIP snapshot before changing ingress configuration
+      ansible.builtin.copy:
+        content: "{{ {'vip': xiaozhi_ingress_vip} | to_nice_json }}\n"
+        dest: "{{ xiaozhi_ingress_state_file }}"
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Validate and install the HAProxy candidate
+      ansible.builtin.template:
+        src: haproxy.cfg.j2
+        dest: /etc/haproxy/haproxy.cfg
+        owner: root
+        group: root
+        mode: '0644'
+        validate: /usr/sbin/haproxy -c -f %s
+      notify: Reload Xiaozhi HAProxy
+
+    - name: Enable and start HAProxy
+      ansible.builtin.systemd_service:
+        name: haproxy
+        enabled: true
+        state: started
+
+    - name: Flush HAProxy changes before strict backend verification
+      ansible.builtin.meta: flush_handlers
+
+    - name: Require HAProxy to reach all three healthy private backends
+      ansible.builtin.include_tasks: verify_backends.yml
+
+    - name: Validate and install the Keepalived candidate
+      ansible.builtin.template:
+        src: keepalived.conf.j2
+        dest: /etc/keepalived/keepalived.conf
+        owner: root
+        group: root
+        mode: '0644'
+        validate: /usr/sbin/keepalived --config-test -f %s
+      register: xiaozhi_ingress_keepalived_candidate
+
+    - name: Enable and start or restart Keepalived only after strict backend verification
+      ansible.builtin.systemd_service:
+        name: keepalived
+        enabled: true
+        state: "{{ 'restarted' if xiaozhi_ingress_keepalived_candidate.changed else 'started' }}"

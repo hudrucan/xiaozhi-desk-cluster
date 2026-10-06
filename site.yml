@@ -97,3 +97,9 @@
         tasks_from: verify_cluster
       run_once: true
       when: not ansible_check_mode
+
+# Ingress is intentionally part of default full-site convergence; the tag selects it separately.
+- name: Deploy and verify the management ingress foundation
+  ansible.builtin.import_playbook: ingress.yml
+  tags:
+    - ingress

@@ -1,0 +1,9 @@
+---
+# There is intentionally no Ansible VIP variable. Cloud desired state owns it.
+xiaozhi_ingress_port: 80
+xiaozhi_ingress_vrid: 51
+xiaozhi_ingress_stats_socket: /run/xiaozhi-haproxy.sock
+xiaozhi_ingress_probe: /usr/local/libexec/xiaozhi-ingress-probe
+xiaozhi_ingress_state_file: /etc/xiaozhi-ingress.json
+xiaozhi_ingress_verify_retries: 20
+xiaozhi_ingress_verify_delay: 2
