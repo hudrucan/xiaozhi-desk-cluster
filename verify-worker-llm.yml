@@ -53,6 +53,7 @@
       loop: "{{ range(xiaozhi_llm_probe_count) | list }}"
       register: xiaozhi_llm_probe_results
       changed_when: false
+      failed_when: false
       no_log: true
       diff: false
       run_once: true
@@ -60,6 +61,17 @@
     - name: Report only credential-free result metadata
       ansible.builtin.debug:
         msg: "{{ item.stdout | from_json }}"
+      loop: "{{ xiaozhi_llm_probe_results.results }}"
+      loop_control:
+        label: "probe {{ item.item + 1 }}"
+      run_once: true
+      when: not ansible_check_mode
+    - name: Require successful authenticated LLM results after reporting safe metadata
+      ansible.builtin.assert:
+        that:
+          - item.rc == 0
+        fail_msg: LLM probe failed; inspect the safe error metadata above.
+        quiet: true
       loop: "{{ xiaozhi_llm_probe_results.results }}"
       loop_control:
         label: "probe {{ item.item + 1 }}"
