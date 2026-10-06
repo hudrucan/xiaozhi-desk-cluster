@@ -8,6 +8,7 @@
     - groups['xiaozhi_ingress'] | map('extract', hostvars, 'xiaozhi_ingress_backend_port') | unique | list | length == 1
     - groups['xiaozhi_ingress'] | map('extract', hostvars, 'xiaozhi_ingress_listener_settings') | unique | list | length ==
       1
+    - groups['xiaozhi_ingress'] | map('extract', hostvars, 'xiaozhi_ingress_management_mac') | unique | list | length == 3
     - xiaozhi_ingress_vip not in (groups['xiaozhi_ingress'] | map('extract', hostvars, 'ansible_host') | list)
     - xiaozhi_ingress_backend_port is integer
     - xiaozhi_ingress_backend_port > 0 and xiaozhi_ingress_backend_port <= 65535

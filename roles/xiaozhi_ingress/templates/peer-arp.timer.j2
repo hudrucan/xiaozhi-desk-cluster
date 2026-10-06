@@ -1,0 +1,11 @@
+[Unit]
+Description=Periodic VIP ARP refresh for ingress peers
+
+[Timer]
+OnBootSec=5s
+OnUnitActiveSec={{ xiaozhi_ingress_peer_arp_seconds }}s
+AccuracySec=1s
+Unit=xiaozhi-peer-arp.service
+
+[Install]
+WantedBy=timers.target

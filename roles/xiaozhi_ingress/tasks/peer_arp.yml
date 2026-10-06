@@ -1,0 +1,64 @@
+---
+- name: Install owner-gated peer ARP helper
+  ansible.builtin.copy:
+    src: peer_arp.py
+    dest: /usr/local/libexec/xiaozhi-peer-arp
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Install public management peer mapping
+  ansible.builtin.template:
+    src: peer-arp.json.j2
+    dest: /etc/xiaozhi-peer-arp.json
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Install bounded peer ARP service
+  ansible.builtin.template:
+    src: peer-arp.service.j2
+    dest: /etc/systemd/system/xiaozhi-peer-arp.service
+    owner: root
+    group: root
+    mode: '0644'
+  register: xiaozhi_ingress_peer_arp_service
+
+- name: Install periodic peer ARP timer
+  ansible.builtin.template:
+    src: peer-arp.timer.j2
+    dest: /etc/systemd/system/xiaozhi-peer-arp.timer
+    owner: root
+    group: root
+    mode: '0644'
+  register: xiaozhi_ingress_peer_arp_timer
+
+- name: Persist same-subnet ARP learning on the discovered management interface
+  ansible.builtin.copy:
+    content: "# Managed by Xiaozhi ingress: learn owner announcements even after cache eviction.\nnet/ipv4/conf/{{ xiaozhi_ingress_management.interface }}/arp_accept = 2\n"
+    dest: /etc/sysctl.d/91-xiaozhi-peer-arp.conf
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Read current management ARP learning mode
+  ansible.builtin.command:
+    argv: [sysctl, -n, "net/ipv4/conf/{{ xiaozhi_ingress_management.interface }}/arp_accept"]
+  register: xiaozhi_ingress_arp_accept
+  changed_when: false
+  check_mode: false
+
+- name: Enable only same-subnet ARP learning before owner announcements
+  ansible.builtin.command:
+    argv: [sysctl, -w, "net/ipv4/conf/{{ xiaozhi_ingress_management.interface }}/arp_accept=2"]
+  when:
+    - not ansible_check_mode
+    - xiaozhi_ingress_arp_accept.stdout | trim != '2'
+  changed_when: true
+
+- name: Enable peer ARP refresh after verified ingress activation
+  ansible.builtin.systemd_service:
+    name: xiaozhi-peer-arp.timer
+    daemon_reload: "{{ xiaozhi_ingress_peer_arp_service.changed or xiaozhi_ingress_peer_arp_timer.changed }}"
+    enabled: true
+    state: "{{ 'restarted' if xiaozhi_ingress_peer_arp_timer.changed else 'started' }}"

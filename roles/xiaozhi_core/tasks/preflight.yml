@@ -9,6 +9,7 @@
       - ansible_facts.architecture in ['aarch64', 'arm64']
       - ansible_facts.python.version.major == 3
       - ansible_facts.python.version.minor >= 11
+      - xiaozhi_core_worker_rpc is boolean
       - xiaozhi_core_revision is string and xiaozhi_core_revision is match('^[0-9a-f]{40}$')
       - xiaozhi_core_port is integer and xiaozhi_core_port >= 1024 and xiaozhi_core_port <= 65535
       - cluster_ip is match('^10\.10\.10\.(?:[1-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-4])$')
@@ -61,4 +62,38 @@
 - name: Retain a private comparison fingerprint for the shared auth key
   ansible.builtin.set_fact:
     xiaozhi_core_auth_fingerprint: "{{ vault_mqtt_server_secret | hash('sha256') }}"
+  no_log: true
+
+- name: Resolve shared NATS public defaults for optional worker RPC
+  ansible.builtin.include_vars:
+    file: "{{ role_path }}/../nats/defaults/main.yml"
+    name: xiaozhi_core_nats_defaults
+  when: xiaozhi_core_worker_rpc
+
+- name: Require existing NATS application credentials for worker RPC
+  ansible.builtin.assert:
+    that:
+      - nats_client_user | default(xiaozhi_core_nats_defaults.nats_client_user) is string
+      - nats_client_user | default(xiaozhi_core_nats_defaults.nats_client_user) | trim | length > 0
+      - nats_client_user | default(xiaozhi_core_nats_defaults.nats_client_user) is not search('[\x00\r\n]')
+      - nats_client_password is defined and nats_client_password is string
+      - nats_client_password | trim | length > 0
+      - nats_client_password | length <= 4096
+      - nats_client_password is not search('[\x00\r\n]')
+      - nats_client_port | default(xiaozhi_core_nats_defaults.nats_client_port) is integer
+      - nats_client_port | default(xiaozhi_core_nats_defaults.nats_client_port) >= 1
+      - nats_client_port | default(xiaozhi_core_nats_defaults.nats_client_port) <= 65535
+    quiet: true
+  no_log: true
+  when: xiaozhi_core_worker_rpc
+
+- name: Derive all three private NATS servers and application username
+  ansible.builtin.set_fact:
+    xiaozhi_core_nats_port: "{{ nats_client_port | default(xiaozhi_core_nats_defaults.nats_client_port) }}"
+    xiaozhi_core_nats_user: "{{ nats_client_user | default(xiaozhi_core_nats_defaults.nats_client_user) }}"
+  when: xiaozhi_core_worker_rpc
+
+- name: Retain optional RPC rollout agreement without exposing credentials
+  ansible.builtin.set_fact:
+    xiaozhi_core_rpc_fingerprint: "{{ {'enabled': xiaozhi_core_worker_rpc, 'user': xiaozhi_core_nats_user | default(''), 'port': xiaozhi_core_nats_port | default(0), 'password': nats_client_password if xiaozhi_core_worker_rpc else ''} | to_json | hash('sha256') }}"
   no_log: true

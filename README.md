@@ -400,6 +400,22 @@ Keepalived uses unicast VRRP between the three inventory management addresses,
 VRID 51 by default (`xiaozhi_ingress_vrid`; reserve a unique VRID on this LAN).
 All instances start in `BACKUP`; sorted-node priorities 150/140/130 are election
 preferences, with `nopreempt` to avoid automatic failback to a recovered node.
+Ingress also installs `xiaozhi-peer-arp.timer` on all three nodes. Every five
+seconds, only the node currently holding the applied VIP sends a unicast ARP
+reply to each management peer. The helper re-checks actual interface ownership
+before sending, reads the existing deployment snapshot (not a pinned Ansible
+VIP), and uses peer MAC addresses discovered during whole-cluster preflight.
+Standby nodes send nothing. The discovered management interface uses
+`arp_accept=2`, allowing new entries from same-subnet ARP announcements after
+cache eviction; no global/private-interface ARP policy is changed. Without this,
+announcements repaired existing entries but did not reliably recreate missing
+ones. This supplements broadcast GARP for the current
+AIC8800 Wi-Fi adapters, where peer broadcast VIP ARP resolution failed while
+unicast announcements restored access. It does not modify the router, create
+static ARP bindings, or guarantee reachability from every Wi-Fi client. Verify
+idle and failover access from the robot's actual network separately. Re-run
+ingress deployment after replacing a peer's network adapter/MAC.
+
 The current VIP owner sends two gratuitous ARP messages every 30 seconds
 (`xiaozhi_ingress_garp_refresh_seconds` / `xiaozhi_ingress_garp_refresh_repeat`)
 to refresh neighbor/AP learning. Only the MASTER instance sends these periodic
@@ -733,6 +749,18 @@ provider. The role requires a reviewed full server SHA, root-owned release/venv,
 a dedicated unprivileged user and the same encrypted `vault_mqtt_server_secret`
 used by the gateways. Check mode only validates and renders; it does not create
 accounts/directories, install/download, start listeners or change services.
+
+Set `xiaozhi_core_worker_rpc: true` to enable bounded authenticated worker probes
+through the private core listener (`POST /api/workers/probe`). NATS addresses
+come from all three private inventory members and credentials from the existing
+application Vault values. Queue probes preserve `xiaozhi.v1.worker.ping`;
+`{"worker_id":"deskb2x"}` probes the existing targeted subject. Requests carry
+no config or credentials and have a two-second deadline, at most eight pending
+requests per core, no automatic RPC retry, and cancellation on disconnect or
+shutdown. Connection reconnects continue indefinitely. This is diagnostic RPC:
+worker capabilities remain empty and conversation providers remain disabled.
+`requirements-core.txt` now pins aiohttp and nats-py only. The flag defaults to
+false; when enabled, deployment requires a connected NATS client before success.
 
 Core admission uses the existing gateway HMAC bearer contract plus the three
 private gateway source-IP allowlist. Active session counts start only after a

@@ -11,6 +11,8 @@
       - xiaozhi_ingress_vrid > 0 and xiaozhi_ingress_vrid < 256
       - xiaozhi_ingress_garp_refresh_seconds is integer
       - xiaozhi_ingress_garp_refresh_seconds > 0 and xiaozhi_ingress_garp_refresh_seconds <= 86400
+      - xiaozhi_ingress_peer_arp_seconds is integer
+      - xiaozhi_ingress_peer_arp_seconds >= 2 and xiaozhi_ingress_peer_arp_seconds <= 60
       - xiaozhi_ingress_garp_refresh_repeat is integer
       - xiaozhi_ingress_garp_refresh_repeat > 0 and xiaozhi_ingress_garp_refresh_repeat <= 5
       - groups['xiaozhi_ingress'] | map('extract', hostvars, 'ansible_host') | unique | list | length == 3
@@ -24,7 +26,7 @@
 
 - name: Resolve the existing private backend port
   ansible.builtin.set_fact:
-    xiaozhi_ingress_listener_settings: "{{ {'port': xiaozhi_ingress_port, 'vrid': xiaozhi_ingress_vrid, 'garp_refresh_seconds': xiaozhi_ingress_garp_refresh_seconds, 'garp_refresh_repeat': xiaozhi_ingress_garp_refresh_repeat} }}"
+    xiaozhi_ingress_listener_settings: "{{ {'port': xiaozhi_ingress_port, 'vrid': xiaozhi_ingress_vrid, 'garp_refresh_seconds': xiaozhi_ingress_garp_refresh_seconds, 'garp_refresh_repeat': xiaozhi_ingress_garp_refresh_repeat, 'peer_arp_seconds': xiaozhi_ingress_peer_arp_seconds} }}"
     xiaozhi_ingress_backend_port: "{{ xiaozhi_control_plane_port | default(xiaozhi_ingress_control_defaults.xiaozhi_control_plane_port) }}"
 
 # check_mode:false is only for read-only commands/GETs, never host mutations.
@@ -87,7 +89,7 @@
 
 - name: Read IPv4 addresses for management interface autodetection
   ansible.builtin.command:
-    argv: [ip, -j, -4, address, show]
+    argv: [ip, -j, address, show]
   register: xiaozhi_ingress_addresses
   changed_when: false
   check_mode: false
@@ -113,6 +115,16 @@
 - name: Retain the discovered management topology
   ansible.builtin.set_fact:
     xiaozhi_ingress_management: "{{ xiaozhi_ingress_topology.stdout | from_json }}"
+
+- name: Retain the discovered management MAC for owner-only peer announcements
+  ansible.builtin.set_fact:
+    xiaozhi_ingress_management_mac: "{{ (xiaozhi_ingress_addresses.stdout | from_json | selectattr('ifname', 'equalto', xiaozhi_ingress_management.interface) | first).address }}"
+
+- name: Validate the public unicast management MAC
+  ansible.builtin.assert:
+    that:
+      - xiaozhi_ingress_management_mac is match('^(?:[0-9a-fA-F][02468aAcCeE]:)(?:[0-9a-fA-F]{2}:){4}[0-9a-fA-F]{2}$')
+      - xiaozhi_ingress_management_mac != '00:00:00:00:00:00'
 
 - name: Check for an existing applied ingress snapshot
   ansible.builtin.stat:

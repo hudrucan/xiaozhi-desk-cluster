@@ -12,3 +12,6 @@ xiaozhi_ingress_settings_timeout: 10
 # Refresh neighbor/AP learning only while the instance owns the floating VIP.
 xiaozhi_ingress_garp_refresh_seconds: 30
 xiaozhi_ingress_garp_refresh_repeat: 2
+
+# Owner-only unicast ARP supplements broadcast GARP on Wi-Fi offload adapters.
+xiaozhi_ingress_peer_arp_seconds: 5

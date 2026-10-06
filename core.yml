@@ -20,6 +20,15 @@
     - name: Require the same authentication key on all core nodes
       ansible.builtin.assert:
         that: hostvars[item].xiaozhi_core_auth_fingerprint == xiaozhi_core_auth_fingerprint
+        # Compare credential fingerprints privately, never publish connection values.
+        quiet: true
+      loop: "{{ groups['xiaozhi_mqtt_gateways'] | sort }}"
+      run_once: true
+      no_log: true
+
+    - name: Require matching optional worker RPC configuration on all nodes
+      ansible.builtin.assert:
+        that: hostvars[item].xiaozhi_core_rpc_fingerprint == xiaozhi_core_rpc_fingerprint
         quiet: true
       loop: "{{ groups['xiaozhi_mqtt_gateways'] | sort }}"
       run_once: true

@@ -12,6 +12,9 @@
 - name: Evaluate public configuration candidates in check mode
   ansible.builtin.set_fact:
     xiaozhi_ingress_candidate_haproxy: "{{ lookup('ansible.builtin.template', 'haproxy.cfg.j2') }}"
+    xiaozhi_ingress_candidate_peer_arp: "{{ lookup('ansible.builtin.template', 'peer-arp.json.j2') }}"
+    xiaozhi_ingress_candidate_peer_arp_service: "{{ lookup('ansible.builtin.template', 'peer-arp.service.j2') }}"
+    xiaozhi_ingress_candidate_peer_arp_timer: "{{ lookup('ansible.builtin.template', 'peer-arp.timer.j2') }}"
     xiaozhi_ingress_candidate_keepalived: "{{ lookup('ansible.builtin.template', 'keepalived.conf.j2') }}"
   when: ansible_check_mode
 
@@ -110,3 +113,6 @@
         name: keepalived
         enabled: true
         state: "{{ 'restarted' if xiaozhi_ingress_keepalived_candidate.changed else 'started' }}"
+
+    - name: Refresh VIP neighbor caches on the two management peers
+      ansible.builtin.include_tasks: peer_arp.yml

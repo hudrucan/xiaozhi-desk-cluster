@@ -62,7 +62,7 @@
             assert (root / 'core_server.py').is_file()
             assert (root / 'core/cluster/transport_core.py').is_file()
             deps = [line.strip() for line in (root / 'requirements-core.txt').read_text().splitlines() if line.strip() and not line.startswith('#')]
-            assert deps == ['aiohttp==3.13.2']
+            assert deps == ['aiohttp==3.13.2', 'nats-py==2.16.0']
         chdir: "{{ xiaozhi_core_release }}/repo"
       changed_when: false
     - name: Create the release-specific minimal venv
@@ -113,5 +113,6 @@
         - xiaozhi_core_status.json.status | default('') == 'ready'
         - xiaozhi_core_status.json.local_vip_owner | default(none) is boolean
         - xiaozhi_core_status.json.conversation_runtime | default(true) is sameas false
+        - not xiaozhi_core_worker_rpc or xiaozhi_core_status.json.worker_rpc.state | default('') == 'connected'
       retries: 10
       delay: 1

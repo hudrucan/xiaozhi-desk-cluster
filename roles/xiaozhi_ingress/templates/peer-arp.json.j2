@@ -1,0 +1,10 @@
+{
+    "interface": {{ xiaozhi_ingress_management.interface | to_json }},
+    "local_ip": {{ ansible_host | to_json }},
+    "peers": [
+{% for node in groups['xiaozhi_ingress'] | sort if node != inventory_hostname %}
+        {"ip": {{ hostvars[node].ansible_host | to_json }}, "mac": {{ hostvars[node].xiaozhi_ingress_management_mac | to_json }}}{% if not loop.last %},{% endif %}
+
+{% endfor %}
+    ]
+}

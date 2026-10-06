@@ -1,0 +1,20 @@
+[Unit]
+Description=Refresh floating VIP ARP on ingress peers while locally owned
+After=network-online.target keepalived.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /usr/local/libexec/xiaozhi-peer-arp --config /etc/xiaozhi-peer-arp.json --snapshot {{ xiaozhi_ingress_state_file }}
+TimeoutStartSec=5
+User=root
+Group=root
+CapabilityBoundingSet=CAP_NET_RAW
+AmbientCapabilities=CAP_NET_RAW
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX AF_NETLINK AF_PACKET
