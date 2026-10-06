@@ -22,6 +22,9 @@ vrrp_instance XIAOZHI_SETTINGS {
     priority {{ 150 - 10 * (groups['xiaozhi_ingress'] | sort).index(inventory_hostname) }}
     advert_int 1
     nopreempt
+    # Periodic advertisements come only from the current MASTER, including after failover.
+    garp_master_refresh {{ xiaozhi_ingress_garp_refresh_seconds }}
+    garp_master_refresh_repeat {{ xiaozhi_ingress_garp_refresh_repeat }}
     unicast_src_ip {{ ansible_host }}
     check_unicast_src
     track_src_ip

@@ -361,6 +361,12 @@ No Vault credentials are needed by the standalone ingress playbooks;
 they read only the safe local control-plane status API. All three backends must
 already be deployed, healthy, reconciled to shared V2, and agree on one revision
 and a non-empty `ingress.configured_vip`. Legacy migration is a separate operation.
+A status sample can overlap periodic Cloud reconciliation. Preflight retries the
+read-only status GET while its state is `refreshing` (up to ten retries with a
+one-second delay and the existing three-second request timeout). After that it
+still requires `ready`, synced shared V2 and a successful live reconciliation;
+an error, invalid snapshot or persistent refresh fails closed. It does not
+trigger a Cloud sync, accept cached state as ready or start the failover test.
 
 The VIP comes from **Cloud desired state**, never an Ansible default/expected
 address. `192.168.1.186` is the current initial Cloud value only. Preflight reads
@@ -394,6 +400,14 @@ Keepalived uses unicast VRRP between the three inventory management addresses,
 VRID 51 by default (`xiaozhi_ingress_vrid`; reserve a unique VRID on this LAN).
 All instances start in `BACKUP`; sorted-node priorities 150/140/130 are election
 preferences, with `nopreempt` to avoid automatic failback to a recovered node.
+The current VIP owner sends two gratuitous ARP messages every 30 seconds
+(`xiaozhi_ingress_garp_refresh_seconds` / `xiaozhi_ingress_garp_refresh_repeat`)
+to refresh neighbor/AP learning. Only the MASTER instance sends these periodic
+announcements; a newly elected owner advertises its own MAC. The same settings
+are required across all nodes (positive integer interval up to one day and
+one to five repetitions). This uses Keepalived's native GARP mechanism, without
+a cron job or a static mapping to one node. It does not prove every Wi-Fi
+firmware will forward ARP correctly; validate idle-cache and failover behavior.
 There is no permanent master. A bounded readiness script enters FAULT when
 HAProxy has no open frontend or no healthy backend; at least one healthy backend
 keeps ingress eligible. A failed local control-plane alone therefore need not
@@ -431,7 +445,11 @@ ensures it is started. Rollout uses `serial: 1` with failure stopping further
 nodes. Unchanged configuration does not
 reload/restart services. Final read-only checks sample all three address lists
 until exactly one VIP assignment is observed, require all three proxy backend
-pools UP, and GET VIP `/healthz` and `/settings/` from the management controller.
+pools UP, and GET VIP `/healthz` and `/settings/` from the management controller. Health uses
+a three-second request timeout; the Settings HTML transfer allows ten seconds
+(`xiaozhi_ingress_settings_timeout`). Both checks use bounded
+`xiaozhi_ingress_verify_retries` / `xiaozhi_ingress_verify_delay` retries and
+require HTTP 200; repeated Settings timeouts still fail verification.
 
 Failover is a separate, explicit service interruption exercise, never part of
 normal apply or check mode:
@@ -444,9 +462,23 @@ It verifies the initial cluster, discovers the actual owner, stops only that
 node's Keepalived, requires exactly one different owner and working VIP HTTP,
 and restores the original service in an `always` block even when verification
 fails. Successful completion rechecks the whole restored cluster. This proves
-service-level failover, not a physical power-loss test. If the controller is
-killed or loses SSH during the exercise, restore Keepalived on the reported
-original node with `systemctl start keepalived` before repeating verification.
+service-level failover, not a physical power-loss test.
+If the controller is killed or loses SSH during the exercise, restore Keepalived
+on the reported original node with `systemctl start keepalived` before repeating
+verification.
+
+For deployment acceptance, capture VIP-only ARP on the elected owner's discovered
+management interface and confirm periodic announcements at the configured
+interval. Check VIP HTTP from the management controller after a quiet period
+longer than the LAN's ARP cache age; a brief health pass is not that proof.
+Run the explicit failover exercise separately and check the new owner is unique,
+HTTP recovers, and recovery does not force failback. Observe the management
+router/AP behavior without pinning the VIP to one node's MAC.
+
+Keep the current Cloud VIP outside the management DHCP allocation range to
+prevent a later DHCP lease collision. Exclude the floating address from the pool;
+a fixed DHCP reservation or static ARP binding to one node is unsuitable for
+failover. DHCP pool administration is an operator/router task, outside this role.
 
 `/etc/xiaozhi-ingress.json` records the public deployment VIP before configuration
 replacement, including partial attempts. It is a safety guard, not Cloud desired

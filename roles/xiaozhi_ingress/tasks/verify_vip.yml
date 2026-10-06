@@ -21,7 +21,11 @@
     url: "http://{{ xiaozhi_ingress_vip }}:{{ xiaozhi_ingress_port }}/settings/"
     status_code: 200
     use_proxy: false
-    timeout: 3
+    timeout: "{{ xiaozhi_ingress_settings_timeout }}"
   delegate_to: localhost
   become: false
+  register: xiaozhi_ingress_vip_settings
+  until: xiaozhi_ingress_vip_settings.status | default(0) == 200
+  retries: "{{ xiaozhi_ingress_verify_retries }}"
+  delay: "{{ xiaozhi_ingress_verify_delay }}"
   changed_when: false

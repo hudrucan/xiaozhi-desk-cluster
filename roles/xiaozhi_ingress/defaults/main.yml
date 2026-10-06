@@ -7,3 +7,8 @@ xiaozhi_ingress_probe: /usr/local/libexec/xiaozhi-ingress-probe
 xiaozhi_ingress_state_file: /etc/xiaozhi-ingress.json
 xiaozhi_ingress_verify_retries: 20
 xiaozhi_ingress_verify_delay: 2
+# Settings HTML transfer has a separate timeout from the cheap health probe.
+xiaozhi_ingress_settings_timeout: 10
+# Refresh neighbor/AP learning only while the instance owns the floating VIP.
+xiaozhi_ingress_garp_refresh_seconds: 30
+xiaozhi_ingress_garp_refresh_repeat: 2
