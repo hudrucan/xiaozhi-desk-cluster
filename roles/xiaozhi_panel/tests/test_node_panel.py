@@ -205,6 +205,64 @@ class PanelFixtures(unittest.TestCase):
             with self.assertRaises(ValueError):
                 panel.load_config(path)
 
+    def core_config(self):
+        return {**self.config, "core_status_host": "10.10.10.11",
+                "core_status_port": 8000, "core_id": "deskb1x"}
+
+    def test_core_glyph_and_combined_roles(self):
+        self.assertEqual(panel.display_text(3, False, core_active=True), "C-03")
+        self.assertEqual(panel.display_text(3, True, core_active=True), "CP03")
+        self.assertEqual(panel.segments_for("C-03", self.driver()), (0x39, 0x40, 0x3F, 0x4F))
+        for phase in range(4):
+            self.assertEqual(panel.display_text(2, False, True, True, phase), "tC02")
+            self.assertEqual(panel.display_text(2, True, True, True, phase),
+                             "iP02" if phase % 2 else "tC02")
+        self.assertEqual(panel.segments_for("tC02", self.driver()), (0x78, 0x39, 0x3F, 0x5B))
+
+    def test_core_requires_established_local_session_and_valid_status(self):
+        base = {"protocol": "xiaozhi-core-transport-v1", "core_id": "deskb1x", "status": "ready", "active_sessions": 1}
+        for changes, expected in (({}, True), ({"active_sessions": 0}, False),
+                                  ({"active_sessions": True}, False), ({"active_sessions": -1}, False),
+                                  ({"core_id": "deskb2x"}, False), ({"protocol": "wrong"}, False),
+                                  ({"status": "stopping"}, False)):
+            payload = json.dumps({**base, **changes}).encode()
+            with patch.object(panel, "HTTPConnection", return_value=self.mqtt_response(payload)) as request:
+                self.assertEqual(panel.core_session_active(self.core_config()), expected)
+                request.assert_called_once_with("10.10.10.11", 8000, timeout=0.3)
+        for payload in (b"[]", b"{", b"x" * (panel.MAX_JSON_BYTES + 1)):
+            with patch.object(panel, "HTTPConnection", return_value=self.mqtt_response(payload)):
+                self.assertFalse(panel.core_session_active(self.core_config()))
+        with patch.object(panel, "HTTPConnection", side_effect=TimeoutError):
+            self.assertFalse(panel.core_session_active(self.core_config()))
+        with patch.object(panel, "HTTPConnection", return_value=self.mqtt_response(b"{}", 302)):
+            self.assertFalse(panel.core_session_active(self.core_config()))
+
+    def test_placeholder_never_queries_core(self):
+        with patch.object(panel.signal, "signal"), patch.object(panel, "core_session_active") as query:
+            panel.run(self.core_config(), self.driver(), placeholder=True)
+        query.assert_not_called()
+
+    def test_core_session_end_clears_C_preserving_vip(self):
+        driver = self.driver()
+        stop = Mock()
+        stop.is_set.side_effect = [False, False, False, True]
+        with patch.object(panel.signal, "signal"), patch.object(panel.threading, "Event", return_value=stop), \
+                patch.object(panel, "local_vip_owner", return_value=True), \
+                patch.object(panel, "core_session_active", side_effect=[False, True, False]):
+            panel.run(self.config, driver)
+        frames = driver.write_register.call_args_list
+        self.assertEqual(frames[0].args, (0x68, 0x04))
+        self.assertEqual(frames[5].args, (0x68, 0x39))
+        self.assertEqual(frames[9].args, (0x68, 0x04))
+
+    def test_invalid_core_configuration_rejected(self):
+        path = Path(self.directory.name) / "panel.json"
+        for changes in ({"core_status_host": "bad"}, {"core_status_host": "0.0.0.0"},
+                        {"core_status_port": True}, {"core_status_port": 80}, {"core_id": "../node"}):
+            path.write_text(json.dumps({**self.core_config(), **changes}))
+            with self.assertRaises(ValueError):
+                panel.load_config(path)
+
 
 if __name__ == "__main__":
     unittest.main()

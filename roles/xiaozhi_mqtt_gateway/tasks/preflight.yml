@@ -16,6 +16,32 @@
       - xiaozhi_mqtt_gateway_verify_delay >= 0 and xiaozhi_mqtt_gateway_verify_delay <= 10
     fail_msg: Require all three nodes and a reviewed/pushed full gateway SHA containing explicit IPv4 listener binding.
 
+- name: Require an explicit cluster core mode flag
+  ansible.builtin.assert:
+    that: xiaozhi_mqtt_gateway_cluster_core is boolean
+
+- name: Resolve three symmetric transport cores
+  when: xiaozhi_mqtt_gateway_cluster_core
+  block:
+    - name: Require a new reviewed gateway release with core selection support
+      ansible.builtin.assert:
+        that: xiaozhi_mqtt_gateway_revision != 'a7c68269c9122021362a8496778788244621c339'
+        fail_msg: Pin a reviewed gateway release containing core-selector.js before enabling cluster core routing.
+    - name: Read public core defaults
+      ansible.builtin.include_vars:
+        file: "{{ role_path }}/../xiaozhi_core/defaults/main.yml"
+        name: xiaozhi_mqtt_gateway_core_defaults
+    - name: Start the symmetric core endpoint list
+      ansible.builtin.set_fact:
+        xiaozhi_mqtt_gateway_core_nodes: []
+    - name: Derive each core identity and its private endpoints
+      ansible.builtin.set_fact:
+        xiaozhi_mqtt_gateway_core_nodes: "{{ xiaozhi_mqtt_gateway_core_nodes + [{'node_id': item, 'ws_url': 'ws://' ~ hostvars[item].cluster_ip ~ ':' ~ (xiaozhi_core_port | default(xiaozhi_mqtt_gateway_core_defaults.xiaozhi_core_port) | string) ~ '/xiaozhi/v1/', 'status_url': 'http://' ~ hostvars[item].cluster_ip ~ ':' ~ (xiaozhi_core_port | default(xiaozhi_mqtt_gateway_core_defaults.xiaozhi_core_port) | string) ~ '/status'}] }}"
+      loop: "{{ groups['xiaozhi_mqtt_gateways'] | sort }}"
+    - name: Use the symmetric core WS endpoints
+      ansible.builtin.set_fact:
+        xiaozhi_mqtt_gateway_chat_servers: "{{ xiaozhi_mqtt_gateway_core_nodes | map(attribute='ws_url') | list }}"
+
 - name: Require existing core-matching secrets from encrypted Vault
   ansible.builtin.assert:
     that:
@@ -60,6 +86,8 @@
       node_version: "{{ xiaozhi_mqtt_gateway_node_version }}"
       node_sha256: "{{ xiaozhi_mqtt_gateway_node_sha256 }}"
       chat_servers: "{{ xiaozhi_mqtt_gateway_chat_servers }}"
+      core_nodes: "{{ xiaozhi_mqtt_gateway_core_nodes | default([]) }}"
+      cluster_core: "{{ xiaozhi_mqtt_gateway_cluster_core }}"
       mqtt_port: "{{ xiaozhi_mqtt_gateway_mqtt_port }}"
       udp_port: "{{ xiaozhi_mqtt_gateway_udp_port }}"
       http_port: "{{ xiaozhi_mqtt_gateway_http_port }}"

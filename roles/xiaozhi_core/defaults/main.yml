@@ -1,0 +1,8 @@
+---
+# Reviewed transport-only release; conversation providers are disabled.
+xiaozhi_core_revision: ba4c5ae4729eb3ac27a726cbcedc9d6831eafebe
+xiaozhi_core_repo_url: https://github.com/hudrucan/xiaozhi-desk-robot-server.git
+xiaozhi_core_root: /opt/xiaozhi-core
+xiaozhi_core_release: "{{ xiaozhi_core_root }}/releases/{{ xiaozhi_core_revision }}"
+xiaozhi_core_port: 8000
+xiaozhi_core_service_user: xiaozhi-core

@@ -20,7 +20,7 @@ from http.client import HTTPConnection, HTTPException
 CONFIG_PATH = "/etc/xiaozhi-node-panel.json"
 DRIVER_PATH = "/usr/libexec/deskbox-front-panel"
 MAX_JSON_BYTES = 65536
-GLYPHS = {"-": 0x40, "i": 0x04, "P": 0x73, "t": 0x78}
+GLYPHS = {"-": 0x40, "i": 0x04, "P": 0x73, "t": 0x78, "C": 0x39}
 LOGGER = logging.getLogger("xiaozhi-node-panel")
 
 
@@ -60,6 +60,18 @@ def load_config(path):
             r"[A-Za-z0-9_.-]{1,128}", config["gateway_id"]
         ):
             raise ValueError("invalid local gateway identity")
+    if "core_status_host" in config:
+        if not isinstance(config["core_status_host"], str):
+            raise ValueError("invalid local core status address")
+        host = ipaddress.IPv4Address(config["core_status_host"])
+        if host.is_unspecified or host.is_multicast:
+            raise ValueError("invalid local core status address")
+        port = config.get("core_status_port")
+        if type(port) is not int or not 1024 <= port <= 65535:
+            raise ValueError("invalid local core status port")
+        if not isinstance(config.get("core_id"), str) or not re.fullmatch(
+            r"[A-Za-z0-9_-]{1,128}", config["core_id"]):
+            raise ValueError("invalid local core identity")
     return config
 
 
@@ -115,9 +127,40 @@ def mqtt_turn_active(config):
         return False
 
 
-def display_text(node_number, vip_owner, mqtt_active=False):
-    # t marks an established gateway session, not ASR/LLM/provider execution.
-    status = ("tP" if vip_owner else "t-") if mqtt_active else ("iP" if vip_owner else "--")
+def core_session_active(config):
+    """Show C only for an established session owned by this local core."""
+    if "core_status_host" not in config:
+        return False
+    try:
+        with closing(HTTPConnection(config["core_status_host"],
+                                    config["core_status_port"], timeout=0.3)) as client:
+            client.request("GET", "/status")
+            response = client.getresponse()
+            if response.status != 200:
+                return False
+            data = response.read(MAX_JSON_BYTES + 1)
+        if len(data) > MAX_JSON_BYTES:
+            return False
+        status = json.loads(data)
+        count = status.get("active_sessions")
+        return (status.get("protocol") == "xiaozhi-core-transport-v1"
+                and status.get("core_id") == config["core_id"]
+                and status.get("status") == "ready"
+                and type(count) is int and count > 0)
+    except (OSError, ValueError, TypeError, KeyError, AttributeError, HTTPException):
+        return False
+
+
+def display_text(node_number, vip_owner, mqtt_active=False, core_active=False, phase=0):
+    # Combined transport roles fit in one frame; only three roles need rotation.
+    if mqtt_active and core_active:
+        status = "iP" if vip_owner and phase % 2 else "tC"
+    elif core_active:
+        status = "CP" if vip_owner else "C-"
+    elif mqtt_active:
+        status = "tP" if vip_owner else "t-"
+    else:
+        status = "iP" if vip_owner else "--"
     return status + f"{node_number:02d}"
 
 
@@ -168,10 +211,14 @@ def run(config, driver, placeholder=False):
             previous_icons = None
             previous_owner = None
             previous_mqtt = None
+            previous_core = None
+            phase = 0
             while not stopping.is_set():
                 owner = False if placeholder else local_vip_owner(config)
                 mqtt_active = False if placeholder else mqtt_turn_active(config)
-                segments = segments_for(display_text(config["node_number"], owner, mqtt_active), driver)
+                core_active = False if placeholder else core_session_active(config)
+                segments = segments_for(display_text(config["node_number"], owner, mqtt_active, core_active, phase), driver)
+                phase += 1
                 icons = 0 if placeholder else connectivity_icons(config, driver)
                 if segments != previous_segments:
                     for address, value in zip(driver.DIGIT_ADDRS, segments):
@@ -186,6 +233,9 @@ def run(config, driver, placeholder=False):
                 if mqtt_active != previous_mqtt and not placeholder:
                     LOGGER.info("node=%02d mqtt_session_active=%s", config["node_number"], mqtt_active)
                     previous_mqtt = mqtt_active
+                if core_active != previous_core and not placeholder:
+                    LOGGER.info("node=%02d core_session_active=%s", config["node_number"], core_active)
+                    previous_core = core_active
                 if placeholder:
                     break
                 stopping.wait(1)

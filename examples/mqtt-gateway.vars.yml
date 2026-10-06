@@ -1,9 +1,10 @@
 ---
-# Copy this public example outside the checkout and fill it before deployment.
-# Pin the reviewed/pushed gateway commit with MQTT_HOST/UDP_HOST/HTTP_HOST.
-xiaozhi_mqtt_gateway_revision: a7c68269c9122021362a8496778788244621c339
-xiaozhi_mqtt_gateway_chat_servers:
-  - ws://REPLACE_WITH_EXISTING_CORE_HOST:8000/xiaozhi/v1/
+# Reviewed source pins. Copy outside the checkout for deployment overrides.
+xiaozhi_core_revision: ba4c5ae4729eb3ac27a726cbcedc9d6831eafebe
+xiaozhi_mqtt_gateway_revision: 8ac1cec4637b4c65f1122c808bb95154fbcd6d51
+xiaozhi_mqtt_gateway_cluster_core: true
+# Cluster mode derives the three private core URLs from inventory.
+# Legacy external-core mode instead sets cluster_core: false and chat_servers.
 # Secret values belong only in encrypted vars/vault.yml:
-# vault_mqtt_signature_key must match core server.mqtt_signature_key.
-# vault_mqtt_server_secret must match core server.auth_key.
+# vault_mqtt_signature_key is the robot bootstrap MQTT signing key.
+# vault_mqtt_server_secret is shared by gateway and core_server.py.

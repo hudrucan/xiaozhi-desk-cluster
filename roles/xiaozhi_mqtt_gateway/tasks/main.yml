@@ -19,6 +19,35 @@
       ansible.builtin.debug:
         msg: "{{ inventory_hostname }} would run the pinned MQTT gateway with Node {{ xiaozhi_mqtt_gateway_node_version }}; MQTT/health use its private IPv4 and UDP advertises its management IPv4. No files, packages, downloads or services change in check mode. No backend handshake or robot test is performed."
 
+- name: Require all three existing transport cores before any gateway mutation
+  when: xiaozhi_mqtt_gateway_cluster_core
+  block:
+    - name: Read validated core identities and transport readiness
+      ansible.builtin.uri:
+        url: "{{ item.status_url }}"
+        use_proxy: false
+        follow_redirects: none
+        timeout: 2
+      loop: "{{ xiaozhi_mqtt_gateway_core_nodes }}"
+      loop_control:
+        label: "{{ item.node_id }}"
+      register: xiaozhi_mqtt_gateway_core_statuses
+      check_mode: false
+      changed_when: false
+      no_log: true
+    - name: Require matching ready core status and resolved VIP ownership
+      ansible.builtin.assert:
+        that:
+          - item.json.protocol == 'xiaozhi-core-transport-v1'
+          - item.json.core_id == item.item.node_id
+          - item.json.status == 'ready'
+          - item.json.local_vip_owner is boolean
+        fail_msg: Deploy and verify all three transport cores before enabling cluster gateway routing.
+      loop: "{{ xiaozhi_mqtt_gateway_core_statuses.results }}"
+      loop_control:
+        label: "{{ item.item.node_id }}"
+      no_log: true
+
 - name: Deploy the pinned MQTT gateway only during apply
   when: not ansible_check_mode
   block:
@@ -123,6 +152,9 @@
             assert lock['packages']['']['dependencies'] == package['dependencies']
             assert lock['packages']['']['engines'] == package['engines']
             assert package['dependencies'] and not package.get('devDependencies')
+            if {{ xiaozhi_mqtt_gateway_cluster_core | ternary('True', 'False') }}:
+                assert (root / 'src/core-selector.js').is_file()
+                assert 'CoreSelector' in source and 'active_core_sessions:' in source
         chdir: "{{ xiaozhi_mqtt_gateway_repo_dir }}"
       changed_when: false
 

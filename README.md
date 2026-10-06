@@ -588,8 +588,9 @@ management `192.168.1.101/102/103:1883`, and `PUBLIC_IP` advertises that gateway
 own address. MQTT TCP and its UDP session therefore reach the same process.
 The node holding the VIP can differ from the gateway handling the robot.
 
-A usable **normal conversation core** must already exist. The standalone control
-plane on 8004 serves Settings only; it is not a WebSocket conversation backend,
+Legacy external-core mode requires a usable **normal conversation core**. For the
+new isolated cluster transport mode, use the opt-in core rollout described below.
+The standalone control plane on 8004 serves Settings only; it is not a WebSocket conversation backend,
 robot bootstrap or camera/VLM endpoint. Configure the actual existing core WS/WSS
 URL including its path, without credentials, queries or fragments. The gateway
 adds its existing sole `?from=mqtt_gateway` marker. A localhost backend is valid
@@ -598,7 +599,7 @@ reachability before installation; it does not prove authentication or providers.
 
 Copy [examples/mqtt-gateway.vars.yml](examples/mqtt-gateway.vars.yml) outside the
 checkout and fill the core backend URL list. The reviewed gateway source is pinned
-to `a7c68269c9122021362a8496778788244621c339`, which provides explicit
+to `8ac1cec4637b4c65f1122c808bb95154fbcd6d51`, which provides explicit
 MQTT/UDP/HTTP listener binding and `listener_ports` status metadata. The empty
 backend default rejects an unconfigured apply before host changes. Future source
 updates require a reviewed/pushed full 40-character SHA. All three nodes must use
@@ -722,3 +723,72 @@ python3 -m unittest discover -s roles/xiaozhi_mqtt_gateway/tests -v
 python3 -m unittest discover -s roles/xiaozhi_mqtt_ingress/tests -v
 python3 -m unittest discover -s roles/xiaozhi_panel/tests -v
 ```
+
+## Symmetric transport cores and panel ownership
+
+`core.yml` is opt-in and serial; `site.yml` remains unchanged. Every deskbox gets
+an isolated `xiaozhi-core` process on its private address, port 8000. This runs
+`core_server.py` with only `requirements-core.txt` (aiohttp), not `app.py` or any
+provider. The role requires a reviewed full server SHA, root-owned release/venv,
+a dedicated unprivileged user and the same encrypted `vault_mqtt_server_secret`
+used by the gateways. Check mode only validates and renders; it does not create
+accounts/directories, install/download, start listeners or change services.
+
+Core admission uses the existing gateway HMAC bearer contract plus the three
+private gateway source-IP allowlist. Active session counts start only after a
+valid hello and clear on disconnect/shutdown. The core observes actual local VIP
+ownership from the public applied ingress snapshot and management interface; it
+neither owns nor pins Cloud VIP state. Missing ownership observation reports
+unknown and prevents gateway selection of that core.
+
+Set `xiaozhi_mqtt_gateway_cluster_core: true` in the external public vars file.
+The role derives three WS/status endpoints from the symmetric inventory; legacy
+mode defaults to false and continues to use explicit external `chat_servers`.
+Cluster mode requires a new reviewed gateway SHA containing `core-selector.js`;
+the previous a7c6826 source is intentionally rejected before mutation. All three
+core status identities/readiness/VIP observations are checked before gateway
+changes. A mode-specific list cannot select outside its declared core nodes.
+
+At each new gateway hello, concurrent bounded probes rank cores as:
+
+1. Other node, not the observed VIP owner.
+2. Other node holding VIP, if the preferred core cannot establish a session.
+3. Local core, only after remote establishment fails (VIP local is the last tier).
+
+Equal peers rotate from randomized startup position. With all three nodes healthy
+and gateway already placed away from VIP, the third node is the preferred core.
+This is not a permanent assignment: a node can own several sessions, and fallback
+can combine roles. No busy threshold is implemented. Multiple reported VIP owners
+block new core selection. VIP observation is sampled once per second, so a role
+transition is not atomic with hello. Established sessions keep their core through
+VIP/config changes; a failed core requires a fresh session, with no replication.
+
+Panel marks an established local core session as **`C- NN`**, or **`CP NN`** when
+also holding VIP. Uppercase C lights top, both left and bottom segments. Gateway
+remains `t- NN`/`tP NN`; idle stays `-- NN`/`iP NN`. If local gateway and core are
+both active without VIP, show `tC NN` continuously. When all three roles are
+active, alternate `tC NN` and `iP NN` each polling cycle. The colon remains off. Local bounded status polls verify protocol,
+identity, readiness and a positive integer session count; errors clear the role
+indicator. Provider execution is not represented by either transport indicator.
+
+The reviewed transport core is pinned to `ba4c5ae4729eb3ac27a726cbcedc9d6831eafebe` and gateway to
+`8ac1cec4637b4c65f1122c808bb95154fbcd6d51`. Copy the public example outside the checkout
+and use it for the opt-in cluster rollout:
+
+```sh
+ansible-playbook -i inventory.ini core.yml --check --diff --ask-vault-pass -e @/path/to/mqtt-gateway.vars.yml
+ansible-playbook -i inventory.ini core.yml --ask-vault-pass -e @/path/to/mqtt-gateway.vars.yml
+ansible-playbook -i inventory.ini mqtt-gateway.yml --check --diff --ask-vault-pass -e @/path/to/mqtt-gateway.vars.yml
+ansible-playbook -i inventory.ini mqtt-gateway.yml --ask-vault-pass -e @/path/to/mqtt-gateway.vars.yml
+ansible-playbook -i inventory.ini mqtt-ingress.yml
+ansible-playbook -i inventory.ini panel.yml
+```
+
+The isolated core is **transport-only**: hello/session/ping, framing validation
+and incoming audio counters. It counts/discards audio and returns an explicit
+conversation-runtime-unavailable error for unsupported requests. It does not
+claim ASR/LLM/VLM/TTS/MCP support, NATS worker dispatch, bootstrap/OTA or Vision.
+Transport readiness is not conversation readiness. Deployments must not repoint
+robot bootstrap/vision to this process. Preserve the existing `app.py` runtime
+until the future conversation coordinator, bootstrap and worker RPC are ready.
+Physical panel and robot checks remain operator-owned.
