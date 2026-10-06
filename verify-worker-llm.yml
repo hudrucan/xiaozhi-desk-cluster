@@ -1,0 +1,67 @@
+---
+# Explicit API probe; real LLM calls may use provider quota. No deployment changes.
+- name: Probe text LLM through authenticated private core RPC
+  hosts: xiaozhi_workers
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  vars_files: [vars/vault.yml]
+  vars:
+    xiaozhi_worker_llm_enabled: true
+    xiaozhi_worker_revision: "{{ xiaozhi_worker_llm_revision }}"
+    xiaozhi_worker_root: "/opt/xiaozhi-worker-llm/releases/{{ xiaozhi_worker_revision }}"
+    xiaozhi_llm_probe_count: 1
+    xiaozhi_llm_probe_prompt: 'Reply with exactly: LLM OK'
+    xiaozhi_llm_probe_expect: 'LLM OK'
+    xiaozhi_llm_probe_timeout: 30
+  tasks:
+    - name: Require bounded probe count and deadline
+      ansible.builtin.assert:
+        that:
+          - xiaozhi_llm_probe_count is integer and xiaozhi_llm_probe_count >= 1 and xiaozhi_llm_probe_count <= 12
+          - xiaozhi_llm_probe_timeout is integer and xiaozhi_llm_probe_timeout >= 1 and xiaozhi_llm_probe_timeout <= 30
+      run_once: true
+    - name: Read desired revision without deploying workers
+      ansible.builtin.include_role:
+        name: xiaozhi_worker
+        tasks_from: llm_preflight
+        public: true
+      run_once: true
+    - name: Read public core release defaults
+      ansible.builtin.include_vars:
+        file: roles/xiaozhi_core/defaults/main.yml
+        name: xiaozhi_llm_core_defaults
+      run_once: true
+    - name: Send a bounded authenticated text request through the private core
+      ansible.builtin.command:
+        argv:
+          - "/opt/xiaozhi-core/releases/{{ xiaozhi_core_revision | default(xiaozhi_llm_core_defaults.xiaozhi_core_revision) }}/venv/bin/python"
+          - "{{ xiaozhi_worker_repo_dir }}/main/xiaozhi-server/probe_worker_llm.py"
+          - --core-ip
+          - "{{ hostvars[(groups['xiaozhi_mqtt_gateways'] | sort)[item % 3]].cluster_ip }}"
+          - --revision
+          - "{{ xiaozhi_worker_llm_expected_revision | string }}"
+          - --prompt
+          - "{{ xiaozhi_llm_probe_prompt }}"
+          - --expect
+          - "{{ xiaozhi_llm_probe_expect }}"
+          - --timeout-seconds
+          - "{{ xiaozhi_llm_probe_timeout | string }}"
+      environment:
+        XIAOZHI_CORE_AUTH_KEY: "{{ vault_mqtt_server_secret }}"
+        PYTHONDONTWRITEBYTECODE: '1'
+      loop: "{{ range(xiaozhi_llm_probe_count) | list }}"
+      register: xiaozhi_llm_probe_results
+      changed_when: false
+      no_log: true
+      diff: false
+      run_once: true
+      when: not ansible_check_mode
+    - name: Report only credential-free result metadata
+      ansible.builtin.debug:
+        msg: "{{ item.stdout | from_json }}"
+      loop: "{{ xiaozhi_llm_probe_results.results }}"
+      loop_control:
+        label: "probe {{ item.item + 1 }}"
+      run_once: true
+      when: not ansible_check_mode

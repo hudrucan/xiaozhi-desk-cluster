@@ -13,7 +13,7 @@ Group={{ xiaozhi_worker_service_user }}
 WorkingDirectory={{ xiaozhi_worker_repo_dir }}/main/xiaozhi-server
 EnvironmentFile=/etc/xiaozhi-worker.env
 Environment=PYTHONDONTWRITEBYTECODE=1
-ExecStart={{ xiaozhi_worker_venv_dir }}/bin/python worker.py
+ExecStart={{ xiaozhi_worker_venv_dir }}/bin/python {{ 'worker_llm.py' if xiaozhi_worker_llm_enabled else 'worker.py' }}
 Restart=on-failure
 RestartSec=3s
 KillSignal=SIGTERM

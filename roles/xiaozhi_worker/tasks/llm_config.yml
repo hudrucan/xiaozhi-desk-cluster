@@ -1,0 +1,54 @@
+---
+- name: Require the existing control-plane provisioning environment
+  ansible.builtin.stat:
+    path: "{{ xiaozhi_worker_llm_control_plane_root }}/venv/bin/python"
+  register: xiaozhi_worker_llm_export_python
+
+- name: Require existing Cloud provisioning dependencies
+  ansible.builtin.assert:
+    that: xiaozhi_worker_llm_export_python.stat.exists
+
+- name: Create the private root-owned LLM bundle directory
+  ansible.builtin.file:
+    path: "{{ xiaozhi_worker_llm_config | dirname }}"
+    state: directory
+    owner: root
+    group: "{{ xiaozhi_worker_service_user }}"
+    mode: '0750'
+
+- name: Export only the selected local LLM key and frozen desired configuration
+  ansible.builtin.command:
+    argv:
+      - "{{ xiaozhi_worker_llm_control_plane_root }}/venv/bin/python"
+      - "{{ xiaozhi_worker_repo_dir }}/main/xiaozhi-server/export_worker_llm_config.py"
+      - --source-root
+      - "{{ xiaozhi_worker_llm_control_plane_root }}/repo/main/xiaozhi-server"
+      - --output
+      - "{{ xiaozhi_worker_llm_config }}"
+      - --expected-revision
+      - "{{ xiaozhi_worker_llm_expected_revision | string }}"
+  environment:
+    PYTHONDONTWRITEBYTECODE: '1'
+  register: xiaozhi_worker_llm_export
+  changed_when: (xiaozhi_worker_llm_export.stdout | from_json).changed
+  no_log: true
+  diff: false
+  notify: Restart Xiaozhi worker
+
+- name: Verify only public bundle identity and revision metadata
+  ansible.builtin.assert:
+    that:
+      - (xiaozhi_worker_llm_export.stdout | from_json).worker_id == inventory_hostname
+      - (xiaozhi_worker_llm_export.stdout | from_json).revision == xiaozhi_worker_llm_expected_revision
+    quiet: true
+  no_log: true
+
+- name: Give only the worker service group read access to its bundle
+  ansible.builtin.file:
+    path: "{{ xiaozhi_worker_llm_config }}"
+    owner: root
+    group: "{{ xiaozhi_worker_service_user }}"
+    mode: '0640'
+
+- name: Reject Cloud drift immediately before worker activation
+  ansible.builtin.include_tasks: llm_preflight.yml

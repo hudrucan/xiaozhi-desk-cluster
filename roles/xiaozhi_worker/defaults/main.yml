@@ -7,3 +7,9 @@ xiaozhi_worker_venv_dir: "{{ xiaozhi_worker_root }}/venv"
 xiaozhi_worker_service_user: xiaozhi-worker
 xiaozhi_worker_verify_retries: 10
 xiaozhi_worker_verify_delay: 2
+
+# Explicit text-only provider opt-in. Normal worker deployment stays ping-only.
+xiaozhi_worker_llm_enabled: false
+xiaozhi_worker_llm_config: /etc/xiaozhi-worker-llm/config.json
+xiaozhi_worker_llm_control_plane_root: /opt/xiaozhi-control-plane
+xiaozhi_worker_llm_revision: b0b1938ef36c1499ff27ba5e5b153048e0b7e24c

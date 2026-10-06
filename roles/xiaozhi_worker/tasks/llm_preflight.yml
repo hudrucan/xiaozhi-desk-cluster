@@ -1,0 +1,68 @@
+---
+- name: Read public control-plane defaults without deployment
+  ansible.builtin.include_vars:
+    file: "{{ role_path }}/../xiaozhi_control_plane/defaults/main.yml"
+    name: xiaozhi_worker_llm_control_defaults
+
+- name: Require explicit LLM deployment inputs and symmetric control-plane membership
+  ansible.builtin.assert:
+    that:
+      - xiaozhi_worker_llm_enabled is sameas true
+      - xiaozhi_worker_revision is match('^[0-9a-f]{40}$')
+      - groups['xiaozhi_control_planes'] | sort == groups['deskboxes'] | sort
+      - xiaozhi_worker_llm_config is match('^/etc/xiaozhi-worker-llm/[^/]+$')
+      - xiaozhi_worker_llm_control_plane_root is match('^/opt/[A-Za-z0-9_/-]+$')
+
+- name: Read all validated desired snapshots before worker mutation
+  ansible.builtin.uri:
+    url: "http://{{ hostvars[item].cluster_ip }}:{{ xiaozhi_control_plane_port | default(xiaozhi_worker_llm_control_defaults.xiaozhi_control_plane_port) }}/api/cluster"
+    use_proxy: false
+    follow_redirects: none
+    return_content: true
+    timeout: 3
+    status_code: 200
+  loop: "{{ groups['xiaozhi_control_planes'] | sort }}"
+  register: xiaozhi_worker_llm_cloud
+  changed_when: false
+  check_mode: false
+  no_log: true
+
+- name: Require validated shared V2 desired state on every node
+  ansible.builtin.assert:
+    that:
+      - item.json.protocol == 'xiaozhi-control-plane-v1'
+      - item.json.node_id == item.item
+      - item.json.configuration.config_provider == 'google_drive'
+      - item.json.configuration.settings_scope == 'cluster'
+      - item.json.configuration.schema_version == 2
+      - item.json.configuration.desired_revision is integer
+      - item.json.configuration.desired_revision > 0
+      - item.json.configuration.sync_status == 'synced'
+      - item.json.reconciliation.last_success_at is not none
+    quiet: true
+  loop: "{{ xiaozhi_worker_llm_cloud.results }}"
+  no_log: true
+
+- name: Freeze the public Cloud revision only once for this rollout
+  ansible.builtin.set_fact:
+    xiaozhi_worker_llm_expected_revision: "{{ xiaozhi_worker_llm_cloud.results[0].json.configuration.desired_revision }}"
+  when: xiaozhi_worker_llm_expected_revision is not defined
+
+- name: Reject Cloud drift against the frozen rollout revision
+  ansible.builtin.assert:
+    that: item.json.configuration.desired_revision == xiaozhi_worker_llm_expected_revision
+    quiet: true
+    fail_msg: Cloud desired revisions must match the frozen LLM rollout; stop and re-export after a Cloud change.
+  loop: "{{ xiaozhi_worker_llm_cloud.results }}"
+  no_log: true
+
+- name: Require usable cached control-plane health on all three nodes
+  ansible.builtin.uri:
+    url: "http://{{ hostvars[item].cluster_ip }}:{{ xiaozhi_control_plane_port | default(xiaozhi_worker_llm_control_defaults.xiaozhi_control_plane_port) }}/healthz"
+    use_proxy: false
+    follow_redirects: none
+    status_code: 200
+    timeout: 3
+  loop: "{{ groups['xiaozhi_control_planes'] | sort }}"
+  changed_when: false
+  check_mode: false

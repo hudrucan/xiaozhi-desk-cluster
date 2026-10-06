@@ -929,3 +929,60 @@ Acceptance must fetch credentials from bootstrap before MQTT CONNECT/subscribe/
 hello/UDP/ping/goodbye/reconnect, rather than signing them inside the probe. The
 operator then sets the robot's Server URL and performs the actual hardware check;
 no firmware build/flash is needed for this bootstrap change.
+
+## Opt-in text LLM worker acceptance
+
+`worker-llm.yml` explicitly replaces the ping-only entrypoint under the existing
+`xiaozhi-worker` unit with `worker_llm.py`. The ping schema remains unchanged;
+robot conversation, ASR/VAD/VLM/TTS and tool execution are still unavailable.
+No second worker process runs under the same node identity. Source and dependency
+environments live under `/opt/xiaozhi-worker-llm/releases/<reviewed SHA>`.
+
+All three control planes must hold the same validated shared V2 desired revision.
+The playbook freezes that revision before mutation, rechecks before every worker
+activation and checks again after rollout. `--limit deskb2x` selects a canary,
+while Cloud prerequisites still check all three nodes. Check mode performs only
+read-only Cloud checks and candidate evaluation; it installs no packages, exports
+no key bundles and starts no services.
+
+The exporter runs with the existing control-plane venv, reads its validated local
+cache/reference defaults and resolves only the selected LLM key. It performs no
+Drive refresh, Config save or Soundbank transfer. The immutable runtime bundle is
+root-owned, worker-group-readable (`0640`) inside `/etc/xiaozhi-worker-llm` (`0750`).
+Keys, secret references, prompts and raw provider exceptions are not printed.
+An unchanged export causes no worker restart. Changed Cloud configuration requires
+a new explicit export/worker rollout; this does not mark conversation runtime active.
+
+Use `examples/worker-llm.vars.yml` as the public opt-in source configuration, plus
+the existing Vault files/password workflow. The following examples assume the
+matching core authentication key is available in the encrypted extra vars:
+
+```sh
+# Update isolated transport cores serially, preserving MQTT ingress/gateways.
+ansible-playbook -i inventory.ini core.yml --ask-vault-pass \
+  -e @examples/worker-llm.vars.yml -e @secret/mqtt-transport.vault.yml
+# Canary worker, then one real text request through core -> NATS -> Gemini.
+ansible-playbook -i inventory.ini worker-llm.yml --ask-vault-pass \
+  -e @examples/worker-llm.vars.yml --limit deskb2x
+ansible-playbook -i inventory.ini verify-worker-llm.yml --ask-vault-pass \
+  -e @examples/worker-llm.vars.yml -e @secret/mqtt-transport.vault.yml --limit deskb2x
+# Expand workers serially, then send up to 12 bounded requests for distribution.
+ansible-playbook -i inventory.ini worker-llm.yml --ask-vault-pass \
+  -e @examples/worker-llm.vars.yml
+ansible-playbook -i inventory.ini verify-worker-llm.yml --ask-vault-pass \
+  -e @examples/worker-llm.vars.yml -e @secret/mqtt-transport.vault.yml \
+  -e '{"xiaozhi_llm_probe_count":6}'
+```
+
+Probe output reports status, worker ID, exact revision, elapsed time, text length
+and expected-text match. Real requests consume provider quota. A queue group
+distributes requests across eligible subscribers, without promising an exact
+equal count for a small sample. Core deadlines/admission and token-owned
+cancellation remain bounded; worker job-release diagnostics show cleanup without
+printing message text. The front panel still has no provider activity telemetry.
+
+Full `site.yml` convergence remains ping-only by default. Retain the explicit
+LLM vars file on subsequent worker/full-site runs to keep this opt-in deployment;
+omitting it deliberately restores the normal ping-only worker configuration.
+Keep the previous core release and worker source/venv for rollback. This playbook
+does not update control planes, ingress, gateway routing or robot firmware.

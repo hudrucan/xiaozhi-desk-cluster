@@ -1,0 +1,52 @@
+---
+# Explicit opt-in; --limit deskb2x supports a canary. All Cloud nodes are checked.
+- name: Freeze validated shared Cloud desired state before any text worker changes
+  hosts: xiaozhi_workers
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  vars_files: [vars/vault.yml]
+  vars:
+    xiaozhi_worker_llm_enabled: true
+    xiaozhi_worker_revision: "{{ xiaozhi_worker_llm_revision }}"
+    xiaozhi_worker_root: "/opt/xiaozhi-worker-llm/releases/{{ xiaozhi_worker_revision }}"
+  tasks:
+    - name: Preflight selected workers without host mutation
+      ansible.builtin.include_role:
+        name: xiaozhi_worker
+        tasks_from: llm_preflight
+        public: true
+    - name: Require one frozen desired revision across the selected rollout
+      ansible.builtin.assert:
+        that: hostvars[item].xiaozhi_worker_llm_expected_revision == xiaozhi_worker_llm_expected_revision
+      loop: "{{ ansible_play_hosts_all | sort }}"
+      run_once: true
+
+- name: Deploy text LLM workers one node at a time
+  hosts: xiaozhi_workers
+  become: true
+  gather_facts: true
+  gather_subset: [min]
+  serial: 1
+  any_errors_fatal: true
+  vars_files: [vars/vault.yml]
+  vars:
+    xiaozhi_worker_llm_enabled: true
+    xiaozhi_worker_revision: "{{ xiaozhi_worker_llm_revision }}"
+    xiaozhi_worker_root: "/opt/xiaozhi-worker-llm/releases/{{ xiaozhi_worker_revision }}"
+  roles: [xiaozhi_worker]
+
+- name: Require rollout Cloud revision to remain unchanged
+  hosts: xiaozhi_workers
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  vars:
+    xiaozhi_worker_llm_enabled: true
+    xiaozhi_worker_revision: "{{ xiaozhi_worker_llm_revision }}"
+    xiaozhi_worker_root: "/opt/xiaozhi-worker-llm/releases/{{ xiaozhi_worker_revision }}"
+  tasks:
+    - name: Recheck all Cloud nodes against the frozen worker revision
+      ansible.builtin.include_role:
+        name: xiaozhi_worker
+        tasks_from: llm_preflight

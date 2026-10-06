@@ -1,0 +1,8 @@
+---
+# Reviewed opt-in text worker/core source. Contains no API or NATS credentials.
+xiaozhi_worker_llm_enabled: true
+xiaozhi_worker_llm_revision: b0b1938ef36c1499ff27ba5e5b153048e0b7e24c
+xiaozhi_worker_revision: "{{ xiaozhi_worker_llm_revision }}"
+xiaozhi_worker_root: "/opt/xiaozhi-worker-llm/releases/{{ xiaozhi_worker_revision }}"
+xiaozhi_core_revision: b0b1938ef36c1499ff27ba5e5b153048e0b7e24c
+xiaozhi_core_worker_rpc: true
