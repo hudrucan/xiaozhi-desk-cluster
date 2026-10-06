@@ -68,6 +68,11 @@
   ansible.builtin.set_fact:
     xiaozhi_panel_ingress_state_file: "{{ xiaozhi_ingress_state_file | default(xiaozhi_panel_ingress_defaults.xiaozhi_ingress_state_file) }}"
 
+- name: Read public local gateway status defaults without deploying it
+  ansible.builtin.include_vars:
+    file: "{{ role_path }}/../xiaozhi_mqtt_gateway/defaults/main.yml"
+    name: xiaozhi_panel_mqtt_defaults
+
 - name: Render only the public panel candidate in check mode
   ansible.builtin.set_fact:
     xiaozhi_panel_candidate: "{{ lookup('ansible.builtin.template', 'node-panel.json.j2') }}"

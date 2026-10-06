@@ -1,0 +1,7 @@
+# Keep loading both configurations on reload/restart, including full-site reruns.
+[Service]
+ExecStart=
+ExecStart=/usr/sbin/haproxy -Ws -f /etc/haproxy/haproxy.cfg -f {{ xiaozhi_mqtt_ingress_fragment }} -p /run/haproxy.pid
+ExecReload=
+ExecReload=/usr/sbin/haproxy -c -q -f /etc/haproxy/haproxy.cfg -f {{ xiaozhi_mqtt_ingress_fragment }}
+ExecReload=/bin/kill -USR2 $MAINPID

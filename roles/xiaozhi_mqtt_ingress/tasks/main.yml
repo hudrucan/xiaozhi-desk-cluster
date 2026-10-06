@@ -1,0 +1,84 @@
+---
+- name: Require a frozen full-cluster MQTT preflight
+  ansible.builtin.assert:
+    that:
+      - xiaozhi_mqtt_ingress_listener_settings is defined
+      - xiaozhi_ingress_vip is defined
+
+- name: Read the same public gateway defaults in the serial play
+  ansible.builtin.include_vars:
+    file: "{{ role_path }}/../xiaozhi_mqtt_gateway/defaults/main.yml"
+    name: xiaozhi_mqtt_ingress_gateway_defaults
+
+- name: Render MQTT candidates in memory during check mode
+  ansible.builtin.set_fact:
+    xiaozhi_mqtt_ingress_candidate: "{{ lookup('ansible.builtin.template', 'mqtt.cfg.j2') }}"
+    xiaozhi_mqtt_ingress_unit_candidate: "{{ lookup('ansible.builtin.template', 'haproxy.service.conf.j2') }}"
+  when: ansible_check_mode
+
+- name: Add MQTT TCP routing only during apply
+  when: not ansible_check_mode
+  block:
+    - name: Recheck every gateway before changing this HAProxy
+      ansible.builtin.uri:
+        url: "http://{{ hostvars[item].cluster_ip }}:{{ xiaozhi_mqtt_ingress_listener_settings.health_port }}/status"
+        use_proxy: false
+        status_code: 200
+        return_content: true
+        timeout: 3
+      loop: "{{ groups['xiaozhi_mqtt_gateways'] | sort }}"
+      register: xiaozhi_mqtt_ingress_gateways
+      changed_when: false
+
+    - name: Require correct gateway identities before mutation
+      ansible.builtin.assert:
+        that:
+          - item.json.status == 'ready'
+          - item.json.gateway_id == item.item
+          - item.json.listener_ports.mqtt == xiaozhi_mqtt_ingress_listener_settings.gateway_port
+          - item.json.listener_ports.http == xiaozhi_mqtt_ingress_listener_settings.health_port
+      loop: "{{ xiaozhi_mqtt_ingress_gateways.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    - name: Require the live Cloud snapshot to match the frozen snapshot before mutation
+      ansible.builtin.include_role:
+        name: xiaozhi_ingress
+        tasks_from: verify_snapshot
+
+    - name: Validate the new fragment together with the existing Settings configuration
+      ansible.builtin.template:
+        src: mqtt.cfg.j2
+        dest: "{{ xiaozhi_mqtt_ingress_fragment }}"
+        owner: root
+        group: root
+        mode: '0644'
+        validate: "/usr/sbin/haproxy -c -f /etc/haproxy/haproxy.cfg -f %s"
+      register: xiaozhi_mqtt_ingress_config
+
+    - name: Create the HAProxy systemd drop-in directory
+      ansible.builtin.file:
+        path: "{{ xiaozhi_mqtt_ingress_dropin | dirname }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Retain both configurations for future reloads and restarts
+      ansible.builtin.template:
+        src: haproxy.service.conf.j2
+        dest: "{{ xiaozhi_mqtt_ingress_dropin }}"
+        owner: root
+        group: root
+        mode: '0644'
+      register: xiaozhi_mqtt_ingress_unit
+
+    - name: Activate the extra configuration when it changed
+      ansible.builtin.systemd_service:
+        name: haproxy
+        daemon_reload: "{{ xiaozhi_mqtt_ingress_unit.changed }}"
+        state: "{{ 'restarted' if xiaozhi_mqtt_ingress_unit.changed else 'reloaded' }}"
+      when: xiaozhi_mqtt_ingress_unit.changed or xiaozhi_mqtt_ingress_config.changed
+
+    - name: Verify this HAProxy has all three MQTT backends UP
+      ansible.builtin.include_tasks: verify.yml

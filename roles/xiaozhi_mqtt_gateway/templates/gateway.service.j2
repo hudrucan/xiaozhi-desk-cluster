@@ -1,0 +1,37 @@
+# Managed by Ansible. This gateway does not depend on NATS or VIP election.
+[Unit]
+Description=Xiaozhi Desk MQTT and encrypted UDP gateway
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User={{ xiaozhi_mqtt_gateway_service_user }}
+Group={{ xiaozhi_mqtt_gateway_service_user }}
+WorkingDirectory={{ xiaozhi_mqtt_gateway_repo_dir }}
+EnvironmentFile=/etc/xiaozhi-mqtt-gateway.env
+ExecStart={{ xiaozhi_mqtt_gateway_node_dir }}/bin/node {{ xiaozhi_mqtt_gateway_repo_dir }}/app.js
+Restart=on-failure
+RestartSec=3s
+KillSignal=SIGTERM
+TimeoutStopSec=30s
+StandardInput=null
+StandardOutput=journal
+StandardError=journal
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectHome=true
+ProtectSystem=strict
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

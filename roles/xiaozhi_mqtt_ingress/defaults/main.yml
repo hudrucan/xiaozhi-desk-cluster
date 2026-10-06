@@ -1,0 +1,7 @@
+---
+xiaozhi_mqtt_ingress_port: 1883
+xiaozhi_mqtt_ingress_idle_timeout: 600
+xiaozhi_mqtt_ingress_fragment: /etc/haproxy/xiaozhi-mqtt.cfg
+xiaozhi_mqtt_ingress_dropin: /etc/systemd/system/haproxy.service.d/20-xiaozhi-mqtt.conf
+xiaozhi_mqtt_ingress_verify_retries: 10
+xiaozhi_mqtt_ingress_verify_delay: 2

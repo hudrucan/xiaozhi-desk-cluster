@@ -2,6 +2,7 @@
 """Show two status characters and a stable node number on the Desk FD6551."""
 
 import argparse
+from contextlib import closing
 import fcntl
 import importlib.machinery
 import importlib.util
@@ -13,12 +14,13 @@ import re
 import signal
 import subprocess
 import threading
+from http.client import HTTPConnection, HTTPException
 
 
 CONFIG_PATH = "/etc/xiaozhi-node-panel.json"
 DRIVER_PATH = "/usr/libexec/deskbox-front-panel"
 MAX_JSON_BYTES = 65536
-GLYPHS = {"-": 0x40, "i": 0x04, "P": 0x73}
+GLYPHS = {"-": 0x40, "i": 0x04, "P": 0x73, "t": 0x78}
 LOGGER = logging.getLogger("xiaozhi-node-panel")
 
 
@@ -45,6 +47,19 @@ def load_config(path):
     path = config.get("ingress_state_file")
     if not isinstance(path, str) or not os.path.isabs(path):
         raise ValueError("panel ingress snapshot path must be absolute")
+    if "mqtt_status_host" in config:
+        if not isinstance(config["mqtt_status_host"], str):
+            raise ValueError("invalid local gateway status address")
+        host = ipaddress.IPv4Address(config["mqtt_status_host"])
+        if host.is_unspecified or host.is_multicast:
+            raise ValueError("invalid local gateway status address")
+        port = config.get("mqtt_status_port")
+        if type(port) is not int or not 1024 <= port <= 65535:
+            raise ValueError("invalid local gateway status port")
+        if not isinstance(config.get("gateway_id"), str) or not re.fullmatch(
+            r"[A-Za-z0-9_.-]{1,128}", config["gateway_id"]
+        ):
+            raise ValueError("invalid local gateway identity")
     return config
 
 
@@ -76,9 +91,34 @@ def local_vip_owner(config):
         return False
 
 
-def display_text(node_number, vip_owner):
-    # Keep both status cells reserved; provider scheduling is not implemented yet.
-    return ("iP" if vip_owner else "--") + f"{node_number:02d}"
+def mqtt_turn_active(config):
+    """Poll only this node's gateway; a persistent idle MQTT socket is not a turn."""
+    if "mqtt_status_host" not in config:
+        return False
+    try:
+        # HTTPConnection neither follows redirects nor uses proxy environment variables.
+        with closing(HTTPConnection(config["mqtt_status_host"],
+                                    config["mqtt_status_port"], timeout=0.3)) as client:
+            client.request("GET", "/status")
+            response = client.getresponse()
+            if response.status != 200:
+                return False
+            data = response.read(MAX_JSON_BYTES + 1)
+        if len(data) > MAX_JSON_BYTES:
+            return False
+        status = json.loads(data)
+        count = status.get("active_websocket_sessions")
+        return (status.get("gateway_id") == config["gateway_id"]
+                and status.get("status") == "ready"
+                and type(count) is int and count > 0)
+    except (OSError, ValueError, TypeError, KeyError, AttributeError, HTTPException):
+        return False
+
+
+def display_text(node_number, vip_owner, mqtt_active=False):
+    # t marks an established gateway session, not ASR/LLM/provider execution.
+    status = ("tP" if vip_owner else "t-") if mqtt_active else ("iP" if vip_owner else "--")
+    return status + f"{node_number:02d}"
 
 
 def segments_for(text, driver):
@@ -127,9 +167,11 @@ def run(config, driver, placeholder=False):
             previous_segments = None
             previous_icons = None
             previous_owner = None
+            previous_mqtt = None
             while not stopping.is_set():
                 owner = False if placeholder else local_vip_owner(config)
-                segments = segments_for(display_text(config["node_number"], owner), driver)
+                mqtt_active = False if placeholder else mqtt_turn_active(config)
+                segments = segments_for(display_text(config["node_number"], owner, mqtt_active), driver)
                 icons = 0 if placeholder else connectivity_icons(config, driver)
                 if segments != previous_segments:
                     for address, value in zip(driver.DIGIT_ADDRS, segments):
@@ -141,6 +183,9 @@ def run(config, driver, placeholder=False):
                 if owner != previous_owner and not placeholder:
                     LOGGER.info("node=%02d local_vip_owner=%s", config["node_number"], owner)
                     previous_owner = owner
+                if mqtt_active != previous_mqtt and not placeholder:
+                    LOGGER.info("node=%02d mqtt_session_active=%s", config["node_number"], mqtt_active)
+                    previous_mqtt = mqtt_active
                 if placeholder:
                     break
                 stopping.wait(1)

@@ -1,0 +1,65 @@
+---
+- name: Require complete symmetric gateway membership and Debian ARM64
+  ansible.builtin.assert:
+    that:
+      - inventory_hostname in groups.get('xiaozhi_mqtt_gateways', [])
+      - groups.get('xiaozhi_mqtt_gateways', []) | sort == ['deskb1x', 'deskb2x', 'deskb3x']
+      - ansible_play_hosts_all | sort == groups['xiaozhi_mqtt_gateways'] | sort
+      - inventory_hostname in groups.get('deskboxes', [])
+      - ansible_facts.os_family == 'Debian'
+      - ansible_facts.architecture in ['aarch64', 'arm64']
+      - xiaozhi_mqtt_gateway_revision is string
+      - xiaozhi_mqtt_gateway_revision is match('^[0-9a-f]{40}$')
+      - xiaozhi_mqtt_gateway_verify_retries is integer
+      - xiaozhi_mqtt_gateway_verify_retries > 0 and xiaozhi_mqtt_gateway_verify_retries <= 30
+      - xiaozhi_mqtt_gateway_verify_delay is integer
+      - xiaozhi_mqtt_gateway_verify_delay >= 0 and xiaozhi_mqtt_gateway_verify_delay <= 10
+    fail_msg: Require all three nodes and a reviewed/pushed full gateway SHA containing explicit IPv4 listener binding.
+
+- name: Require existing core-matching secrets from encrypted Vault
+  ansible.builtin.assert:
+    that:
+      - vault_mqtt_signature_key is defined
+      - vault_mqtt_signature_key is string
+      - vault_mqtt_signature_key | trim | length > 0
+      - vault_mqtt_server_secret is defined
+      - vault_mqtt_server_secret is string
+      - vault_mqtt_server_secret | trim | length > 0
+      - vault_mqtt_signature_key is not search('[\x00\r\n]')
+      - vault_mqtt_server_secret is not search('[\x00\r\n]')
+    quiet: true
+    fail_msg: Supply nonempty, single-line existing core MQTT/auth keys in encrypted Vault.
+  no_log: true
+
+- name: Read local IPv4 addresses without changing network state
+  ansible.builtin.command:
+    argv: [/usr/sbin/ip, -j, -4, address, show]
+  register: xiaozhi_mqtt_gateway_addresses
+  changed_when: false
+  check_mode: false
+
+- name: Validate the public gateway source, ports and backend URLs before mutations
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/python3
+      - -c
+      - "{{ lookup('ansible.builtin.file', role_path + '/files/deployment_config.py') }}"
+    stdin: "{{ {'revision': xiaozhi_mqtt_gateway_revision, 'node_version': xiaozhi_mqtt_gateway_node_version, 'node_sha256': xiaozhi_mqtt_gateway_node_sha256, 'gateway_id': inventory_hostname, 'management_ip': ansible_host, 'cluster_ip': cluster_ip, 'interfaces': xiaozhi_mqtt_gateway_addresses.stdout | from_json, 'mqtt_port': xiaozhi_mqtt_gateway_mqtt_port, 'udp_port': xiaozhi_mqtt_gateway_udp_port, 'http_port': xiaozhi_mqtt_gateway_http_port, 'chat_servers': xiaozhi_mqtt_gateway_chat_servers} | to_json }}"
+  register: xiaozhi_mqtt_gateway_validated
+  changed_when: false
+  check_mode: false
+
+- name: Retain validated public backend targets
+  ansible.builtin.set_fact:
+    xiaozhi_mqtt_gateway_backend_targets: "{{ (xiaozhi_mqtt_gateway_validated.stdout | from_json).backend_targets }}"
+
+- name: Freeze public rollout inputs for all-node agreement
+  ansible.builtin.set_fact:
+    xiaozhi_mqtt_gateway_rollout:
+      revision: "{{ xiaozhi_mqtt_gateway_revision }}"
+      node_version: "{{ xiaozhi_mqtt_gateway_node_version }}"
+      node_sha256: "{{ xiaozhi_mqtt_gateway_node_sha256 }}"
+      chat_servers: "{{ xiaozhi_mqtt_gateway_chat_servers }}"
+      mqtt_port: "{{ xiaozhi_mqtt_gateway_mqtt_port }}"
+      udp_port: "{{ xiaozhi_mqtt_gateway_udp_port }}"
+      http_port: "{{ xiaozhi_mqtt_gateway_http_port }}"

@@ -1,0 +1,10 @@
+---
+- name: Require the MQTT frontend and every gateway backend UP
+  ansible.builtin.command:
+    argv: "{{ ['/usr/bin/python3', '-c', lookup('ansible.builtin.file', role_path + '/../xiaozhi_ingress/files/ingress_probe.py'), 'stats', '--socket', xiaozhi_ingress_stats_socket | default('/run/xiaozhi-haproxy.sock'), '--frontend', 'xiaozhi_mqtt', '--backend', 'xiaozhi_mqtt_gateways', '--all', '--nodes'] + (groups['xiaozhi_mqtt_gateways'] | sort) }}"
+  register: xiaozhi_mqtt_ingress_backends
+  until: xiaozhi_mqtt_ingress_backends.rc == 0
+  retries: "{{ xiaozhi_mqtt_ingress_verify_retries }}"
+  delay: "{{ xiaozhi_mqtt_ingress_verify_delay }}"
+  changed_when: false
+  when: not ansible_check_mode

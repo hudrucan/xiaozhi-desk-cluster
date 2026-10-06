@@ -1,0 +1,46 @@
+---
+- name: Require an active gateway service
+  ansible.builtin.command:
+    argv: [systemctl, is-active, xiaozhi-mqtt-gateway]
+  changed_when: false
+
+- name: Require local gateway listener readiness
+  ansible.builtin.uri:
+    url: "http://{{ cluster_ip }}:{{ xiaozhi_mqtt_gateway_http_port }}/readyz"
+    use_proxy: false
+    status_code: 200
+    return_content: true
+    timeout: 3
+  register: xiaozhi_mqtt_gateway_ready
+  until: xiaozhi_mqtt_gateway_ready.status | default(-1) == 200
+  retries: "{{ xiaozhi_mqtt_gateway_verify_retries }}"
+  delay: "{{ xiaozhi_mqtt_gateway_verify_delay }}"
+  changed_when: false
+
+- name: Require the correct gateway identity in the readiness response
+  ansible.builtin.assert:
+    that:
+      - xiaozhi_mqtt_gateway_ready.json.status == 'ready'
+      - xiaozhi_mqtt_gateway_ready.json.gateway_id == inventory_hostname
+
+- name: Read actual gateway listener ports
+  ansible.builtin.uri:
+    url: "http://{{ cluster_ip }}:{{ xiaozhi_mqtt_gateway_http_port }}/status"
+    use_proxy: false
+    status_code: 200
+    return_content: true
+    timeout: 3
+  register: xiaozhi_mqtt_gateway_status
+  changed_when: false
+
+- name: Require actual listener ports to match deployment values
+  ansible.builtin.assert:
+    that:
+      - xiaozhi_mqtt_gateway_status.json.gateway_id == inventory_hostname
+      - xiaozhi_mqtt_gateway_status.json.listener_ports.mqtt == xiaozhi_mqtt_gateway_mqtt_port
+      - xiaozhi_mqtt_gateway_status.json.listener_ports.udp == xiaozhi_mqtt_gateway_udp_port
+      - xiaozhi_mqtt_gateway_status.json.listener_ports.http == xiaozhi_mqtt_gateway_http_port
+
+- name: State the limits of this readiness verification
+  ansible.builtin.debug:
+    msg: Gateway local service/listeners are ready. MQTT authentication, WebSocket hello, UDP audio, conversation, MCP and camera still require operator end-to-end validation. VIP routing is enabled separately after all three gateways are ready.

@@ -1,0 +1,62 @@
+---
+# Opt-in MQTT addition. No Keepalived or Cloud configuration changes.
+- name: Freeze Cloud state and require all three gateways before changing ingress
+  hosts: xiaozhi_ingress
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  tasks:
+    - name: Read existing Cloud ingress state and topology
+      ansible.builtin.include_role:
+        name: xiaozhi_ingress
+        tasks_from: preflight
+        public: true
+    - name: Require frozen Cloud agreement
+      ansible.builtin.include_role:
+        name: xiaozhi_ingress
+        tasks_from: agreement
+      run_once: true
+    - name: Require existing ready gateways on all three nodes
+      ansible.builtin.include_role:
+        name: xiaozhi_mqtt_ingress
+        tasks_from: preflight
+        public: true
+    - name: Require the same MQTT listener settings on every node
+      ansible.builtin.assert:
+        that: hostvars[item].xiaozhi_mqtt_ingress_listener_settings == xiaozhi_mqtt_ingress_listener_settings
+      loop: "{{ groups['xiaozhi_ingress'] | sort }}"
+      run_once: true
+
+- name: Add MQTT TCP routing one HAProxy at a time
+  hosts: xiaozhi_ingress
+  become: true
+  gather_facts: false
+  serial: 1
+  any_errors_fatal: true
+  roles: [xiaozhi_mqtt_ingress]
+
+- name: Verify MQTT routing and retained Settings ingress
+  hosts: xiaozhi_ingress
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  tasks:
+    - name: Check each node's MQTT backend pool
+      ansible.builtin.include_role:
+        name: xiaozhi_mqtt_ingress
+        tasks_from: verify
+    - name: Recheck Settings, VIP ownership and frozen Cloud agreement
+      ansible.builtin.include_role:
+        name: xiaozhi_ingress
+        tasks_from: verify_cluster
+      run_once: true
+    - name: Require the MQTT TCP frontend reachable from the management LAN
+      ansible.builtin.wait_for:
+        host: "{{ xiaozhi_ingress_vip }}"
+        port: "{{ xiaozhi_mqtt_ingress_listener_settings.vip_port }}"
+        connect_timeout: 2
+        timeout: 5
+      delegate_to: localhost
+      become: false
+      run_once: true
+      when: not ansible_check_mode

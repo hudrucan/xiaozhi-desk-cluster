@@ -1,0 +1,21 @@
+# Managed by Ansible; floating address is the frozen Cloud desired VIP.
+# Kept separate from Settings so ingress/site reruns retain MQTT routing.
+frontend xiaozhi_mqtt
+    bind {{ xiaozhi_ingress_vip }}:{{ xiaozhi_mqtt_ingress_port }}
+    mode tcp
+    option tcplog
+    timeout client {{ xiaozhi_mqtt_ingress_idle_timeout }}s
+    default_backend xiaozhi_mqtt_gateways
+
+backend xiaozhi_mqtt_gateways
+    mode tcp
+    # Only the VIP owner receives frontend connections. Its own gateway is fallback.
+    balance roundrobin
+    timeout connect 3s
+    timeout server {{ xiaozhi_mqtt_ingress_idle_timeout }}s
+    option httpchk
+    http-check send meth GET uri /readyz ver HTTP/1.1 hdr Host localhost
+    http-check expect status 200
+{% for node in groups['xiaozhi_mqtt_gateways'] | sort %}
+    server {{ node }} {{ hostvars[node].cluster_ip }}:{{ xiaozhi_mqtt_gateway_mqtt_port | default(xiaozhi_mqtt_ingress_gateway_defaults.xiaozhi_mqtt_gateway_mqtt_port) }} check port {{ xiaozhi_mqtt_gateway_http_port | default(xiaozhi_mqtt_ingress_gateway_defaults.xiaozhi_mqtt_gateway_http_port) }} inter 2s fall 2 rise 2{{ ' backup' if node == inventory_hostname else '' }}
+{% endfor %}

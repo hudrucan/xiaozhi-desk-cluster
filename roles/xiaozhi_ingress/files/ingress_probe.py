@@ -32,11 +32,12 @@ def topology(addresses, management, vip, private_interface):
     return {"interface": interface, "prefix": network.prefixlen, "network": str(network)}
 
 
-def stats_ready(payload, expected, require_all=False):
+def stats_ready(payload, expected, require_all=False,
+                frontend="xiaozhi_settings", backend="xiaozhi_control_planes"):
     # HAProxy 'show stat' is CSV with a '# ' prefix on its header.
     rows = list(csv.DictReader(io.StringIO(payload.removeprefix("# "))))
-    frontends = [r for r in rows if r.get("pxname") == "xiaozhi_settings" and r.get("svname") == "FRONTEND"]
-    backends = [r for r in rows if r.get("pxname") == "xiaozhi_control_planes"]
+    frontends = [r for r in rows if r.get("pxname") == frontend and r.get("svname") == "FRONTEND"]
+    backends = [r for r in rows if r.get("pxname") == backend]
     servers = [r for r in backends if r.get("svname") in expected]
     if len(frontends) != 1 or frontends[0].get("status") != "OPEN":
         return False
@@ -79,6 +80,8 @@ def main():
     stats.add_argument("--socket", required=True)
     stats.add_argument("--nodes", nargs="+", required=True)
     stats.add_argument("--all", action="store_true")
+    stats.add_argument("--frontend", default="xiaozhi_settings")
+    stats.add_argument("--backend", default="xiaozhi_control_planes")
     args = parser.parse_args()
     try:
         if args.command == "topology":
@@ -87,7 +90,8 @@ def main():
                 raise ValueError("Address inventory too large")
             print(json.dumps(topology(json.loads(source), args.management, args.vip, args.private_interface)))
             return 0
-        return 0 if stats_ready(read_stats(args.socket), args.nodes, args.all) else 1
+        return 0 if stats_ready(read_stats(args.socket), args.nodes, args.all,
+                               args.frontend, args.backend) else 1
     except (OSError, ValueError, KeyError, TypeError, csv.Error):
         # Do not print arbitrary subprocess/socket data or exceptions.
         print("Ingress probe failed: invalid topology or HAProxy is not ready", file=sys.stderr)

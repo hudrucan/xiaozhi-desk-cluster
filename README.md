@@ -497,18 +497,21 @@ and [Linux nonlocal binding](https://kernel.org/doc/html/latest/networking/ip-sy
 The four-digit FD6551 panel uses two status cells on the left and a stable
 two-digit node number on the right. The colon and clock icon stay off:
 
-| Node | Standby / no local VIP | Local VIP owner |
-| --- | --- | --- |
-| deskb1x | `-- 01` | `iP 01` |
-| deskb2x | `-- 02` | `iP 02` |
-| deskb3x | `-- 03` | `iP 03` |
+| Node | No session / no VIP | No session / VIP owner | MQTT session / no VIP | MQTT session / VIP owner |
+| --- | --- | --- | --- | --- |
+| deskb1x | `-- 01` | `iP 01` | `t- 01` | `tP 01` |
+| deskb2x | `-- 02` | `iP 02` | `t- 02` | `tP 02` |
+| deskb3x | `-- 03` | `iP 03` | `t- 03` | `tP 03` |
 
 The lowercase `i` lights only the lower-right vertical segment, distinct
 from the two-segment digit `1`. The space represents the physical gap between
 the two digit pairs. Node numbers
 are explicit `xiaozhi_panel_node_number` host variables, independent of VIP
-election or IP changes. Both left cells are reserved for status; ASR/LLM/VLM/TTS
-activity is not implemented yet. Existing Wi-Fi, private-LAN and USB indicators
+election or IP changes. The lowercase `t` uses segments 0x78 and marks an established local MQTT-to-core
+transport session. An idle persistent MQTT connection does not light it. If a
+node also owns the VIP, `tP` preserves the ownership marker while that session
+is open; goodbye, backend close or disconnect clears `t`. ASR/LLM/VLM/TTS
+provider activity is not implemented yet. Existing Wi-Fi, private-LAN and USB indicators
 are preserved.
 
 Panel deployment is opt-in through `panel.yml`; `site.yml` does not import it.
@@ -525,8 +528,14 @@ two-second address-query timeout). `iP` means the management interface actually
 holds the VIP recorded in the applied ingress snapshot, normally
 `/etc/xiaozhi-ingress.json`; it does not mean this node has permanent master
 status or that backend health has been verified. Missing/invalid snapshots or a
-failed local address query show `-- NN`. It reads no Cloud credentials, makes no
-HTTP/NATS requests and never changes network addresses or Keepalived state.
+failed local address query show `-- NN`. It reads no Cloud credentials, makes no NATS requests and never changes network
+addresses or Keepalived state. It also reads `/status` from its own gateway at
+its local private IPv4/health port, with a 0.3-second socket timeout and bounded
+JSON. Proxies and redirects are not used. A matching `gateway_id`, ready status
+and positive integer `active_websocket_sessions` light `t`. Missing/unreachable
+gateway status clears the session indicator without disrupting VIP display.
+Existing configs without gateway fields still work with VIP-only display.
+Polling is about once per second; very short sessions can fall between polls.
 No VIP address is pinned in the panel role. This indicator follows local
 ownership after failover; it does not implement dynamic VIP migration.
 
@@ -537,7 +546,8 @@ ansible-playbook -i inventory.ini panel.yml
 ```
 
 Check mode reads existing driver/unit metadata and local address lists and renders
-the public candidate; it writes no files/GPIO and changes no services. Apply
+the public candidate; it writes no files/GPIO and changes no services. It does not
+query the gateway in check mode. Apply
 restarts the normal panel service only when its script/config/drop-ins change.
 It enables the early unit for future boots without restarting that unit during
 apply. Neither ingress services nor node power are changed. A panel-only rollout
@@ -555,3 +565,160 @@ To restore the image clock, remove only the two `10-xiaozhi-node.conf` drop-ins
 installed by this role, run `systemctl daemon-reload`, then restart
 `deskbox-front-panel.service`. Do not run the image clock manually alongside the
 node panel. `site.yml` continues to leave this opt-in choice alone.
+
+## Symmetric MQTT gateways and session indicator
+
+All three nodes run the same gateway; none is a permanent MQTT master. Deployment
+is opt-in through `mqtt-gateway.yml`, which preflights all three nodes before its
+serial rollout. `site.yml` does not import it. The gateway is the existing Xiaozhi
+MQTT/UDP transport bridge, not a general persistent broker or NATS worker.
+
+```text
+Robot MQTT TCP -> Cloud-owned VIP:1883 -> HAProxy: remote gateways first
+                                         | -> deskb1x gateway
+                                         | -> deskb2x gateway
+                                         ` -> deskb3x gateway
+Selected gateway hello -> its own management IP:1883 for encrypted UDP
+Gateway -> existing conversation core WebSocket
+```
+
+Gateway MQTT binds to each private `10.10.10.11/12/13:1883`; health/status binds to
+that same private address on 8007. UDP binds to the corresponding primary
+management `192.168.1.101/102/103:1883`, and `PUBLIC_IP` advertises that gateway's
+own address. MQTT TCP and its UDP session therefore reach the same process.
+The node holding the VIP can differ from the gateway handling the robot.
+
+A usable **normal conversation core** must already exist. The standalone control
+plane on 8004 serves Settings only; it is not a WebSocket conversation backend,
+robot bootstrap or camera/VLM endpoint. Configure the actual existing core WS/WSS
+URL including its path, without credentials, queries or fragments. The gateway
+adds its existing sole `?from=mqtt_gateway` marker. A localhost backend is valid
+only if that core actually runs on each gateway node. Apply checks backend TCP
+reachability before installation; it does not prove authentication or providers.
+
+Copy [examples/mqtt-gateway.vars.yml](examples/mqtt-gateway.vars.yml) outside the
+checkout and fill the core backend URL list. The reviewed gateway source is pinned
+to `a7c68269c9122021362a8496778788244621c339`, which provides explicit
+MQTT/UDP/HTTP listener binding and `listener_ports` status metadata. The empty
+backend default rejects an unconfigured apply before host changes. Future source
+updates require a reviewed/pushed full 40-character SHA. All three nodes must use
+the same source/runtime/backend/port settings.
+
+The role installs the official ARM64 Node.js 24.21.0 runtime in a private versioned
+directory with its [published SHA-256](https://nodejs.org/en/blog/release/v24.21.0).
+It leaves global Node installations alone. Dependencies come from the committed
+lockfile via `npm ci --omit=dev --ignore-scripts --no-audit --no-fund`; current pure
+JavaScript dependencies require no lifecycle build scripts. Systemd runs a
+root-owned release as a dedicated unprivileged user, with SIGTERM drain and
+bounded stop time. Unchanged source, dependency stamp, config, environment and
+unit do not restart the gateway. Changes may interrupt sessions; this role does
+not implement automatic rollback or session replication.
+
+Provision the **existing core keys** through encrypted `vars/vault.yml` using the
+operator's normal Vault workflow; do not generate unrelated gateway keys:
+
+| Encrypted variable | Gateway environment | Must match |
+| --- | --- | --- |
+| `vault_mqtt_signature_key` | `MQTT_SIGNATURE_KEY` | Core `server.mqtt_signature_key` |
+| `vault_mqtt_server_secret` | `SERVER_SECRET` | Core `server.auth_key` |
+
+Secrets are written to `/etc/xiaozhi-mqtt-gateway.env` as root:root 0600 and never
+diffed or printed. Secure MQTT authentication remains enabled. No secret belongs
+in the public variables file. MQTT is plain TCP on the trusted LAN; do not expose
+it through WAN port forwarding.
+
+`mqtt-ingress.yml` separately adds a TCP frontend on the current frozen Cloud VIP,
+using `/etc/haproxy/xiaozhi-mqtt.cfg` and a systemd drop-in that loads both the
+existing Settings configuration and the new MQTT fragment. Ordinary ingress and
+full-site reruns keep loading the fragment. Ansible still does not own the VIP.
+All three local gateway statuses must be ready with matching identity/listener
+ports before any HAProxy change. Every serial node rechecks Cloud revision/VIP
+and all gateway statuses before mutation. The fragment is validated together
+with the existing base configuration. Initial activation restarts HAProxy to
+change its startup arguments and can briefly interrupt Settings access; later
+fragment-only changes reload it. Unchanged files cause no reload/restart.
+
+Each HAProxy marks its **own local gateway as `backup`** and gives the two remote
+gateways equal round-robin weights. Only the node owning the floating VIP receives
+new frontend connections, so this keeps new MQTT sessions off the Settings VIP
+owner while either remote gateway is healthy. For example, when deskb1x holds the
+VIP, deskb2x/deskb3x receive new sessions; deskb1x is used only if both remote
+gateways are unavailable. When VIP moves to deskb2x, its existing configuration
+already prefers deskb1x/deskb3x. No leader is pinned and no ownership watcher,
+NATS event or config rewrite is needed on failover.
+
+This uses HAProxy's [backup server semantics](https://docs.haproxy.org/2.6/configuration.html#5.2-backup)
+and `/readyz` checks on private port 8007. Busy-load thresholds are not implemented:
+a gateway with a session remains eligible while ready. Existing sessions are not
+moved to enforce separation; this policy applies to **new TCP connections**, and
+a fallback session stays on the VIP owner's gateway until it ends or reconnects.
+A persistent MQTT connection stays on its chosen
+gateway across multiple turns. Each hello opens a transport session, and the
+panel shows `t- NN` or `tP NN` while that local backend bridge is established;
+it returns to `-- NN` or `iP NN` when the session ends. This is transport state,
+not ASR/LLM/VLM/TTS compute activity. One robot does not use all three gateways
+simultaneously. `t` is not a promise that a provider is responding successfully.
+
+Existing Keepalived election/health policy is unchanged: Settings availability
+continues to govern VIP ownership, and gateway readiness governs TCP backend
+selection. A gateway failure does not need to move the VIP; subsequent MQTT
+connections can use another healthy gateway. Node/VIP failure interrupts TCP,
+then firmware reconnects and establishes a fresh hello/UDP key/session. Existing
+sessions are not migrated, and core-server HA is not provided here. Firmware's
+MQTT reconnect timing remains unchanged: its current disconnect timer is 60
+seconds and attempts reconnect only when the application is idle. Actual recovery
+may take longer and must be measured on the robot; rapid automatic recovery is
+not yet proven. All gateways down means MQTT unavailable while Settings can remain
+available.
+
+After source review/push and encrypted provisioning, run these **separate** steps:
+
+```sh
+ansible-playbook -i inventory.ini mqtt-gateway.yml --syntax-check --ask-vault-pass
+ansible-playbook -i inventory.ini mqtt-gateway.yml --check --diff --ask-vault-pass -e @/path/to/mqtt-gateway.vars.yml
+ansible-playbook -i inventory.ini mqtt-gateway.yml --ask-vault-pass -e @/path/to/mqtt-gateway.vars.yml
+ansible-playbook -i inventory.ini mqtt-ingress.yml --check --diff
+ansible-playbook -i inventory.ini mqtt-ingress.yml
+ansible-playbook -i inventory.ini panel.yml --check --diff
+ansible-playbook -i inventory.ini panel.yml
+```
+
+Check mode only validates inputs, reads existing local metadata/status and renders
+candidates in memory. It installs/downloads nothing, writes no host files and
+changes no services. MQTT ingress check mode requires the gateways/base ingress
+to already be installed; it cannot simulate their network readiness. Apply
+verifies local gateway status and all three HAProxy MQTT backend pools plus
+retained Settings/VIP/Cloud invariants. These prove deployment readiness, not a
+working robot turn. No Cloud body or bootstrap setting is automatically edited.
+
+Operator acceptance:
+
+1. Through the existing core configuration workflow, set `server.mqtt_gateway` to
+   the **current Cloud VIP plus `:1883`** (initially `192.168.1.186:1883`). Keep the
+   real core HTTP/bootstrap URL and `/mcp/vision/explain`; Settings does not serve
+   those routes. Ensure the matching signing/auth keys are provisioned.
+2. Have the robot fetch bootstrap. Verify MQTT + hello, UDP audio both ways and
+   one full ASR/LLM/TTS turn. The selected gateway panel should show `t-`/`tP`
+   while the session is open, then clear `t` when it closes.
+3. Confirm abort/reconnect, device MCP `tools/list` and a real `tools/call`, plus
+   camera capture/explain through the **core Vision HTTP** path. MQTT does not
+   proxy that HTTP image upload.
+4. On deliberate new TCP connections, verify only the two gateways other than
+   the current VIP owner receive sessions while either is healthy. With both
+   remote gateways unavailable, verify the owner's local backup accepts a new
+   session. After VIP changes owner, verify new connections prefer its two peers.
+   Restore remote gateways and check new connections use them again; established
+   fallback sessions may remain local. Separately stop/unplug the active gateway or VIP owner and verify reconnect,
+   fresh hello/UDP session and another complete turn. Record recovery time; code
+   inspection cannot prove timing or physical failover behavior.
+
+No firmware build/flash is required solely for these deployment settings. Accept
+this transport baseline before remote provider execution. Runtime/core endpoints
+and encrypted keys must be supplied before live deployment; no deskbox mutation
+is implied by preparing this code. Offline logic fixtures open no sockets:
+
+```sh
+python3 -m unittest discover -s roles/xiaozhi_mqtt_gateway/tests -v
+python3 -m unittest discover -s roles/xiaozhi_mqtt_ingress/tests -v
+python3 -m unittest discover -s roles/xiaozhi_panel/tests -v
+```

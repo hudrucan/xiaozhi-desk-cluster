@@ -1,0 +1,218 @@
+---
+- name: Validate the gateway deployment before any mutation
+  ansible.builtin.include_tasks: preflight.yml
+
+- name: Render candidates only during check mode
+  when: ansible_check_mode
+  block:
+    - name: Evaluate public JSON and systemd templates
+      ansible.builtin.set_fact:
+        xiaozhi_mqtt_gateway_config_candidate: "{{ lookup('ansible.builtin.template', 'mqtt.json.j2') }}"
+        xiaozhi_mqtt_gateway_unit_candidate: "{{ lookup('ansible.builtin.template', 'gateway.service.j2') }}"
+
+    - name: Evaluate the private environment without displaying it
+      ansible.builtin.set_fact:
+        xiaozhi_mqtt_gateway_env_candidate: "{{ lookup('ansible.builtin.template', 'gateway.env.j2') }}"
+      no_log: true
+
+    - name: Report the gateway deployment preview
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }} would run the pinned MQTT gateway with Node {{ xiaozhi_mqtt_gateway_node_version }}; MQTT/health use its private IPv4 and UDP advertises its management IPv4. No files, packages, downloads or services change in check mode. No backend handshake or robot test is performed."
+
+- name: Deploy the pinned MQTT gateway only during apply
+  when: not ansible_check_mode
+  block:
+    - name: Require TCP reachability of configured core endpoints before installation
+      ansible.builtin.wait_for:
+        host: "{{ item.host }}"
+        port: "{{ item.port }}"
+        state: started
+        connect_timeout: 2
+        timeout: 5
+      loop: "{{ xiaozhi_mqtt_gateway_backend_targets }}"
+
+    - name: Install only binary runtime and source deployment prerequisites
+      ansible.builtin.apt:
+        name: [git, ca-certificates, xz-utils]
+        state: present
+        install_recommends: false
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Create the gateway system group
+      ansible.builtin.group:
+        name: "{{ xiaozhi_mqtt_gateway_service_user }}"
+        system: true
+
+    - name: Create the unprivileged gateway user
+      ansible.builtin.user:
+        name: "{{ xiaozhi_mqtt_gateway_service_user }}"
+        group: "{{ xiaozhi_mqtt_gateway_service_user }}"
+        system: true
+        shell: /usr/sbin/nologin
+        home: /nonexistent
+        create_home: false
+
+    - name: Create root-owned runtime, releases and cache directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+      loop:
+        - "{{ xiaozhi_mqtt_gateway_root }}"
+        - "{{ xiaozhi_mqtt_gateway_root }}/releases"
+        - "{{ xiaozhi_mqtt_gateway_node_dir }}"
+        - "{{ xiaozhi_mqtt_gateway_cache_dir }}"
+
+    - name: Download the checksum-pinned official ARM64 Node runtime
+      ansible.builtin.get_url:
+        url: "https://nodejs.org/dist/v{{ xiaozhi_mqtt_gateway_node_version }}/node-v{{ xiaozhi_mqtt_gateway_node_version }}-linux-arm64.tar.xz"
+        dest: "{{ xiaozhi_mqtt_gateway_cache_dir }}/node-v{{ xiaozhi_mqtt_gateway_node_version }}-linux-arm64.tar.xz"
+        checksum: "sha256:{{ xiaozhi_mqtt_gateway_node_sha256 }}"
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Extract the pinned runtime without changing global Node installations
+      ansible.builtin.unarchive:
+        src: "{{ xiaozhi_mqtt_gateway_cache_dir }}/node-v{{ xiaozhi_mqtt_gateway_node_version }}-linux-arm64.tar.xz"
+        dest: "{{ xiaozhi_mqtt_gateway_node_dir }}"
+        remote_src: true
+        extra_opts: [--strip-components=1]
+        creates: "{{ xiaozhi_mqtt_gateway_node_dir }}/bin/node"
+        owner: root
+        group: root
+
+    - name: Read the installed Node version
+      ansible.builtin.command:
+        argv: ["{{ xiaozhi_mqtt_gateway_node_dir }}/bin/node", --version]
+      register: xiaozhi_mqtt_gateway_node_version_actual
+      changed_when: false
+
+    - name: Require the exact pinned Node runtime
+      ansible.builtin.assert:
+        that: xiaozhi_mqtt_gateway_node_version_actual.stdout | trim == 'v' ~ xiaozhi_mqtt_gateway_node_version
+
+    - name: Check out immutable gateway source into its own release directory
+      ansible.builtin.git:
+        repo: "{{ xiaozhi_mqtt_gateway_repo_url }}"
+        dest: "{{ xiaozhi_mqtt_gateway_repo_dir }}"
+        version: "{{ xiaozhi_mqtt_gateway_revision }}"
+        force: false
+        recursive: false
+        umask: '0022'
+      environment:
+        GIT_TERMINAL_PROMPT: '0'
+      register: xiaozhi_mqtt_gateway_source
+
+    - name: Require explicit listener binding and a consistent committed dependency lock
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/python3
+          - -c
+          - |
+            import json
+            from pathlib import Path
+            root = Path('.')
+            source = (root / 'src/gateway.js').read_text()
+            package = json.loads((root / 'package.json').read_text())
+            lock = json.loads((root / 'package-lock.json').read_text())
+            assert all(name in source for name in ('MQTT_HOST', 'UDP_HOST', 'HTTP_HOST', 'this.settings.udpHost', 'this.settings[`${kind}Host`]', 'listener_ports:'))
+            assert lock['packages']['']['dependencies'] == package['dependencies']
+            assert lock['packages']['']['engines'] == package['engines']
+            assert package['dependencies'] and not package.get('devDependencies')
+        chdir: "{{ xiaozhi_mqtt_gateway_repo_dir }}"
+      changed_when: false
+
+    - name: Read the committed lock checksum
+      ansible.builtin.stat:
+        path: "{{ xiaozhi_mqtt_gateway_repo_dir }}/package-lock.json"
+        checksum_algorithm: sha256
+      register: xiaozhi_mqtt_gateway_lock
+
+    - name: Determine the dependency installation stamp
+      ansible.builtin.set_fact:
+        xiaozhi_mqtt_gateway_expected_stamp: "{{ xiaozhi_mqtt_gateway_revision }}:{{ xiaozhi_mqtt_gateway_node_version }}:{{ xiaozhi_mqtt_gateway_lock.stat.checksum }}"
+        xiaozhi_mqtt_gateway_installed_stamp: ""
+
+    - name: Check the previous dependency installation stamp
+      ansible.builtin.stat:
+        path: "{{ xiaozhi_mqtt_gateway_root }}/dependencies-{{ xiaozhi_mqtt_gateway_revision }}"
+      register: xiaozhi_mqtt_gateway_stamp_file
+
+    - name: Read the previous dependency installation stamp
+      ansible.builtin.slurp:
+        src: "{{ xiaozhi_mqtt_gateway_root }}/dependencies-{{ xiaozhi_mqtt_gateway_revision }}"
+      register: xiaozhi_mqtt_gateway_previous_stamp
+      when: xiaozhi_mqtt_gateway_stamp_file.stat.exists
+
+    - name: Retain the previous dependency installation stamp
+      ansible.builtin.set_fact:
+        xiaozhi_mqtt_gateway_installed_stamp: "{{ xiaozhi_mqtt_gateway_previous_stamp.content | b64decode | trim }}"
+      when: xiaozhi_mqtt_gateway_stamp_file.stat.exists
+
+    - name: Check the installed dependency directory
+      ansible.builtin.stat:
+        path: "{{ xiaozhi_mqtt_gateway_repo_dir }}/node_modules"
+      register: xiaozhi_mqtt_gateway_modules
+
+    - name: Install exactly the locked production dependencies when needed
+      ansible.builtin.command:
+        argv: ["{{ xiaozhi_mqtt_gateway_node_dir }}/bin/npm", ci, --omit=dev, --ignore-scripts, --no-audit, --no-fund]
+        chdir: "{{ xiaozhi_mqtt_gateway_repo_dir }}"
+      environment:
+        PATH: "{{ xiaozhi_mqtt_gateway_node_dir }}/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+        npm_config_cache: "{{ xiaozhi_mqtt_gateway_cache_dir }}/npm"
+      when: xiaozhi_mqtt_gateway_installed_stamp != xiaozhi_mqtt_gateway_expected_stamp or not (xiaozhi_mqtt_gateway_modules.stat.isdir | default(false))
+      changed_when: true
+      register: xiaozhi_mqtt_gateway_dependencies
+
+    - name: Record the successful dependency installation
+      ansible.builtin.copy:
+        content: "{{ xiaozhi_mqtt_gateway_expected_stamp }}\n"
+        dest: "{{ xiaozhi_mqtt_gateway_root }}/dependencies-{{ xiaozhi_mqtt_gateway_revision }}"
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Render the validated core backend configuration
+      ansible.builtin.template:
+        src: mqtt.json.j2
+        dest: "{{ xiaozhi_mqtt_gateway_repo_dir }}/config/mqtt.json"
+        owner: root
+        group: root
+        mode: '0644'
+        validate: /usr/bin/python3 -m json.tool %s
+      register: xiaozhi_mqtt_gateway_config
+
+    - name: Render core-matching secrets and explicit listener addresses
+      ansible.builtin.template:
+        src: gateway.env.j2
+        dest: /etc/xiaozhi-mqtt-gateway.env
+        owner: root
+        group: root
+        mode: '0600'
+      no_log: true
+      diff: false
+      register: xiaozhi_mqtt_gateway_env
+
+    - name: Install the standalone gateway systemd unit
+      ansible.builtin.template:
+        src: gateway.service.j2
+        dest: /etc/systemd/system/xiaozhi-mqtt-gateway.service
+        owner: root
+        group: root
+        mode: '0644'
+      register: xiaozhi_mqtt_gateway_unit
+
+    - name: Enable and start or restart the gateway after candidate validation
+      ansible.builtin.systemd_service:
+        name: xiaozhi-mqtt-gateway
+        enabled: true
+        daemon_reload: "{{ xiaozhi_mqtt_gateway_unit.changed }}"
+        state: "{{ 'restarted' if xiaozhi_mqtt_gateway_source.changed or xiaozhi_mqtt_gateway_dependencies.changed or xiaozhi_mqtt_gateway_config.changed or xiaozhi_mqtt_gateway_env.changed or xiaozhi_mqtt_gateway_unit.changed else 'started' }}"
+
+    - name: Verify only local service and listener readiness
+      ansible.builtin.include_tasks: verify.yml

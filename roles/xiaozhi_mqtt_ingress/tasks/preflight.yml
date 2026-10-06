@@ -1,0 +1,59 @@
+---
+- name: Require complete gateway and ingress membership
+  ansible.builtin.assert:
+    that:
+      - groups.get('xiaozhi_mqtt_gateways', []) | sort == ['deskb1x', 'deskb2x', 'deskb3x']
+      - groups['xiaozhi_mqtt_gateways'] | sort == groups['xiaozhi_ingress'] | sort
+      - ansible_play_hosts_all | sort == groups['xiaozhi_ingress'] | sort
+      - xiaozhi_ingress_vip is defined
+      - xiaozhi_mqtt_ingress_port is integer
+      - xiaozhi_mqtt_ingress_port > 0 and xiaozhi_mqtt_ingress_port <= 65535
+      - xiaozhi_mqtt_ingress_port != xiaozhi_ingress_port
+      - xiaozhi_mqtt_ingress_idle_timeout is integer
+      - xiaozhi_mqtt_ingress_idle_timeout >= 600 and xiaozhi_mqtt_ingress_idle_timeout <= 86400
+      - xiaozhi_mqtt_ingress_verify_retries is integer
+      - xiaozhi_mqtt_ingress_verify_retries > 0 and xiaozhi_mqtt_ingress_verify_retries <= 30
+      - xiaozhi_mqtt_ingress_verify_delay is integer
+      - xiaozhi_mqtt_ingress_verify_delay >= 0 and xiaozhi_mqtt_ingress_verify_delay <= 10
+
+- name: Read public gateway defaults without deploying gateways
+  ansible.builtin.include_vars:
+    file: "{{ role_path }}/../xiaozhi_mqtt_gateway/defaults/main.yml"
+    name: xiaozhi_mqtt_ingress_gateway_defaults
+
+- name: Require the existing base HAProxy configuration
+  ansible.builtin.stat:
+    path: /etc/haproxy/haproxy.cfg
+  register: xiaozhi_mqtt_ingress_base
+
+- name: Require ingress already deployed
+  ansible.builtin.assert:
+    that: xiaozhi_mqtt_ingress_base.stat.isreg | default(false)
+    fail_msg: Deploy the existing Settings ingress before adding MQTT routing.
+
+- name: Read this node's gateway readiness without opening device sessions
+  ansible.builtin.uri:
+    url: "http://{{ cluster_ip }}:{{ xiaozhi_mqtt_gateway_http_port | default(xiaozhi_mqtt_ingress_gateway_defaults.xiaozhi_mqtt_gateway_http_port) }}/status"
+    use_proxy: false
+    status_code: 200
+    return_content: true
+    timeout: 3
+  register: xiaozhi_mqtt_ingress_ready
+  changed_when: false
+  check_mode: false
+
+- name: Require the correct local gateway before any HAProxy changes
+  ansible.builtin.assert:
+    that:
+      - xiaozhi_mqtt_ingress_ready.json.status == 'ready'
+      - xiaozhi_mqtt_ingress_ready.json.gateway_id == inventory_hostname
+      - xiaozhi_mqtt_ingress_ready.json.listener_ports.mqtt == (xiaozhi_mqtt_gateway_mqtt_port | default(xiaozhi_mqtt_ingress_gateway_defaults.xiaozhi_mqtt_gateway_mqtt_port))
+      - xiaozhi_mqtt_ingress_ready.json.listener_ports.http == (xiaozhi_mqtt_gateway_http_port | default(xiaozhi_mqtt_ingress_gateway_defaults.xiaozhi_mqtt_gateway_http_port))
+
+- name: Freeze shared MQTT listener settings
+  ansible.builtin.set_fact:
+    xiaozhi_mqtt_ingress_listener_settings:
+      vip_port: "{{ xiaozhi_mqtt_ingress_port }}"
+      gateway_port: "{{ xiaozhi_mqtt_gateway_mqtt_port | default(xiaozhi_mqtt_ingress_gateway_defaults.xiaozhi_mqtt_gateway_mqtt_port) }}"
+      health_port: "{{ xiaozhi_mqtt_gateway_http_port | default(xiaozhi_mqtt_ingress_gateway_defaults.xiaozhi_mqtt_gateway_http_port) }}"
+      idle_timeout: "{{ xiaozhi_mqtt_ingress_idle_timeout }}"

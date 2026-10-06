@@ -135,6 +135,76 @@ class PanelFixtures(unittest.TestCase):
         self.assertEqual(frames[6], (0x6A, 0x40))
         self.assertEqual(stop.wait.call_count, 3)
 
+    def test_mqtt_and_vip_status_are_independent(self):
+        self.assertEqual(panel.display_text(2, False, True), "t-02")
+        self.assertEqual(panel.display_text(2, True, True), "tP02")
+        self.assertEqual(panel.segments_for("tP02", self.driver()), (0x78, 0x73, 0x3F, 0x5B))
+
+    def mqtt_config(self):
+        return {**self.config, "mqtt_status_host": "10.10.10.11",
+                "mqtt_status_port": 8007, "gateway_id": "deskb1x"}
+
+    def mqtt_response(self, payload, status=200):
+        client = Mock()
+        client.getresponse.return_value.status = status
+        client.getresponse.return_value.read.return_value = payload
+        return client
+
+    def test_active_backend_session_not_idle_mqtt_connection(self):
+        for count, expected in ((0, False), (1, True), (2, True), (True, False), (-1, False), ("1", False)):
+            data = json.dumps({"gateway_id": "deskb1x", "status": "ready",
+                               "active_mqtt_connections": 1,
+                               "active_websocket_sessions": count}).encode()
+            client = self.mqtt_response(data)
+            with patch.object(panel, "HTTPConnection", return_value=client) as connection:
+                self.assertEqual(panel.mqtt_turn_active(self.mqtt_config()), expected)
+                connection.assert_called_once_with("10.10.10.11", 8007, timeout=0.3)
+                client.request.assert_called_once_with("GET", "/status")
+                client.close.assert_called_once()
+
+    def test_bad_or_unavailable_status_does_not_claim_mqtt(self):
+        payloads = (b'{', b'[]', b'{}', b'x' * (panel.MAX_JSON_BYTES + 1),
+                    b'{"gateway_id":"deskb2x","status":"ready","active_websocket_sessions":1}',
+                    b'{"gateway_id":"deskb1x","status":"stopping","active_websocket_sessions":1}')
+        for payload in payloads:
+            with patch.object(panel, "HTTPConnection", return_value=self.mqtt_response(payload)):
+                self.assertFalse(panel.mqtt_turn_active(self.mqtt_config()))
+        with patch.object(panel, "HTTPConnection", return_value=self.mqtt_response(b'{}', 302)):
+            self.assertFalse(panel.mqtt_turn_active(self.mqtt_config()))
+        with patch.object(panel, "HTTPConnection", side_effect=TimeoutError):
+            self.assertFalse(panel.mqtt_turn_active(self.mqtt_config()))
+        with patch.object(panel, "HTTPConnection") as connection:
+            self.assertFalse(panel.mqtt_turn_active(self.config))
+            connection.assert_not_called()
+
+    def test_mqtt_turn_start_end_updates_panel(self):
+        driver = self.driver()
+        stop = Mock()
+        stop.is_set.side_effect = [False, False, False, True]
+        with patch.object(panel.signal, "signal"), patch.object(panel.threading, "Event", return_value=stop), \
+                patch.object(panel, "local_vip_owner", return_value=True), \
+                patch.object(panel, "mqtt_turn_active", side_effect=[False, True, False]):
+            panel.run(self.config, driver)
+        frames = driver.write_register.call_args_list
+        self.assertEqual(frames[0].args, (0x68, 0x04))
+        self.assertEqual(frames[5].args, (0x68, 0x78))
+        self.assertEqual(frames[9].args, (0x68, 0x04))
+        self.assertEqual(stop.wait.call_count, 3)
+
+    def test_placeholder_never_queries_gateway(self):
+        with patch.object(panel.signal, "signal"), patch.object(panel, "mqtt_turn_active") as query:
+            panel.run(self.mqtt_config(), self.driver(), placeholder=True)
+        query.assert_not_called()
+
+    def test_invalid_gateway_config_rejected(self):
+        path = Path(self.directory.name) / "panel.json"
+        for changes in ({"mqtt_status_host": "bad"}, {"mqtt_status_host": "0.0.0.0"},
+                        {"mqtt_status_host": 167774731}, {"mqtt_status_port": True},
+                        {"mqtt_status_port": 80}, {"gateway_id": "../node"}):
+            path.write_text(json.dumps({**self.mqtt_config(), **changes}))
+            with self.assertRaises(ValueError):
+                panel.load_config(path)
+
 
 if __name__ == "__main__":
     unittest.main()

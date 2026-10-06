@@ -1,0 +1,9 @@
+---
+# Copy this public example outside the checkout and fill it before deployment.
+# Pin the reviewed/pushed gateway commit with MQTT_HOST/UDP_HOST/HTTP_HOST.
+xiaozhi_mqtt_gateway_revision: a7c68269c9122021362a8496778788244621c339
+xiaozhi_mqtt_gateway_chat_servers:
+  - ws://REPLACE_WITH_EXISTING_CORE_HOST:8000/xiaozhi/v1/
+# Secret values belong only in encrypted vars/vault.yml:
+# vault_mqtt_signature_key must match core server.mqtt_signature_key.
+# vault_mqtt_server_secret must match core server.auth_key.

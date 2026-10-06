@@ -1,0 +1,18 @@
+---
+xiaozhi_mqtt_gateway_repo_url: https://github.com/hudrucan/xiaozhi-desk-mqtt-gateway.git
+# Reviewed gateway release with explicit listener binding and status ports.
+xiaozhi_mqtt_gateway_revision: a7c68269c9122021362a8496778788244621c339
+xiaozhi_mqtt_gateway_chat_servers: []
+xiaozhi_mqtt_gateway_root: /opt/xiaozhi-mqtt-gateway
+xiaozhi_mqtt_gateway_repo_dir: "{{ xiaozhi_mqtt_gateway_root }}/releases/{{ xiaozhi_mqtt_gateway_revision }}"
+xiaozhi_mqtt_gateway_service_user: xiaozhi-mqtt-gateway
+xiaozhi_mqtt_gateway_node_version: "24.21.0"
+# Official release SHASUMS: https://nodejs.org/en/blog/release/v24.21.0
+xiaozhi_mqtt_gateway_node_sha256: 6ad1325edbdb5649c379b75a237147a666c95d4f9ae8d340fef2d1575d289ad2
+xiaozhi_mqtt_gateway_node_dir: "{{ xiaozhi_mqtt_gateway_root }}/node-v{{ xiaozhi_mqtt_gateway_node_version }}"
+xiaozhi_mqtt_gateway_cache_dir: /var/cache/xiaozhi-mqtt-gateway
+xiaozhi_mqtt_gateway_mqtt_port: 1883
+xiaozhi_mqtt_gateway_udp_port: 1883
+xiaozhi_mqtt_gateway_http_port: 8007
+xiaozhi_mqtt_gateway_verify_retries: 10
+xiaozhi_mqtt_gateway_verify_delay: 2
