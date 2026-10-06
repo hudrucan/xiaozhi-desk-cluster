@@ -46,6 +46,17 @@
         name: xiaozhi_ingress
         tasks_from: verify_snapshot
 
+    - name: Inspect the previous MQTT fragment before the disconnect-policy upgrade
+      ansible.builtin.stat:
+        path: "{{ xiaozhi_mqtt_ingress_fragment }}"
+      register: xiaozhi_mqtt_ingress_previous_file
+
+    - name: Read the previous public MQTT disconnect policy
+      ansible.builtin.slurp:
+        src: "{{ xiaozhi_mqtt_ingress_fragment }}"
+      register: xiaozhi_mqtt_ingress_previous_config
+      when: xiaozhi_mqtt_ingress_previous_file.stat.exists
+
     - name: Validate the new fragment together with the existing Settings configuration
       ansible.builtin.template:
         src: mqtt.cfg.j2
@@ -77,7 +88,14 @@
       ansible.builtin.systemd_service:
         name: haproxy
         daemon_reload: "{{ xiaozhi_mqtt_ingress_unit.changed }}"
-        state: "{{ 'restarted' if xiaozhi_mqtt_ingress_unit.changed else 'reloaded' }}"
+        # Old workers keep their existing TCP sessions and old policy on reload.
+        # Restart once when introducing dead-backend session termination.
+        state: >-
+          {{ 'restarted' if xiaozhi_mqtt_ingress_unit.changed or
+             ((xiaozhi_mqtt_ingress_previous_config.content | default('') | b64decode |
+               regex_findall('(?m)^ *server +[^\n]* on-marked-down shutdown-sessions')) |
+              length != groups['xiaozhi_mqtt_gateways'] | length)
+             else 'reloaded' }}
       when: xiaozhi_mqtt_ingress_unit.changed or xiaozhi_mqtt_ingress_config.changed
 
     - name: Verify this HAProxy has all three MQTT backends UP

@@ -14,13 +14,18 @@ import re
 import signal
 import subprocess
 import threading
+import time
 from http.client import HTTPConnection, HTTPException
 
 
 CONFIG_PATH = "/etc/xiaozhi-node-panel.json"
 DRIVER_PATH = "/usr/libexec/deskbox-front-panel"
 MAX_JSON_BYTES = 65536
-GLYPHS = {"-": 0x40, "i": 0x04, "P": 0x73, "t": 0x78, "C": 0x39}
+GLYPHS = {"-": 0x40, "i": 0x04, "P": 0x73, "n": 0x54, "t": 0x78,
+          "C": 0x39, "o": 0x5C}
+ROLE_INTERVAL_SECONDS = 1.5
+STATUS_INTERVAL_SECONDS = 1.0
+FRAME_INTERVAL_SECONDS = 0.25
 LOGGER = logging.getLogger("xiaozhi-node-panel")
 
 
@@ -103,8 +108,8 @@ def local_vip_owner(config):
         return False
 
 
-def mqtt_turn_active(config):
-    """Poll only this node's gateway; a persistent idle MQTT socket is not a turn."""
+def mqtt_connection_active(config):
+    """Show the local owner of an authenticated MQTT connection, including idle."""
     if "mqtt_status_host" not in config:
         return False
     try:
@@ -119,7 +124,7 @@ def mqtt_turn_active(config):
         if len(data) > MAX_JSON_BYTES:
             return False
         status = json.loads(data)
-        count = status.get("active_websocket_sessions")
+        count = status.get("active_mqtt_connections")
         return (status.get("gateway_id") == config["gateway_id"]
                 and status.get("status") == "ready"
                 and type(count) is int and count > 0)
@@ -128,7 +133,7 @@ def mqtt_turn_active(config):
 
 
 def core_session_active(config):
-    """Show C only for an established session owned by this local core."""
+    """Show Co only for an established session owned by this local core."""
     if "core_status_host" not in config:
         return False
     try:
@@ -152,15 +157,14 @@ def core_session_active(config):
 
 
 def display_text(node_number, vip_owner, mqtt_active=False, core_active=False, phase=0):
-    # Combined transport roles fit in one frame; only three roles need rotation.
-    if mqtt_active and core_active:
-        status = "iP" if vip_owner and phase % 2 else "tC"
-    elif core_active:
-        status = "CP" if vip_owner else "C-"
-    elif mqtt_active:
-        status = "tP" if vip_owner else "t-"
-    else:
-        status = "iP" if vip_owner else "--"
+    roles = []
+    if mqtt_active:
+        roles.append("nt")
+    if core_active:
+        roles.append("Co")
+    if vip_owner:
+        roles.append("iP")
+    status = roles[phase % len(roles)] if roles else "--"
     return status + f"{node_number:02d}"
 
 
@@ -169,16 +173,32 @@ def segments_for(text, driver):
                  for value in text)
 
 
+def activity_icons(driver, *, asr_active=False, llm_active=False,
+                   vlm_active=False, tts_active=False, blink_on=True):
+    """Activity policy, independent of transport/VIP roles.
+
+    Worker telemetry is not wired yet: the live caller uses idle defaults.
+    A blink-off frame must not show Pause while a job is still running.
+    """
+    if not (asr_active or llm_active or vlm_active or tts_active):
+        return driver.ICON_PAUSE
+    icons = driver.ICON_CLOCK if asr_active else 0
+    if tts_active or ((llm_active or vlm_active) and blink_on):
+        icons |= driver.ICON_PLAY
+    return icons
+
+
 def connectivity_icons(config, driver):
-    icons = 0
+    # No worker activity source exists yet; every live node is compute-idle.
+    icons = activity_icons(driver)
     if driver.carrier(config["management_interface"]):
         icons |= driver.ICON_WIFI
     if driver.carrier(config["cluster_interface"]):
         icons |= driver.ICON_LAN
     if driver.external_usb_present():
         icons |= driver.ICON_USB
-    # Never enable the clock/colon bits, including when the clock is synchronized.
-    return icons & ~(driver.ICON_COLON | driver.ICON_CLOCK)
+    # Colon remains off; activity icons never depend on transport roles.
+    return icons & ~driver.ICON_COLON
 
 
 def load_driver():
@@ -188,7 +208,7 @@ def load_driver():
     loader.exec_module(driver)
     # Loading the existing module does not call its clock main() or initialize GPIO.
     for name in ("initialize", "write_register", "DIGIT_ADDRS", "DIGITS",
-                 "ICON_ADDR", "ICON_COLON", "ICON_CLOCK", "ICON_WIFI",
+                 "ICON_ADDR", "ICON_COLON", "ICON_CLOCK", "ICON_PLAY", "ICON_PAUSE", "ICON_WIFI",
                  "ICON_LAN", "ICON_USB", "carrier", "external_usb_present",
                  "LOCK_PATH", "GPIO_FDS"):
         if not hasattr(driver, name):
@@ -212,17 +232,32 @@ def run(config, driver, placeholder=False):
             previous_owner = None
             previous_mqtt = None
             previous_core = None
-            phase = 0
+            owner = mqtt_active = core_active = False
+            icons = 0
+            next_status_poll = 0.0
+            rotation_started = 0.0
+            previous_roles = None
             while not stopping.is_set():
-                owner = False if placeholder else local_vip_owner(config)
-                mqtt_active = False if placeholder else mqtt_turn_active(config)
-                core_active = False if placeholder else core_session_active(config)
-                segments = segments_for(display_text(config["node_number"], owner, mqtt_active, core_active, phase), driver)
-                phase += 1
-                icons = 0 if placeholder else connectivity_icons(config, driver)
+                now = time.monotonic()
+                if not placeholder and now >= next_status_poll:
+                    owner = local_vip_owner(config)
+                    mqtt_active = mqtt_connection_active(config)
+                    core_active = core_session_active(config)
+                    icons = connectivity_icons(config, driver)
+                    now = time.monotonic()
+                    next_status_poll = now + STATUS_INTERVAL_SECONDS
+                roles = (owner, mqtt_active, core_active)
+                if roles != previous_roles:
+                    # Restart the sequence when ownership/activity changes.
+                    rotation_started = now
+                    previous_roles = roles
+                phase = int((now - rotation_started) / ROLE_INTERVAL_SECONDS)
+                segments = segments_for(display_text(
+                    config["node_number"], owner, mqtt_active, core_active, phase), driver)
                 if segments != previous_segments:
-                    for address, value in zip(driver.DIGIT_ADDRS, segments):
-                        driver.write_register(address, value)
+                    for index, (address, value) in enumerate(zip(driver.DIGIT_ADDRS, segments)):
+                        if previous_segments is None or value != previous_segments[index]:
+                            driver.write_register(address, value)
                     previous_segments = segments
                 if icons != previous_icons:
                     driver.write_register(driver.ICON_ADDR, icons)
@@ -231,14 +266,14 @@ def run(config, driver, placeholder=False):
                     LOGGER.info("node=%02d local_vip_owner=%s", config["node_number"], owner)
                     previous_owner = owner
                 if mqtt_active != previous_mqtt and not placeholder:
-                    LOGGER.info("node=%02d mqtt_session_active=%s", config["node_number"], mqtt_active)
+                    LOGGER.info("node=%02d mqtt_connection_active=%s", config["node_number"], mqtt_active)
                     previous_mqtt = mqtt_active
                 if core_active != previous_core and not placeholder:
                     LOGGER.info("node=%02d core_session_active=%s", config["node_number"], core_active)
                     previous_core = core_active
                 if placeholder:
                     break
-                stopping.wait(1)
+                stopping.wait(FRAME_INTERVAL_SECONDS)
         finally:
             for descriptor in driver.GPIO_FDS.values():
                 os.close(descriptor)

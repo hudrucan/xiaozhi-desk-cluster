@@ -252,14 +252,14 @@ or provider/model initialization. The `control-plane` play follows NATS with
 `serial: 1` and `any_errors_fatal: true`; preflight requires all three group members
 to be selected, Debian ARM64 and the system Python 3.11 interpreter.
 
-| Path | Ownership / purpose |
-| --- | --- |
-| `/opt/xiaozhi-control-plane/repo` | Root-owned pinned checkout |
-| `/opt/xiaozhi-control-plane/venv` | Root-owned dedicated Python environment |
-| `/etc/xiaozhi-control-plane.env` | Root:root `0600`; systemd reads NATS credentials |
-| `/etc/xiaozhi-control-plane/drive-credentials.json` | Root:service-group `0640`, private directory `0750` |
-| `repo/main/xiaozhi-server/data/bootstrap.yaml` | Root:service-group `0640`; node identity and private Cloud authority |
-| `repo/main/xiaozhi-server/data/{cloud-config,node-secrets,cloud-soundbank}` | Service-owned `0700`; the only persistent service write paths |
+| Path                                                                        | Ownership / purpose                                                  |
+| --------------------------------------------------------------------------- | -------------------------------------------------------------------- |
+| `/opt/xiaozhi-control-plane/repo`                                           | Root-owned pinned checkout                                           |
+| `/opt/xiaozhi-control-plane/venv`                                           | Root-owned dedicated Python environment                              |
+| `/etc/xiaozhi-control-plane.env`                                            | Root:root `0600`; systemd reads NATS credentials                     |
+| `/etc/xiaozhi-control-plane/drive-credentials.json`                         | Root:service-group `0640`, private directory `0750`                  |
+| `repo/main/xiaozhi-server/data/bootstrap.yaml`                              | Root:service-group `0640`; node identity and private Cloud authority |
+| `repo/main/xiaozhi-server/data/{cloud-config,node-secrets,cloud-soundbank}` | Service-owned `0700`; the only persistent service write paths        |
 
 The source `data/` parent is root:service-group `0750`; the service cannot replace
 its managed bootstrap or write elsewhere in the checkout/venv. Runtime paths
@@ -390,8 +390,7 @@ starts suppressed. It owns `/etc/haproxy/haproxy.cfg`,
 `/etc/keepalived/keepalived.conf`, a root-owned Python standard-library readiness
 probe and a sysctl file enabling IPv4 nonlocal binding. This lets HAProxy bind
 only `VIP:80` on standby nodes as well as the owner. Port 80 is configurable via
-`xiaozhi_ingress_port`; backend port defaults to the existing control-plane port
-8004. Backends come from sorted inventory `cluster_ip` values: currently
+`xiaozhi_ingress_port`; backend port defaults to the existing control-plane port 8004. Backends come from sorted inventory `cluster_ip` values: currently
 `10.10.10.11:8004`, `10.10.10.12:8004`, `10.10.10.13:8004`. HTTP round-robin health
 checks require `/healthz` status 200. No public stats/admin listener is added;
 HAProxy stats are available only through a root-accessible Unix socket.
@@ -511,24 +510,42 @@ and [Linux nonlocal binding](https://kernel.org/doc/html/latest/networking/ip-sy
 ## Front panel: node identity and VIP ownership
 
 The four-digit FD6551 panel uses two status cells on the left and a stable
-two-digit node number on the right. The colon and clock icon stay off:
+two-digit node number on the right. The colon stays off:
 
-| Node | No session / no VIP | No session / VIP owner | MQTT session / no VIP | MQTT session / VIP owner |
-| --- | --- | --- | --- | --- |
-| deskb1x | `-- 01` | `iP 01` | `t- 01` | `tP 01` |
-| deskb2x | `-- 02` | `iP 02` | `t- 02` | `tP 02` |
-| deskb3x | `-- 03` | `iP 03` | `t- 03` | `tP 03` |
+| Local role | Status cells |
+| --- | --- |
+| Authenticated MQTT connection, including idle | `nt` |
+| Established core transport session | `Co` |
+| Actual local VIP ownership | `iP` |
+| No active roles | `--` |
+
+For example, node 2 with MQTT and core alternates `nt 02` and `Co 02`.
+When it also owns the VIP, the sequence is `nt 02` → `Co 02` → `iP 02`.
+Each active role occupies both status cells; the sequence repeats approximately
+every 1.5 seconds using a monotonic clock, without a blank flashing frame.
+A single role stays steady. The node digits are written only when their values
+change, so role rotation never rewrites them. State changes restart the role
+sequence; missing/unavailable metadata removes only the affected role.
 
 The lowercase `i` lights only the lower-right vertical segment, distinct
 from the two-segment digit `1`. The space represents the physical gap between
-the two digit pairs. Node numbers
-are explicit `xiaozhi_panel_node_number` host variables, independent of VIP
-election or IP changes. The lowercase `t` uses segments 0x78 and marks an established local MQTT-to-core
-transport session. An idle persistent MQTT connection does not light it. If a
-node also owns the VIP, `tP` preserves the ownership marker while that session
-is open; goodbye, backend close or disconnect clears `t`. ASR/LLM/VLM/TTS
-provider activity is not implemented yet. Existing Wi-Fi, private-LAN and USB indicators
-are preserved.
+the two digit pairs. Node numbers are explicit `xiaozhi_panel_node_number` host
+variables, independent of VIP election or IP changes. A goodbye/audio session
+close removes `Co` while `nt` remains until MQTT disconnect. Existing Wi-Fi,
+private-LAN and USB indicators are preserved.
+
+Activity icons are independent of the two transport/VIP role cells. Pause
+stays illuminated while no local provider task is running, including on nodes
+showing `nt`, `Co` or `iP`. The activity renderer selects Clock for local ASR,
+blinking Play for LLM/VLM and steady Play for TTS; it never shows Pause during a
+running job's dark blink phase. Concurrent ASR and other compute may light both
+Clock and Play. The colon remains off.
+
+Worker activity telemetry is not wired yet, so the live panel currently uses
+compute-idle defaults: Pause on, Clock/Play off. The planned LLM/VLM blink rate
+is 1 Hz when real worker telemetry is added. MQTT/core session counts must never
+enable provider activity. Clock does not imply deskbox microphone capture when
+recognition is running on the robot or another node.
 
 Panel deployment is opt-in through `panel.yml`; `site.yml` does not import it.
 It requires the existing Desk Box FD6551 image driver and both front-panel units.
@@ -539,19 +556,20 @@ or replacing the image driver. Systemd drop-ins replace the clock entrypoint;
 there is still only one continuous panel writer. The early-boot unit shows
 `-- NN`, with all icons off, until the normal service starts.
 
-The normal service checks local IPv4 addresses once per loop (one-second pause,
-two-second address-query timeout). `iP` means the management interface actually
+The normal service polls local status at most once per second after each completed
+sample (two-second address-query timeout). `iP` means the management interface actually
 holds the VIP recorded in the applied ingress snapshot, normally
 `/etc/xiaozhi-ingress.json`; it does not mean this node has permanent master
 status or that backend health has been verified. Missing/invalid snapshots or a
-failed local address query show `-- NN`. It reads no Cloud credentials, makes no NATS requests and never changes network
+failed local address query removes `iP`. It reads no Cloud credentials, makes no NATS requests and never changes network
 addresses or Keepalived state. It also reads `/status` from its own gateway at
 its local private IPv4/health port, with a 0.3-second socket timeout and bounded
 JSON. Proxies and redirects are not used. A matching `gateway_id`, ready status
-and positive integer `active_websocket_sessions` light `t`. Missing/unreachable
-gateway status clears the session indicator without disrupting VIP display.
+and positive integer `active_mqtt_connections` enable `nt`. Missing/unreachable
+gateway status removes the MQTT role without disrupting VIP display.
 Existing configs without gateway fields still work with VIP-only display.
-Polling is about once per second; very short sessions can fall between polls.
+Display frames check rotation every 0.25 seconds; bounded status I/O can delay
+a frame. Very short sessions can fall between status polls.
 No VIP address is pinned in the panel role. This indicator follows local
 ownership after failover; it does not implement dynamic VIP migration.
 
@@ -634,10 +652,10 @@ not implement automatic rollback or session replication.
 Provision the **existing core keys** through encrypted `vars/vault.yml` using the
 operator's normal Vault workflow; do not generate unrelated gateway keys:
 
-| Encrypted variable | Gateway environment | Must match |
-| --- | --- | --- |
+| Encrypted variable         | Gateway environment  | Must match                       |
+| -------------------------- | -------------------- | -------------------------------- |
 | `vault_mqtt_signature_key` | `MQTT_SIGNATURE_KEY` | Core `server.mqtt_signature_key` |
-| `vault_mqtt_server_secret` | `SERVER_SECRET` | Core `server.auth_key` |
+| `vault_mqtt_server_secret` | `SERVER_SECRET`      | Core `server.auth_key`           |
 
 Secrets are written to `/etc/xiaozhi-mqtt-gateway.env` as root:root 0600 and never
 diffed or printed. Secure MQTT authentication remains enabled. No secret belongs
@@ -653,7 +671,10 @@ ports before any HAProxy change. Every serial node rechecks Cloud revision/VIP
 and all gateway statuses before mutation. The fragment is validated together
 with the existing base configuration. Initial activation restarts HAProxy to
 change its startup arguments and can briefly interrupt Settings access; later
-fragment-only changes reload it. Unchanged files cause no reload/restart.
+fragment-only changes reload it. Introducing `on-marked-down shutdown-sessions`
+into an existing fragment also restarts HAProxy once: a reload would retain old
+MQTT sessions in workers still using the old policy. That upgrade interrupts MQTT
+connections and briefly Settings access. Unchanged files cause no reload/restart.
 
 Each HAProxy marks its **own local gateway as `backup`** and gives the two remote
 gateways equal round-robin weights. Only the node owning the floating VIP receives
@@ -670,23 +691,28 @@ a gateway with a session remains eligible while ready. Existing sessions are not
 moved to enforce separation; this policy applies to **new TCP connections**, and
 a fallback session stays on the VIP owner's gateway until it ends or reconnects.
 A persistent MQTT connection stays on its chosen
-gateway across multiple turns. Each hello opens a transport session, and the
-panel shows `t- NN` or `tP NN` while that local backend bridge is established;
-it returns to `-- NN` or `iP NN` when the session ends. This is transport state,
+gateway across multiple turns. The panel includes `nt NN` for the lifetime of
+that authenticated MQTT connection, including before wake/hello; other active
+roles alternate with it. Each hello separately opens a core transport session.
+Closing a turn removes `Co` while `nt` remains until MQTT disconnect. This is transport state,
 not ASR/LLM/VLM/TTS compute activity. One robot does not use all three gateways
-simultaneously. `t` is not a promise that a provider is responding successfully.
+simultaneously. `nt` is not a promise that a provider is responding successfully.
 
 Existing Keepalived election/health policy is unchanged: Settings availability
 continues to govern VIP ownership, and gateway readiness governs TCP backend
-selection. A gateway failure does not need to move the VIP; subsequent MQTT
-connections can use another healthy gateway. Node/VIP failure interrupts TCP,
+selection. A gateway failure does not need to move the VIP. MQTT backend servers
+use `on-marked-down shutdown-sessions`: when `/readyz` health checks mark a gateway
+DOWN, HAProxy closes its existing TCP sessions so clients can reconnect to another
+healthy gateway instead of waiting on a dead backend. Healthy gateway sessions are
+retained, including when a recovered remote gateway becomes UP. Node/VIP failure
+interrupts TCP,
 then firmware reconnects and establishes a fresh hello/UDP key/session. Existing
-sessions are not migrated, and core-server HA is not provided here. Firmware's
-MQTT reconnect timing remains unchanged: its current disconnect timer is 60
-seconds and attempts reconnect only when the application is idle. Actual recovery
-may take longer and must be measured on the robot; rapid automatic recovery is
-not yet proven. All gateways down means MQTT unavailable while Settings can remain
-available.
+sessions are not migrated, and core-server HA is not provided here.
+Desk firmware now retries after 3 seconds once MQTT disconnect is detected,
+keeps retrying while waiting for idle, and abandons a hello waiter on disconnect.
+This timer does not bound dead-socket detection or VIP election time. Actual
+end-to-end recovery must still be measured on the robot. All gateways down means
+MQTT unavailable while Settings can remain available.
 
 After source review/push and encrypted provisioning, run these **separate** steps:
 
@@ -715,8 +741,9 @@ Operator acceptance:
    real core HTTP/bootstrap URL and `/mcp/vision/explain`; Settings does not serve
    those routes. Ensure the matching signing/auth keys are provisioned.
 2. Have the robot fetch bootstrap. Verify MQTT + hello, UDP audio both ways and
-   one full ASR/LLM/TTS turn. The selected gateway panel should show `t-`/`tP`
-   while the session is open, then clear `t` when it closes.
+   one full ASR/LLM/TTS turn. The selected gateway panel should show `nt`
+   for the lifetime of the authenticated MQTT connection, including between turns.
+   Closing the audio/core session clears `Co`; MQTT disconnect clears `nt`.
 3. Confirm abort/reconnect, device MCP `tools/list` and a real `tools/call`, plus
    camera capture/explain through the **core Vision HTTP** path. MQTT does not
    proxy that HTTP image upload.
@@ -791,13 +818,13 @@ block new core selection. VIP observation is sampled once per second, so a role
 transition is not atomic with hello. Established sessions keep their core through
 VIP/config changes; a failed core requires a fresh session, with no replication.
 
-Panel marks an established local core session as **`C- NN`**, or **`CP NN`** when
-also holding VIP. Uppercase C lights top, both left and bottom segments. Gateway
-remains `t- NN`/`tP NN`; idle stays `-- NN`/`iP NN`. If local gateway and core are
-both active without VIP, show `tC NN` continuously. When all three roles are
-active, alternate `tC NN` and `iP NN` each polling cycle. The colon remains off. Local bounded status polls verify protocol,
-identity, readiness and a positive integer session count; errors clear the role
-indicator. Provider execution is not represented by either transport indicator.
+Panel includes an established local core session as **`Co NN`**. MQTT uses
+`nt NN`; actual VIP ownership uses `iP NN`. Multiple local roles rotate in the
+order `nt` → `Co` → `iP`, omitting absent roles, approximately every 1.5 seconds.
+Idle shows `-- NN`. The colon remains off. Local bounded status
+polls verify protocol, identity, readiness and a positive integer session count
+before showing `Co`. This indicates transport-session ownership, not running
+providers or worker compute activity.
 
 The reviewed transport core is pinned to `ba4c5ae4729eb3ac27a726cbcedc9d6831eafebe` and gateway to
 `8ac1cec4637b4c65f1122c808bb95154fbcd6d51`. Copy the public example outside the checkout
