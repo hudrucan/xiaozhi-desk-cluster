@@ -606,8 +606,8 @@ The node holding the VIP can differ from the gateway handling the robot.
 
 Legacy external-core mode requires a usable **normal conversation core**. For the
 new isolated cluster transport mode, use the opt-in core rollout described below.
-The standalone control plane on 8004 serves Settings only; it is not a WebSocket conversation backend,
-robot bootstrap or camera/VLM endpoint. Configure the actual existing core WS/WSS
+The standalone control plane on 8004 serves Settings and opt-in MQTT bootstrap;
+it is not a WebSocket conversation backend or camera/VLM endpoint. Configure the actual existing core WS/WSS
 URL including its path, without credentials, queries or fragments. The gateway
 adds its existing sole `?from=mqtt_gateway` marker. A localhost backend is valid
 only if that core actually runs on each gateway node. Apply checks backend TCP
@@ -873,3 +873,32 @@ Saving a key advances desired config only. It does not start providers, mark a
 conversation revision active, rewrite worker bundles or restart workers. The
 subsequent LLM rollout must export the selected config/key to private immutable
 worker bundles before enabling text execution.
+
+## Robot MQTT bootstrap through the VIP
+
+`mqtt-bootstrap.yml` enables the lightweight `/xiaozhi/ota/` route on the three
+existing control planes. This is an explicit extension of Settings responsibilities:
+no provider, conversation server, firmware updater or Vision process is started.
+The currently applied URL is intended to be `http://192.168.1.186/xiaozhi/ota/`;
+bootstrap reads the applied ingress VIP snapshot and requires it to agree with the
+validated Cloud desired VIP, rather than hardcoding that address.
+
+Supply the existing `secret/mqtt-transport.vault.yml` gateway signing key and the
+independent Settings transfer Vault, plus the local rollout vars. No signing key
+is generated or changed by this playbook. Whole-cluster preflight checks source,
+Cloud authority and signing key before any serial node mutation. Environment writes
+are root-only, not logged or diffed. `xiaozhi_control_plane_mqtt_bootstrap` is opt-in;
+retain it in local vars for later control-plane convergence.
+
+The robot's existing Device-Id/Client-Id POST receives signed MQTT credentials for
+the VIP broker on 1883, the native topics and server time. An optional MAC admission
+list is available. The endpoint retains trusted-LAN/self-reported-identity semantics;
+it is not a public enrollment service. Operator GET returns readiness only.
+Responses never advertise firmware downloads or Vision, and the server signing key
+never appears in a response or Cloud Config. Current workers/core remain transport
+probes only, so successful MQTT does not mean ASR/LLM/TTS or tools are available.
+
+Acceptance must fetch credentials from bootstrap before MQTT CONNECT/subscribe/
+hello/UDP/ping/goodbye/reconnect, rather than signing them inside the probe. The
+operator then sets the robot's Server URL and performs the actual hardware check;
+no firmware build/flash is needed for this bootstrap change.

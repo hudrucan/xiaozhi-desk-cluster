@@ -1,0 +1,122 @@
+---
+# Enable firmware-compatible MQTT bootstrap in the existing control plane.
+# No provider/runtime/firmware process is added and no Cloud configuration is changed.
+- name: Validate every MQTT bootstrap control plane before any host mutation
+  hosts: xiaozhi_control_planes
+  become: true
+  gather_facts: true
+  gather_subset: [min]
+  any_errors_fatal: true
+  vars_files: [vars/vault.yml]
+  vars:
+    xiaozhi_control_plane_secret_provisioning: true
+    xiaozhi_control_plane_mqtt_bootstrap: true
+  tasks:
+    - name: Preflight all control-plane deployment inputs
+      ansible.builtin.include_role:
+        name: xiaozhi_control_plane
+        tasks_from: preflight
+        public: true
+    - name: Require this explicit deployment to enable MQTT bootstrap
+      ansible.builtin.assert:
+        that: xiaozhi_control_plane_mqtt_bootstrap is sameas true
+    - name: Check deployed gateway signing key without displaying it
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/python3
+          - -c
+          - |
+            import hashlib, json
+            from pathlib import Path
+            entries = {}
+            for line in Path('/etc/xiaozhi-mqtt-gateway.env').read_text().splitlines():
+                if line.startswith('MQTT_SIGNATURE_KEY='):
+                    entries['key'] = json.loads(line.split('=', 1)[1])
+            print(hashlib.sha256(entries['key'].encode()).hexdigest())
+      register: xiaozhi_bootstrap_gateway_key
+      changed_when: false
+      check_mode: false
+      no_log: true
+    - name: Require the bootstrap key to match each running gateway deployment
+      ansible.builtin.assert:
+        that: xiaozhi_bootstrap_gateway_key.stdout == (vault_mqtt_signature_key | hash('sha256'))
+        quiet: true
+      no_log: true
+    - name: Read the current MQTT frontend port without changing HAProxy
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/python3
+          - -c
+          - |
+            import re
+            from pathlib import Path
+            ports = re.findall(r'^\s*bind\s+[^\s]+:(\d+)\s*$', Path('/etc/haproxy/xiaozhi-mqtt.cfg').read_text(), re.M)
+            assert len(ports) == 1
+            print(ports[0])
+      register: xiaozhi_bootstrap_applied_port
+      changed_when: false
+      check_mode: false
+    - name: Require the advertised MQTT port to match the applied frontend
+      ansible.builtin.assert:
+        that: xiaozhi_bootstrap_applied_port.stdout | int == xiaozhi_bootstrap_mqtt_port
+    - name: Freeze public rollout source and membership
+      ansible.builtin.set_fact:
+        xiaozhi_settings_secret_rollout:
+          revision: "{{ xiaozhi_control_plane_revision }}"
+          port: "{{ xiaozhi_control_plane_port }}"
+          nodes: "{{ xiaozhi_control_plane_secret_nodes }}"
+          mqtt_port: "{{ xiaozhi_bootstrap_mqtt_port }}"
+          allowed_devices: "{{ xiaozhi_bootstrap_allowed_devices }}"
+    - name: Retain only a private comparison fingerprint of key and Cloud authority
+      ansible.builtin.set_fact:
+        xiaozhi_settings_secret_fingerprint: "{{ {'key': vault_xiaozhi_secret_provision_key, 'folder': vault_xiaozhi_cloud_folder_id, 'manifest': vault_xiaozhi_cloud_manifest_file_id, 'mqtt_signing_key': vault_mqtt_signature_key} | to_json | hash('sha256') }}"
+      no_log: true
+    - name: Require identical rollout inputs on all nodes
+      ansible.builtin.assert:
+        that: hostvars[item].xiaozhi_settings_secret_rollout == xiaozhi_settings_secret_rollout
+      loop: "{{ groups['xiaozhi_control_planes'] | sort }}"
+      run_once: true
+    - name: Require the same transfer key and Cloud authority on all nodes
+      ansible.builtin.assert:
+        that: hostvars[item].xiaozhi_settings_secret_fingerprint == xiaozhi_settings_secret_fingerprint
+        quiet: true
+      loop: "{{ groups['xiaozhi_control_planes'] | sort }}"
+      run_once: true
+      no_log: true
+
+- name: Deploy symmetric MQTT bootstrap one node at a time
+  hosts: xiaozhi_control_planes
+  become: true
+  gather_facts: true
+  gather_subset: [min]
+  serial: 1
+  any_errors_fatal: true
+  vars_files: [vars/vault.yml]
+  vars:
+    xiaozhi_control_plane_secret_provisioning: true
+    xiaozhi_control_plane_mqtt_bootstrap: true
+  roles: [xiaozhi_control_plane]
+
+- name: Verify shared desired state and MQTT bootstrap after rollout
+  hosts: xiaozhi_control_planes
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  vars:
+    xiaozhi_control_plane_secret_provisioning: true
+    xiaozhi_control_plane_mqtt_bootstrap: true
+  tasks:
+    - name: Verify the three existing control-plane backends
+      ansible.builtin.include_role:
+        name: xiaozhi_control_plane
+        tasks_from: verify_cluster
+      run_once: true
+      when: not ansible_check_mode
+    - name: Require enabled bootstrap capability on every backend
+      ansible.builtin.assert:
+        that: item.json.capabilities.mqtt_bootstrap | default(false) is sameas true
+        quiet: true
+      loop: "{{ xiaozhi_control_plane_cluster_status.results }}"
+      run_once: true
+      no_log: true
+      when: not ansible_check_mode

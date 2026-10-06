@@ -29,6 +29,7 @@
       - ansible_facts.python.version.major == 3
       - ansible_facts.python.version.minor == 11
       - xiaozhi_control_plane_secret_provisioning is boolean
+      - xiaozhi_control_plane_mqtt_bootstrap is boolean
       - xiaozhi_control_plane_revision is string and xiaozhi_control_plane_revision is match('^[0-9a-f]{40}$')
       - xiaozhi_control_plane_root is match('^/opt/[A-Za-z0-9_-]+(?:/[A-Za-z0-9_-]+)*$')
       - xiaozhi_control_plane_repo_dir == xiaozhi_control_plane_root ~ '/repo'
@@ -102,3 +103,28 @@
     xiaozhi_control_plane_bootstrap_content: "{{ lookup('ansible.builtin.template', 'bootstrap.yaml.j2') }}"
   no_log: true
   diff: false
+
+- name: Require existing gateway signing material for enabled MQTT bootstrap
+  ansible.builtin.assert:
+    that:
+      - vault_mqtt_signature_key is defined and vault_mqtt_signature_key is string
+      - vault_mqtt_signature_key | trim | length > 0
+      - vault_mqtt_signature_key | length <= 4096
+      - vault_mqtt_signature_key is not search('[\x00\r\n]')
+    quiet: true
+  no_log: true
+  when: xiaozhi_control_plane_mqtt_bootstrap
+
+- name: Validate public bootstrap port and optional device admission list
+  ansible.builtin.assert:
+    that:
+      - xiaozhi_bootstrap_mqtt_port is integer and xiaozhi_bootstrap_mqtt_port > 0 and xiaozhi_bootstrap_mqtt_port <= 65535
+      - xiaozhi_bootstrap_allowed_devices is sequence and xiaozhi_bootstrap_allowed_devices is not string
+      - xiaozhi_bootstrap_allowed_devices | length <= 128
+  when: xiaozhi_control_plane_mqtt_bootstrap
+
+- name: Validate allowed bootstrap MAC identities
+  ansible.builtin.assert:
+    that: item is string and item is match('^[0-9a-fA-F]{2}(:[0-9a-fA-F]{2}){5}$')
+  loop: "{{ xiaozhi_bootstrap_allowed_devices }}"
+  when: xiaozhi_control_plane_mqtt_bootstrap

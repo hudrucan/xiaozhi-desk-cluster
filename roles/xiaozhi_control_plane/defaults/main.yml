@@ -1,6 +1,6 @@
 ---
 xiaozhi_control_plane_repo_url: https://github.com/hudrucan/xiaozhi-desk-robot-server.git
-xiaozhi_control_plane_revision: 9152dff3943f95f7a02bf878c094f4d05ceec1d0
+xiaozhi_control_plane_revision: 0e2fb19e78be36571e81e27da9eadff6be91a188
 xiaozhi_control_plane_root: /opt/xiaozhi-control-plane
 xiaozhi_control_plane_repo_dir: "{{ xiaozhi_control_plane_root }}/repo"
 xiaozhi_control_plane_venv_dir: "{{ xiaozhi_control_plane_root }}/venv"
@@ -12,3 +12,8 @@ xiaozhi_control_plane_verify_delay: 2
 
 # Opt-in all-node API key provisioning; the transfer key belongs in encrypted Vault.
 xiaozhi_control_plane_secret_provisioning: false
+
+# Lightweight firmware MQTT bootstrap, using the applied Cloud VIP snapshot.
+xiaozhi_control_plane_mqtt_bootstrap: false
+xiaozhi_bootstrap_mqtt_port: 1883
+xiaozhi_bootstrap_allowed_devices: []
