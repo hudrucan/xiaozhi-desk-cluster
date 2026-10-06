@@ -1,0 +1,7 @@
+# Managed by Ansible; reuse the image FD6551 driver and its exclusive GPIO lock.
+[Unit]
+Description=Desk Box node identity and local VIP indicator
+
+[Service]
+ExecStart=
+ExecStart=/usr/bin/python3 /usr/local/libexec/xiaozhi-node-panel{{ ' --placeholder' if panel_placeholder else '' }}

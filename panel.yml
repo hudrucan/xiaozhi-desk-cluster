@@ -1,0 +1,10 @@
+---
+# Opt-in only: intentionally not imported by site.yml.
+- name: Show Desk node identity and actual local VIP ownership
+  hosts: deskboxes
+  become: true
+  gather_facts: false
+  serial: 1
+  any_errors_fatal: true
+  roles:
+    - xiaozhi_panel

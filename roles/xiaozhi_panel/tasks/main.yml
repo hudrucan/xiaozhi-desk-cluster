@@ -1,0 +1,142 @@
+---
+- name: Require a stable two-digit node identity
+  ansible.builtin.assert:
+    that:
+      - xiaozhi_panel_node_number is integer
+      - xiaozhi_panel_node_number >= 1 and xiaozhi_panel_node_number <= 99
+      - cluster_interface is match('^[A-Za-z0-9_.-]{1,15}$')
+    fail_msg: Configure a node number from 1 through 99 and a valid private interface.
+
+- name: Read the existing FD6551 image driver
+  ansible.builtin.stat:
+    path: /usr/libexec/deskbox-front-panel
+    checksum_algorithm: sha256
+  register: xiaozhi_panel_driver
+
+- name: Require the supported FD6551 driver without replacing GPIO code
+  ansible.builtin.assert:
+    that:
+      - xiaozhi_panel_driver.stat.isreg | default(false)
+      - xiaozhi_panel_driver.stat.checksum | default('') == xiaozhi_panel_driver_sha256
+    fail_msg: The image FD6551 driver differs; review its mapping/API before panel deployment.
+
+- name: Read existing front-panel systemd units
+  ansible.builtin.stat:
+    path: "/etc/systemd/system/{{ item }}.service"
+  loop: [deskbox-front-panel, deskbox-front-panel-early]
+  register: xiaozhi_panel_units
+
+- name: Require both image panel units
+  ansible.builtin.assert:
+    that: item.stat.isreg | default(false)
+  loop: "{{ xiaozhi_panel_units.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+
+# Read-only address discovery is safe even when --check is selected.
+- name: Read management addresses without touching network state
+  ansible.builtin.command:
+    argv: [/usr/sbin/ip, -j, -4, address, show]
+  register: xiaozhi_panel_addresses
+  changed_when: false
+  check_mode: false
+
+- name: Locate the interface holding this node's management IP
+  ansible.builtin.set_fact:
+    xiaozhi_panel_management_interfaces: []
+
+- name: Match the management IP to its interface
+  ansible.builtin.set_fact:
+    xiaozhi_panel_management_interfaces: "{{ xiaozhi_panel_management_interfaces + [item.ifname] }}"
+  loop: "{{ xiaozhi_panel_addresses.stdout | from_json }}"
+  when: ansible_host in (item.addr_info | default([]) | map(attribute='local') | list)
+  loop_control:
+    label: "{{ item.ifname }}"
+
+- name: Require one unambiguous management interface
+  ansible.builtin.assert:
+    that:
+      - xiaozhi_panel_management_interfaces | length == 1
+      - xiaozhi_panel_management_interfaces[0] is match('^[A-Za-z0-9_.-]{1,15}$')
+
+- name: Read the public ingress snapshot path without deploying ingress
+  ansible.builtin.include_vars:
+    file: "{{ role_path }}/../xiaozhi_ingress/defaults/main.yml"
+    name: xiaozhi_panel_ingress_defaults
+
+- name: Resolve the applied ingress snapshot path
+  ansible.builtin.set_fact:
+    xiaozhi_panel_ingress_state_file: "{{ xiaozhi_ingress_state_file | default(xiaozhi_panel_ingress_defaults.xiaozhi_ingress_state_file) }}"
+
+- name: Render only the public panel candidate in check mode
+  ansible.builtin.set_fact:
+    xiaozhi_panel_candidate: "{{ lookup('ansible.builtin.template', 'node-panel.json.j2') }}"
+  when: ansible_check_mode
+
+- name: Render both systemd entrypoint candidates in check mode
+  ansible.builtin.set_fact:
+    xiaozhi_panel_service_candidate: "{{ lookup('ansible.builtin.template', 'service.conf.j2') }}"
+  vars:
+    panel_placeholder: "{{ item }}"
+  loop: [false, true]
+  when: ansible_check_mode
+
+- name: Install the node panel only during a real apply
+  when: not ansible_check_mode
+  block:
+    - name: Create root-owned panel script and unit override directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+      loop:
+        - /usr/local/libexec
+        - /etc/systemd/system/deskbox-front-panel.service.d
+        - /etc/systemd/system/deskbox-front-panel-early.service.d
+
+    - name: Install the node panel wrapper
+      ansible.builtin.copy:
+        src: node_panel.py
+        dest: /usr/local/libexec/xiaozhi-node-panel
+        owner: root
+        group: root
+        mode: '0755'
+      register: xiaozhi_panel_script
+
+    - name: Install public node identity and interface configuration
+      ansible.builtin.template:
+        src: node-panel.json.j2
+        dest: /etc/xiaozhi-node-panel.json
+        owner: root
+        group: root
+        mode: '0644'
+        validate: /usr/bin/python3 -m json.tool %s
+      register: xiaozhi_panel_config
+
+    - name: Replace clock entrypoints through systemd overrides
+      ansible.builtin.template:
+        src: service.conf.j2
+        dest: "/etc/systemd/system/{{ item.name }}.service.d/10-xiaozhi-node.conf"
+        owner: root
+        group: root
+        mode: '0644'
+      vars:
+        panel_placeholder: "{{ item.placeholder }}"
+      loop:
+        - {name: deskbox-front-panel, placeholder: false}
+        - {name: deskbox-front-panel-early, placeholder: true}
+      register: xiaozhi_panel_overrides
+
+    - name: Enable early node identity for the next boot without rewriting the live panel
+      ansible.builtin.systemd_service:
+        name: deskbox-front-panel-early
+        enabled: true
+        daemon_reload: "{{ xiaozhi_panel_overrides.changed }}"
+
+    - name: Start or restart the single panel writer only when its configuration changes
+      ansible.builtin.systemd_service:
+        name: deskbox-front-panel
+        enabled: true
+        state: "{{ 'restarted' if xiaozhi_panel_script.changed or xiaozhi_panel_config.changed or xiaozhi_panel_overrides.changed else 'started' }}"

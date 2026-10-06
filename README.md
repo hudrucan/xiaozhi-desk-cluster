@@ -491,3 +491,67 @@ live cutover. Configuration changes other than the VIP can still be rerun.
 Configuration references: [HAProxy 2.6 manual](https://docs.haproxy.org/2.6/configuration.html),
 [Keepalived VRRP configuration](https://www.keepalived.org/documentation/keepalived-conf/),
 and [Linux nonlocal binding](https://kernel.org/doc/html/latest/networking/ip-sysctl.html).
+
+## Front panel: node identity and VIP ownership
+
+The four-digit FD6551 panel uses two status cells on the left and a stable
+two-digit node number on the right. The colon and clock icon stay off:
+
+| Node | Standby / no local VIP | Local VIP owner |
+| --- | --- | --- |
+| deskb1x | `-- 01` | `iP 01` |
+| deskb2x | `-- 02` | `iP 02` |
+| deskb3x | `-- 03` | `iP 03` |
+
+The lowercase `i` lights only the lower-right vertical segment, distinct
+from the two-segment digit `1`. The space represents the physical gap between
+the two digit pairs. Node numbers
+are explicit `xiaozhi_panel_node_number` host variables, independent of VIP
+election or IP changes. Both left cells are reserved for status; ASR/LLM/VLM/TTS
+activity is not implemented yet. Existing Wi-Fi, private-LAN and USB indicators
+are preserved.
+
+Panel deployment is opt-in through `panel.yml`; `site.yml` does not import it.
+It requires the existing Desk Box FD6551 image driver and both front-panel units.
+Ansible checks the driver's known SHA-256 before changes; if the image driver
+changes, review the GPIO mapping/API before updating the checksum. The wrapper
+reuses that driver's register/GPIO functions and exclusive lock without copying
+or replacing the image driver. Systemd drop-ins replace the clock entrypoint;
+there is still only one continuous panel writer. The early-boot unit shows
+`-- NN`, with all icons off, until the normal service starts.
+
+The normal service checks local IPv4 addresses once per loop (one-second pause,
+two-second address-query timeout). `iP` means the management interface actually
+holds the VIP recorded in the applied ingress snapshot, normally
+`/etc/xiaozhi-ingress.json`; it does not mean this node has permanent master
+status or that backend health has been verified. Missing/invalid snapshots or a
+failed local address query show `-- NN`. It reads no Cloud credentials, makes no
+HTTP/NATS requests and never changes network addresses or Keepalived state.
+No VIP address is pinned in the panel role. This indicator follows local
+ownership after failover; it does not implement dynamic VIP migration.
+
+```sh
+ansible-playbook -i inventory.ini panel.yml --syntax-check
+ansible-playbook -i inventory.ini panel.yml --check --diff
+ansible-playbook -i inventory.ini panel.yml
+```
+
+Check mode reads existing driver/unit metadata and local address lists and renders
+the public candidate; it writes no files/GPIO and changes no services. Apply
+restarts the normal panel service only when its script/config/drop-ins change.
+It enables the early unit for future boots without restarting that unit during
+apply. Neither ingress services nor node power are changed. A panel-only rollout
+may use `--limit deskb1x` first. Check visually that the two digit pairs and `iP`
+are correct before rolling out to the other nodes; physical panel validation is
+operator-owned.
+
+Logic fixtures run without GPIO access, network connections or service changes:
+
+```sh
+python3 -m unittest discover -s roles/xiaozhi_panel/tests -v
+```
+
+To restore the image clock, remove only the two `10-xiaozhi-node.conf` drop-ins
+installed by this role, run `systemctl daemon-reload`, then restart
+`deskbox-front-panel.service`. Do not run the image clock manually alongside the
+node panel. `site.yml` continues to leave this opt-in choice alone.
