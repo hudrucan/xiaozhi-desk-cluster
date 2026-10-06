@@ -1,0 +1,43 @@
+---
+- name: Create the private ASR bundle directory
+  ansible.builtin.file:
+    path: "{{ xiaozhi_worker_asr_config | dirname }}"
+    state: directory
+    owner: root
+    group: "{{ xiaozhi_worker_service_user }}"
+    mode: '0750'
+- name: Export selected ASR credentials and VAD metadata from the validated local cache
+  ansible.builtin.command:
+    argv:
+      - "{{ xiaozhi_worker_llm_control_plane_root }}/venv/bin/python"
+      - "{{ xiaozhi_worker_repo_dir }}/main/xiaozhi-server/export_worker_asr_config.py"
+      - --source-root
+      - "{{ xiaozhi_worker_llm_control_plane_root }}/repo/main/xiaozhi-server"
+      - --output
+      - "{{ xiaozhi_worker_asr_config }}"
+      - --expected-revision
+      - "{{ xiaozhi_worker_llm_expected_revision | string }}"
+      - --vad-model
+      - "{{ xiaozhi_worker_asr_vad_model }}"
+      - --vad-sha256
+      - "{{ xiaozhi_worker_asr_vad_sha256 }}"
+  register: xiaozhi_worker_asr_export
+  changed_when: (xiaozhi_worker_asr_export.stdout | from_json).changed
+  no_log: true
+  diff: false
+  notify: Restart Xiaozhi worker
+- name: Require exported ASR revision and node identity to match LLM deployment
+  ansible.builtin.assert:
+    that:
+      - ((xiaozhi_worker_asr_export.stdout | from_json).adapter == 'sherpa_streaming') == xiaozhi_worker_asr_local
+      - (xiaozhi_worker_asr_export.stdout | from_json).worker_id == inventory_hostname
+      - (xiaozhi_worker_asr_export.stdout | from_json).revision == xiaozhi_worker_llm_expected_revision
+  no_log: true
+- name: Give only the service group read access to the ASR bundle
+  ansible.builtin.file:
+    path: "{{ xiaozhi_worker_asr_config }}"
+    owner: root
+    group: "{{ xiaozhi_worker_service_user }}"
+    mode: '0640'
+- name: Reject Cloud drift immediately before ASR activation
+  ansible.builtin.include_tasks: llm_preflight.yml

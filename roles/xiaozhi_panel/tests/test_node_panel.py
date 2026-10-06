@@ -47,6 +47,27 @@ class PanelFixtures(unittest.TestCase):
                            "192.168.1.186" if vip else "192.168.1.101"}],
         }]))
 
+    def test_worker_activity_freshness_and_icons(self):
+        path = Path(self.directory.name) / "activity.json"
+        self.config.update(worker_activity_path=str(path), core_id="deskb1x")
+        value = {"protocol":"xiaozhi-worker-activity-v1", "worker_id":"deskb1x",
+            "instance":"a"*32,"boot_id":"fixture-boot", "monotonic":10.0,"asr":1,"llm":1}
+        with patch.object(panel.Path, "read_text", return_value="fixture-boot"), patch.object(panel.time, "monotonic", return_value=10.0):
+            path.write_text(json.dumps(value))
+            self.assertEqual(panel.worker_icons(self.config,self.driver()), 0x01 | 0x08)
+            value.update(asr=0,llm=0);path.write_text(json.dumps(value))
+            self.assertEqual(panel.worker_icons(self.config,self.driver()), 0x04)
+            value.update(monotonic=6.0);path.write_text(json.dumps(value))
+            self.assertEqual(panel.worker_icons(self.config,self.driver()), 0)
+            value.update(monotonic=10.0,boot_id="old-boot");path.write_text(json.dumps(value))
+            self.assertIsNone(panel.worker_activity(self.config))
+
+    def test_worker_blink_does_not_show_pause_while_active(self):
+        with patch.object(panel, "worker_activity", return_value={"asr":0,"llm":1}), patch.object(panel.time, "monotonic", return_value=10.5):
+            self.assertEqual(panel.worker_icons(self.config,self.driver()),0)
+        with patch.object(panel, "worker_activity", return_value={"asr":1,"llm":1}), patch.object(panel.time, "monotonic", return_value=10.5):
+            self.assertEqual(panel.worker_icons(self.config,self.driver()),0x01)
+
     def test_node_identity_and_vip_glyphs(self):
         for node in (1, 2, 3):
             self.assertEqual(panel.display_text(node, False), f"--{node:02d}")

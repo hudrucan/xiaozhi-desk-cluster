@@ -10,6 +10,7 @@
       - ansible_facts.python.version.major == 3
       - ansible_facts.python.version.minor >= 11
       - xiaozhi_core_worker_rpc is boolean
+      - xiaozhi_core_asr_revision is none or (xiaozhi_core_asr_revision is integer and xiaozhi_core_asr_revision > 0 and xiaozhi_core_worker_rpc)
       - xiaozhi_core_revision is string and xiaozhi_core_revision is match('^[0-9a-f]{40}$')
       - xiaozhi_core_port is integer and xiaozhi_core_port >= 1024 and xiaozhi_core_port <= 65535
       - cluster_ip is match('^10\.10\.10\.(?:[1-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-4])$')
@@ -97,3 +98,7 @@
   ansible.builtin.set_fact:
     xiaozhi_core_rpc_fingerprint: "{{ {'enabled': xiaozhi_core_worker_rpc, 'user': xiaozhi_core_nats_user | default(''), 'port': xiaozhi_core_nats_port | default(0), 'password': nats_client_password if xiaozhi_core_worker_rpc else ''} | to_json | hash('sha256') }}"
   no_log: true
+
+- name: Check validated Cloud state before any opt-in voice core mutation
+  ansible.builtin.include_tasks: voice_preflight.yml
+  when: xiaozhi_core_asr_revision is not none

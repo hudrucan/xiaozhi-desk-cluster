@@ -10,6 +10,7 @@ import ipaddress
 import json
 import logging
 import os
+from pathlib import Path
 import re
 import signal
 import subprocess
@@ -49,6 +50,8 @@ def load_config(path):
             r"[A-Za-z0-9_.-]{1,15}", config[name]
         ):
             raise ValueError("invalid panel interface")
+    if "worker_activity_path" in config and config["worker_activity_path"] != "/run/xiaozhi-worker/activity.json":
+        raise ValueError("invalid worker activity path")
     path = config.get("ingress_state_file")
     if not isinstance(path, str) or not os.path.isabs(path):
         raise ValueError("panel ingress snapshot path must be absolute")
@@ -188,9 +191,36 @@ def activity_icons(driver, *, asr_active=False, llm_active=False,
     return icons
 
 
+def worker_activity(config):
+    path = config.get("worker_activity_path")
+    if path is None:
+        return {"asr": 0, "llm": 0}  # Legacy panel configuration.
+    try:
+        value = read_json(path)
+        boot = Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+        if (not isinstance(value, dict) or set(value) != {"protocol", "worker_id", "instance", "boot_id", "monotonic", "asr", "llm"}
+                or value["protocol"] != "xiaozhi-worker-activity-v1"
+                or value["worker_id"] != config.get("core_id") or value["boot_id"] != boot
+                or not isinstance(value["instance"], str) or not re.fullmatch('[0-9a-f]{32}', value["instance"])
+                or type(value["monotonic"]) not in (float, int)
+                or not 0 <= time.monotonic() - value["monotonic"] <= 3
+                or any(type(value[k]) is not int or not 0 <= value[k] <= 2 for k in ("asr", "llm"))):
+            return None
+        return value
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def worker_icons(config, driver):
+    activity = worker_activity(config)
+    if activity is None:
+        return 0  # Unknown/stale activity must not claim compute idle.
+    return activity_icons(driver, asr_active=activity["asr"] > 0,
+        llm_active=activity["llm"] > 0, blink_on=not activity["llm"] or int(time.monotonic() * 2) % 2 == 0)
+
+
 def connectivity_icons(config, driver):
-    # No worker activity source exists yet; every live node is compute-idle.
-    icons = activity_icons(driver)
+    icons = worker_icons(config, driver)
     if driver.carrier(config["management_interface"]):
         icons |= driver.ICON_WIFI
     if driver.carrier(config["cluster_interface"]):
@@ -259,6 +289,8 @@ def run(config, driver, placeholder=False):
                         if previous_segments is None or value != previous_segments[index]:
                             driver.write_register(address, value)
                     previous_segments = segments
+                if not placeholder:
+                    icons = (icons & ~(driver.ICON_CLOCK | driver.ICON_PLAY | driver.ICON_PAUSE)) | worker_icons(config, driver)
                 if icons != previous_icons:
                     driver.write_register(driver.ICON_ADDR, icons)
                     previous_icons = icons

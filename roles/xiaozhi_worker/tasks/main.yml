@@ -27,6 +27,9 @@
       - ansible_facts.python.version.major == 3
       - ansible_facts.python.version.minor == 11
       - xiaozhi_worker_llm_enabled is boolean
+      - xiaozhi_worker_asr_enabled is boolean
+      - xiaozhi_worker_asr_local is boolean
+      - not xiaozhi_worker_asr_enabled or xiaozhi_worker_llm_enabled
       - xiaozhi_worker_revision is string
       - xiaozhi_worker_revision is match('^[0-9a-f]{40}$')
       - nats_client_user is string and nats_client_user | trim | length > 0
@@ -71,6 +74,10 @@
   ansible.builtin.include_tasks: llm_preflight.yml
   when: xiaozhi_worker_llm_enabled
 
+- name: Validate the existing ASR model before any worker mutation
+  ansible.builtin.include_tasks: asr_preflight.yml
+  when: xiaozhi_worker_asr_enabled
+
 # These steps depend on packages/accounts/directories created earlier in the
 # block. Do not execute them against nonexistent apply-time state in --check.
 - name: Converge worker prerequisites, pinned source and minimal venv
@@ -78,12 +85,7 @@
   block:
     - name: Install only worker deployment prerequisites
       ansible.builtin.apt:
-        name:
-          - git
-          - python3
-          - python3-venv
-          - python3-packaging
-          - ca-certificates
+        name: "{{ ['git', 'python3', 'python3-venv', 'python3-packaging', 'ca-certificates'] + (['libopus0'] if xiaozhi_worker_asr_enabled else []) }}"
         state: present
         install_recommends: false
         update_cache: true
@@ -126,7 +128,7 @@
 
     - name: Install only pinned worker requirements into the dedicated venv
       ansible.builtin.pip:
-        requirements: "{{ xiaozhi_worker_repo_dir }}/main/xiaozhi-server/{{ 'requirements-worker-llm.txt' if xiaozhi_worker_llm_enabled else 'requirements-worker.txt' }}"
+        requirements: "{{ xiaozhi_worker_repo_dir }}/main/xiaozhi-server/{{ ('requirements-worker-asr-local.txt' if xiaozhi_worker_asr_local else 'requirements-worker-asr.txt') if xiaozhi_worker_asr_enabled else ('requirements-worker-llm.txt' if xiaozhi_worker_llm_enabled else 'requirements-worker.txt') }}"
         virtualenv: "{{ xiaozhi_worker_venv_dir }}"
         virtualenv_command: /usr/bin/python3 -m venv
         virtualenv_site_packages: false
@@ -138,12 +140,16 @@
 
 - name: Report worker source and venv desired state during check mode
   ansible.builtin.debug:
-    msg: "Worker {{ inventory_hostname }} would use {{ xiaozhi_worker_repo_url }} @ {{ xiaozhi_worker_revision }} under {{ xiaozhi_worker_root }}, with a dedicated venv and {{ 'requirements-worker-llm.txt' if xiaozhi_worker_llm_enabled else 'requirements-worker.txt' }}. Prerequisite/source/venv mutations and live verification are skipped in check mode."
+    msg: "Worker {{ inventory_hostname }} would use {{ xiaozhi_worker_repo_url }} @ {{ xiaozhi_worker_revision }} under {{ xiaozhi_worker_root }}, with a dedicated venv and {{ ('requirements-worker-asr-local.txt' if xiaozhi_worker_asr_local else 'requirements-worker-asr.txt') if xiaozhi_worker_asr_enabled else ('requirements-worker-llm.txt' if xiaozhi_worker_llm_enabled else 'requirements-worker.txt') }}. Prerequisite/source/venv mutations and live verification are skipped in check mode."
   when: ansible_check_mode
 
 - name: Export the selected LLM bundle locally before activating the worker
   ansible.builtin.include_tasks: llm_config.yml
   when: xiaozhi_worker_llm_enabled and not ansible_check_mode
+
+- name: Export the selected ASR bundle before worker activation
+  ansible.builtin.include_tasks: asr_config.yml
+  when: xiaozhi_worker_asr_enabled and not ansible_check_mode
 
 - name: Render the root-only worker environment with existing NATS credentials
   ansible.builtin.template:

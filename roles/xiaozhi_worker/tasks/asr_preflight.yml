@@ -1,0 +1,23 @@
+---
+- name: Require an explicit checksummed ASR model and private bundle path
+  ansible.builtin.assert:
+    that:
+      - xiaozhi_worker_asr_config is match('^/etc/xiaozhi-worker-asr/[^/]+$')
+      - xiaozhi_worker_asr_vad_model is match('^/opt/[A-Za-z0-9_./-]+[.]onnx$')
+      - xiaozhi_worker_asr_vad_sha256 is match('^[0-9a-f]{64}$')
+    fail_msg: Provision a verified Silero model and specify its exact checksum before enabling ASR.
+- name: Read the existing VAD model without downloading or changing it
+  ansible.builtin.stat:
+    path: "{{ xiaozhi_worker_asr_vad_model }}"
+    checksum_algorithm: sha256
+    follow: false
+  register: xiaozhi_worker_asr_model
+- name: Require a regular immutable matching VAD model
+  ansible.builtin.assert:
+    that:
+      - xiaozhi_worker_asr_model.stat.exists
+      - xiaozhi_worker_asr_model.stat.isreg | default(false)
+      - not (xiaozhi_worker_asr_model.stat.islnk | default(false))
+      - xiaozhi_worker_asr_model.stat.checksum | default('') == xiaozhi_worker_asr_vad_sha256
+      - xiaozhi_worker_asr_model.stat.size | default(0) > 0
+      - xiaozhi_worker_asr_model.stat.size | default(0) <= 20971520

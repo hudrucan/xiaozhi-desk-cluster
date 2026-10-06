@@ -986,3 +986,36 @@ LLM vars file on subsequent worker/full-site runs to keep this opt-in deployment
 omitting it deliberately restores the normal ping-only worker configuration.
 Keep the previous core release and worker source/venv for rollback. This playbook
 does not update control planes, ingress, gateway routing or robot firmware.
+
+
+### Distributed ASR opt-in (review before activation)
+
+`worker-asr.yml` selects the combined `worker_asr.py` entrypoint under the existing
+worker unit; the default full-site deployment remains ping-only. Keep the LLM
+opt-in and all current operator overrides on reruns. Explicitly supply a reviewed
+server source SHA through `xiaozhi_worker_asr_revision`, and an existing Silero
+model path/checksum through `xiaozhi_worker_asr_vad_model` and
+`xiaozhi_worker_asr_vad_sha256`. No model is downloaded by this role.
+
+The ASR exporter reads selected ASR/VAD from the validated control-plane cache;
+it does not change Cloud selection or resolve unrelated keys. Sherpa assets must
+already exist in the control-plane source root and are hashed into the bundle.
+`xiaozhi_worker_asr_local: true` installs the pinned local Sherpa adapter; use false
+for a deliberately selected Gemini adapter. Export/startup fails safely if the
+chosen provider, asset or credential is unavailable.
+
+After worker acceptance, enable voice-to-text core coordination with an integer
+`xiaozhi_core_asr_revision` matching both exported ASR and LLM bundles. Leave this
+null to retain transport-only behavior. This does not enable TTS or MCP, and the
+firmware must support the explicit final-text/completion messages before robot
+voice-to-text LLM acceptance is claimed. Robot ASR mode must be Xiaozhi.
+
+Enable `xiaozhi_panel_worker_activity_enabled: true` with the combined worker rollout.
+Worker activity uses `/run/xiaozhi-worker/activity.json`: Clock means an admitted
+ASR turn, blinking Play means LLM work, Pause means a fresh confirmed idle worker.
+Missing/stale data shows no compute icon. The nt/Co/iP role digits are unchanged.
+
+Run offline/static validation before any rollout. Canary one worker first, using
+a user-provided 16kHz mono PCM WAV with `probe_worker_asr.py`; then deploy all
+workers, opt-in cores and panel serially. Core NATS is not durable: a worker loss
+fails the current speech turn, and a later turn can choose another worker.

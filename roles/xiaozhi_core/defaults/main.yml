@@ -9,3 +9,6 @@ xiaozhi_core_service_user: xiaozhi-core
 
 # Optional bounded diagnostic RPC; it does not enable conversation providers.
 xiaozhi_core_worker_rpc: false
+
+# Opt-in voice-to-text coordinator; immutable exported worker revision.
+xiaozhi_core_asr_revision: null

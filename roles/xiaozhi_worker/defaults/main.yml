@@ -13,3 +13,15 @@ xiaozhi_worker_llm_enabled: false
 xiaozhi_worker_llm_config: /etc/xiaozhi-worker-llm/config.json
 xiaozhi_worker_llm_control_plane_root: /opt/xiaozhi-control-plane
 xiaozhi_worker_llm_revision: b0b1938ef36c1499ff27ba5e5b153048e0b7e24c
+
+# Explicit combined ASR/LLM opt-in. A verified existing local model is required.
+xiaozhi_worker_asr_enabled: false
+xiaozhi_worker_asr_config: /etc/xiaozhi-worker-asr/config.json
+xiaozhi_worker_asr_vad_model: /opt/xiaozhi-models/vad/silero_vad.onnx
+xiaozhi_worker_asr_vad_sha256: ''
+
+# Local Sherpa is the current Cloud choice; install its isolated adapter only.
+xiaozhi_worker_asr_local: true
+
+# Must be supplied after the ASR source is reviewed/committed.
+xiaozhi_worker_asr_revision: null
