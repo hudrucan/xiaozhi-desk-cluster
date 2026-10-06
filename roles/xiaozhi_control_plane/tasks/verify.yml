@@ -57,6 +57,7 @@
           - xiaozhi_control_plane_local_status.json.configuration.desired_revision > 0
           - xiaozhi_control_plane_local_status.json.configuration.runtime_revision is none
           - xiaozhi_control_plane_local_status.json.capabilities.runtime_status == false
+          - xiaozhi_control_plane_local_status.json.capabilities.secret_provisioning | default(false) == xiaozhi_control_plane_secret_provisioning
         quiet: true
       no_log: true
   rescue:

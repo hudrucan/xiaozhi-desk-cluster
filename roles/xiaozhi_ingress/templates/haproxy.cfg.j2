@@ -16,6 +16,8 @@ defaults
 
 frontend xiaozhi_settings
     bind {{ xiaozhi_ingress_vip }}:{{ xiaozhi_ingress_port }}
+    # Private encrypted peer operations never traverse the management frontend.
+    http-request deny deny_status 404 if { path_beg /internal/ }
     default_backend xiaozhi_control_planes
 
 backend xiaozhi_control_planes

@@ -1,0 +1,105 @@
+---
+- name: Read shared NATS public defaults without deploying NATS
+  ansible.builtin.include_vars:
+    file: "{{ role_path }}/../nats/defaults/main.yml"
+    name: xiaozhi_control_plane_nats_defaults
+
+- name: Use the existing NATS application username unless overridden
+  ansible.builtin.set_fact:
+    nats_client_user: "{{ xiaozhi_control_plane_nats_defaults.nats_client_user }}"
+  when: nats_client_user is not defined
+
+- name: Use the existing NATS client port unless overridden
+  ansible.builtin.set_fact:
+    nats_client_port: "{{ xiaozhi_control_plane_nats_defaults.nats_client_port }}"
+  when: nats_client_port is not defined
+
+- name: Validate control-plane membership, platform and pinned source
+  ansible.builtin.assert:
+    that:
+      - groups.get('xiaozhi_control_planes', []) | sort == ['deskb1x', 'deskb2x', 'deskb3x']
+      - groups.get('deskboxes', []) | sort == ['deskb1x', 'deskb2x', 'deskb3x']
+      - ansible_play_hosts_all | sort == groups['xiaozhi_control_planes'] | sort
+      - inventory_hostname in groups['xiaozhi_control_planes']
+      - inventory_hostname in groups['deskboxes']
+      - cluster_ip is defined
+      - cluster_interface == 'end0'
+      - ansible_facts.os_family == 'Debian'
+      - ansible_facts.architecture in ['aarch64', 'arm64']
+      - ansible_facts.python.version.major == 3
+      - ansible_facts.python.version.minor == 11
+      - xiaozhi_control_plane_secret_provisioning is boolean
+      - xiaozhi_control_plane_revision is string and xiaozhi_control_plane_revision is match('^[0-9a-f]{40}$')
+      - xiaozhi_control_plane_root is match('^/opt/[A-Za-z0-9_-]+(?:/[A-Za-z0-9_-]+)*$')
+      - xiaozhi_control_plane_repo_dir == xiaozhi_control_plane_root ~ '/repo'
+      - xiaozhi_control_plane_venv_dir == xiaozhi_control_plane_root ~ '/venv'
+      - xiaozhi_control_plane_service_user is match('^[a-z_][a-z0-9_-]*$') and xiaozhi_control_plane_service_user != 'root'
+      - xiaozhi_control_plane_port | int > 0 and xiaozhi_control_plane_port | int < 65536
+      - xiaozhi_control_plane_reconcile_seconds | float >= 1 and xiaozhi_control_plane_reconcile_seconds | float <= 3600
+      - nats_client_user is string and nats_client_user | trim | length > 0
+      - nats_client_port | int > 0 and nats_client_port | int < 65536
+    fail_msg: Select all three explicit control-plane deskboxes with private end0 addresses, Debian ARM64 Python 3.11, a full Git SHA and valid managed /opt paths.
+
+- name: Validate every private NATS and control-plane backend address
+  ansible.builtin.assert:
+    that:
+      - hostvars[item].cluster_ip is defined
+      - hostvars[item].cluster_ip is string
+      - hostvars[item].cluster_ip is match('^10\.10\.10\.(?:[1-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-4])$')
+    fail_msg: Every deskbox requires a private 10.10.10.0/24 cluster_ip; management addresses are not backends.
+  loop: "{{ groups['deskboxes'] | sort }}"
+
+- name: Require three distinct private backend addresses
+  ansible.builtin.assert:
+    that:
+      - groups['deskboxes'] | map('extract', hostvars, 'cluster_ip') | unique | list | length == 3
+
+- name: Require existing NATS credentials and shared private Cloud bootstrap values
+  ansible.builtin.assert:
+    that:
+      - vault_nats_client_password is defined
+      - vault_nats_client_password is string and vault_nats_client_password | trim | length > 0
+      - nats_client_password is defined
+      - nats_client_password is string and nats_client_password == vault_nats_client_password
+      - nats_client_password is not search('\x00')
+      - nats_client_user is not search('\x00')
+      - vault_xiaozhi_cloud_folder_id is defined
+      - vault_xiaozhi_cloud_folder_id is string and vault_xiaozhi_cloud_folder_id is match('^[A-Za-z0-9_-]+$')
+      - vault_xiaozhi_cloud_manifest_file_id is defined
+      - vault_xiaozhi_cloud_manifest_file_id is string and vault_xiaozhi_cloud_manifest_file_id is match('^[A-Za-z0-9_-]+$')
+      - vault_xiaozhi_cloud_credentials is defined
+      - vault_xiaozhi_cloud_credentials is mapping and vault_xiaozhi_cloud_credentials | length > 0
+      - vault_xiaozhi_cloud_memory_manifest_file_id is not defined or (vault_xiaozhi_cloud_memory_manifest_file_id is string and vault_xiaozhi_cloud_memory_manifest_file_id is match('^[A-Za-z0-9_-]+$'))
+    quiet: true
+    fail_msg: Populate the existing encrypted Vault with matching NATS credentials, Cloud authority IDs and a credential mapping; optional Memory must be a valid ID.
+  no_log: true
+
+- name: Require the encrypted shared secret-transfer key when provisioning is enabled
+  ansible.builtin.assert:
+    that:
+      - vault_xiaozhi_secret_provision_key is defined
+      - vault_xiaozhi_secret_provision_key is string
+      - vault_xiaozhi_secret_provision_key is match('^[0-9a-f]{64}$')
+    quiet: true
+  no_log: true
+  when: xiaozhi_control_plane_secret_provisioning
+
+- name: Derive the public private-LAN peer map without a permanent coordinator
+  ansible.builtin.set_fact:
+    xiaozhi_control_plane_secret_nodes: "{{ xiaozhi_control_plane_secret_nodes | default({}) | combine({item: 'http://' ~ hostvars[item].cluster_ip ~ ':' ~ (xiaozhi_control_plane_port | string)}) }}"
+  loop: "{{ groups['xiaozhi_control_planes'] | sort }}"
+  when: xiaozhi_control_plane_secret_provisioning
+
+- name: Derive the NATS server list from existing sorted deskbox addresses
+  ansible.builtin.set_fact:
+    xiaozhi_control_plane_nats_servers: "nats://{{ groups['deskboxes'] | sort | map('extract', hostvars, 'cluster_ip') | join(':' ~ (nats_client_port | string) ~ ',nats://') }}:{{ nats_client_port }}"
+
+# Render even on first-install --check, when target parent directories do not
+# exist. Apply writes these reviewed contents only after creating prerequisites.
+- name: Render private Cloud deployment candidates without displaying values
+  ansible.builtin.set_fact:
+    xiaozhi_control_plane_credentials_content: "{{ lookup('ansible.builtin.template', 'drive-credentials.json.j2') }}"
+    xiaozhi_control_plane_bootstrap_content: "{{ lookup('ansible.builtin.template', 'bootstrap.yaml.j2') }}"
+  no_log: true
+  diff: false
+

@@ -820,3 +820,56 @@ Transport readiness is not conversation readiness. Deployments must not repoint
 robot bootstrap/vision to this process. Preserve the existing `app.py` runtime
 until the future conversation coordinator, bootstrap and worker RPC are ready.
 Physical panel and robot checks remain operator-owned.
+
+## API keys through shared Settings
+
+`settings-secrets.yml` explicitly enables all-node API key provisioning in the
+existing control-plane process. It preflights all three members and requires
+one transfer key/Cloud authority/source before the serial deployment. It does
+not deploy providers, change Cloud Config or put an API key into Ansible Vault.
+The normal site role defaults to `xiaozhi_control_plane_secret_provisioning: false`;
+keep this variable true in the deployment's private/local vars after opting in,
+so later full-site convergence preserves the capability.
+
+The new encrypted variable `vault_xiaozhi_secret_provision_key` is an independent
+64-hex-character transfer key, shared across the three control planes. Keep it in
+Vault, never Git/plain vars. Environment rendering is root-only and not diffed.
+The private peer map is inventory-derived on end0, with no permanent coordinator.
+`requirements-control-plane.txt` additionally pins cryptography 50.0.1; no
+conversation/provider dependencies are installed.
+
+```bash
+ansible-playbook -i inventory.ini settings-secrets.yml --check --ask-vault-pass \
+  -e @/private/settings-secrets.vault.yml -e @/private/settings-secrets.vars.yml
+ansible-playbook -i inventory.ini settings-secrets.yml --ask-vault-pass \
+  -e @/private/settings-secrets.vault.yml -e @/private/settings-secrets.vars.yml
+```
+
+After deployment, open Settings through the VIP, select the current provider in
+Providers, save/discard ordinary edits, enter its API key and choose **Save key on
+all 3 nodes**. This separate action keeps the value out of the ordinary Config
+patch. Keys are never returned by GET/status or displayed again. Per-node
+readiness is shown even when the serving node/VIP changes.
+
+Each key rotation creates a fresh immutable node-local reference. Every member
+must durably acknowledge storage before the existing CAS-last Cloud manifest
+publishes that reference. Partial transfer failure leaves the old Cloud reference
+and old keys intact; unreachable/unconfirmed nodes are identified. CAS conflicts
+require Sync before retry. Staged unused references are retained after a failed
+publication; active references are never deleted or overwritten automatically.
+The all-node action rotates only the named credential in the three deployed node
+overrides, preserving other exceptions, shared layers and inactive Cloud assignments.
+
+Peer requests **and acknowledgements** are AES-256-GCM protected, bound to sender,
+recipient, direction, operation and a short timestamp window, using a separate
+Vault transfer key. The receiver also checks the real private peer address.
+Neither keys nor reference names go over NATS; only existing revision hints do.
+HAProxy rejects `/internal/` on the management frontend. Browser-to-VIP access
+retains the existing trusted-LAN HTTP Settings contract; this is not HTTPS or
+public-network secret management. Same-origin/custom-header checks reject browser
+cross-site writes. Secret files retain the existing per-node private permissions.
+
+Saving a key advances desired config only. It does not start providers, mark a
+conversation revision active, rewrite worker bundles or restart workers. The
+subsequent LLM rollout must export the selected config/key to private immutable
+worker bundles before enabling text execution.
