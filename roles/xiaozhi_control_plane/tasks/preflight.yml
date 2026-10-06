@@ -102,4 +102,3 @@
     xiaozhi_control_plane_bootstrap_content: "{{ lookup('ansible.builtin.template', 'bootstrap.yaml.j2') }}"
   no_log: true
   diff: false
-
