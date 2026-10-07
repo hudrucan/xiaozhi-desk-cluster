@@ -1174,3 +1174,29 @@ old expected Cloud revision or a stale TTS asset bundle after applying a new
 Cloud revision. No model, dependency, firmware or VIP change is required solely
 for device MCP. Firmware build/flash and physical tool smoke tests remain
 user-owned.
+
+
+## Shared cluster Memory
+
+Control-plane source `9d5beeb2e477b3bd17bb59dfe581f3b15093389b` exposes device-scoped Memory CRUD through the
+Settings VIP and shared Core NATS Memory RPC on every assigned node. Provision
+one common Cloud Memory manifest and preserve its ID in the optional encrypted
+`vault_xiaozhi_cloud_memory_manifest_file_id` variable. Never seed a separate
+Memory authority per node. Routine control-plane convergence retains an existing
+pointer for the same Config authority when that optional Vault value is omitted;
+it refuses to carry a pointer into a different Config source implicitly.
+
+The service owns only its private `data/cloud-memory` cache, which is explicitly
+allowed by systemd. Upgrade all control planes, voice workers and cores to the
+compatible server source before enabling `manage_memory` in the selected
+function-call Intent and using Settings **Apply runtime**. Keep the ping-only
+worker/transport-only core defaults separate. Memory CRUD later needs no restart:
+Cloud CAS commits first, NATS revision hints and periodic refresh synchronize
+nodes, and the next recall uses the updated cache. The Memory page reports
+matching authority/revision readiness, including temporarily offline nodes.
+
+See the server's `docs/cluster-memory.md` for Memory V2 migration, legacy
+single-writer compatibility, conflict/uncertain-write handling and per-device
+conversation tool semantics. Code rollout and Cloud runtime Apply remain separate
+operations. The control-plane source default now pins the above Memory-compatible
+release; the prior VLM/device-MCP release remains documented for comparison.

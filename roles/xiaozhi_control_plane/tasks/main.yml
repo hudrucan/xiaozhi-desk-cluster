@@ -80,7 +80,7 @@
         owner: "{{ xiaozhi_control_plane_service_user }}"
         group: "{{ xiaozhi_control_plane_service_user }}"
         mode: "0700"
-      loop: [cloud-config, node-secrets, cloud-soundbank]
+      loop: [cloud-config, node-secrets, cloud-soundbank, cloud-memory]
 
     - name: Install private Drive credentials readable only by root and the service
       ansible.builtin.copy:

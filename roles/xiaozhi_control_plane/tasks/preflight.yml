@@ -111,6 +111,49 @@
   ansible.builtin.set_fact:
     xiaozhi_control_plane_nats_servers: "nats://{{ groups['deskboxes'] | sort | map('extract', hostvars, 'cluster_ip') | join(':' ~ (nats_client_port | string) ~ ',nats://') }}:{{ nats_client_port }}"
 
+# Memory authority is source-wide. Omitting its optional Vault override on a
+# routine rerun must not erase an already provisioned pointer.
+- name: Inspect the existing private bootstrap before rendering its replacement
+  ansible.builtin.stat:
+    path: "{{ xiaozhi_control_plane_repo_dir }}/main/xiaozhi-server/data/bootstrap.yaml"
+  register: xiaozhi_control_plane_existing_bootstrap
+  no_log: true
+
+- name: Read the existing private bootstrap internally
+  ansible.builtin.slurp:
+    src: "{{ xiaozhi_control_plane_repo_dir }}/main/xiaozhi-server/data/bootstrap.yaml"
+  register: xiaozhi_control_plane_bootstrap_bytes
+  when: xiaozhi_control_plane_existing_bootstrap.stat.exists
+  no_log: true
+
+- name: Resolve the optional Memory authority without exposing its ID
+  ansible.builtin.set_fact:
+    xiaozhi_control_plane_retained_bootstrap: "{{ (xiaozhi_control_plane_bootstrap_bytes.content | b64decode | from_yaml) if xiaozhi_control_plane_existing_bootstrap.stat.exists else {} }}"
+  no_log: true
+
+- name: Require retained Memory to belong to the same Cloud Config authority
+  ansible.builtin.assert:
+    that:
+      - xiaozhi_control_plane_retained_bootstrap.google_drive.folder_id == vault_xiaozhi_cloud_folder_id
+      - xiaozhi_control_plane_retained_bootstrap.google_drive.manifest_file_id == vault_xiaozhi_cloud_manifest_file_id
+    quiet: true
+  when:
+    - vault_xiaozhi_cloud_memory_manifest_file_id is not defined
+    - xiaozhi_control_plane_retained_bootstrap.get('google_drive', {}).get('memory_manifest_file_id') is not none
+  no_log: true
+
+- name: Preserve the existing Memory pointer unless an explicit Vault value is supplied
+  ansible.builtin.set_fact:
+    xiaozhi_control_plane_memory_manifest_file_id: "{{ vault_xiaozhi_cloud_memory_manifest_file_id | default(xiaozhi_control_plane_retained_bootstrap.get('google_drive', {}).get('memory_manifest_file_id')) }}"
+  no_log: true
+
+- name: Validate the resolved optional Memory pointer internally
+  ansible.builtin.assert:
+    that:
+      - xiaozhi_control_plane_memory_manifest_file_id is none or (xiaozhi_control_plane_memory_manifest_file_id is string and xiaozhi_control_plane_memory_manifest_file_id is match('^[A-Za-z0-9_-]+$'))
+    quiet: true
+  no_log: true
+
 # Render even on first-install --check, when target parent directories do not
 # exist. Apply writes these reviewed contents only after creating prerequisites.
 - name: Render private Cloud deployment candidates without displaying values
