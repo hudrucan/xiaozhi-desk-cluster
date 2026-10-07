@@ -1178,7 +1178,7 @@ user-owned.
 
 ## Shared cluster Memory
 
-Control-plane source `9d5beeb2e477b3bd17bb59dfe581f3b15093389b` exposes device-scoped Memory CRUD through the
+Control-plane source `1feca52c0a037b8412ba6f65578a042635b59d54` exposes device-scoped Memory CRUD through the
 Settings VIP and shared Core NATS Memory RPC on every assigned node. Provision
 one common Cloud Memory manifest and preserve its ID in the optional encrypted
 `vault_xiaozhi_cloud_memory_manifest_file_id` variable. Never seed a separate
