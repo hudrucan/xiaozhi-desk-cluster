@@ -66,6 +66,7 @@
   become: true
   gather_facts: false
   any_errors_fatal: true
+  vars_files: [vars/vault.yml]
   vars:
     xiaozhi_worker_llm_enabled: true
     xiaozhi_worker_asr_enabled: true
