@@ -4,6 +4,7 @@
     that:
       - xiaozhi_core_tts_config is match('^/etc/xiaozhi-core-tts/[^/]+$')
       - xiaozhi_core_tts_worker_config is match('^/etc/xiaozhi-worker-tts/[^/]+$')
+      - xiaozhi_core_control_plane_root is match('^/opt/[A-Za-z0-9_-]+(?:/[A-Za-z0-9_-]+)*$')
 
 - name: Inspect private regular worker bundle before bounded metadata read
   ansible.builtin.stat:
@@ -49,4 +50,26 @@
 - name: Retain the preflight voice identity privately
   ansible.builtin.set_fact:
     xiaozhi_core_tts_fingerprint: "{{ (xiaozhi_core_tts_worker_bundle.content | b64decode | from_json).fingerprint }}"
+  no_log: true
+
+- name: Refuse to bypass enabled desired Soundbank with a legacy worker bundle
+  ansible.builtin.assert:
+    that: "'soundbank' in (xiaozhi_core_tts_worker_bundle.content | b64decode | from_json)"
+    quiet: true
+  loop: "{{ xiaozhi_core_voice_desired.results }}"
+  when:
+    - item.item == inventory_hostname
+    - item.json.soundbank.state | default('') == 'ready'
+  no_log: true
+
+- name: Require complete desired audio caches before enabling pinned Soundbank playback
+  ansible.builtin.assert:
+    that:
+      - item.json.soundbank.state | default('') in ['ready', 'disabled']
+      - item.json.soundbank.desired_revision | default(0) == xiaozhi_core_asr_revision
+      - item.json.soundbank.synced_revision | default(0) == xiaozhi_core_asr_revision
+      - item.json.soundbank.verified_assets | default(-1) == item.json.soundbank.expected_assets | default(-2)
+    quiet: true
+  loop: "{{ xiaozhi_core_voice_desired.results }}"
+  when: "'soundbank' in (xiaozhi_core_tts_worker_bundle.content | b64decode | from_json)"
   no_log: true

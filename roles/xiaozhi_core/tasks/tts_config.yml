@@ -21,16 +21,62 @@
     group: "{{ xiaozhi_core_service_user }}"
     mode: '0750'
 
-- name: Install the preflight-frozen TTS bundle for the core group only
-  ansible.builtin.copy:
-    content: "{{ xiaozhi_core_tts_worker_bundle.content | b64decode }}"
-    dest: "{{ xiaozhi_core_tts_config }}"
+- name: Create the private assets-only core Soundbank directory
+  ansible.builtin.file:
+    path: "{{ xiaozhi_core_tts_config | dirname }}/soundbank"
+    state: directory
+    owner: root
+    group: "{{ xiaozhi_core_service_user }}"
+    mode: '0750'
+
+- name: Provision frozen audio offline without granting control-plane credential access
+  ansible.builtin.command:
+    argv:
+      - "{{ xiaozhi_core_release }}/venv/bin/python"
+      - provision_core_soundbank.py
+      - --bundle
+      - '-'
+      - --node-id
+      - "{{ inventory_hostname }}"
+      - --source-cache
+      - "{{ xiaozhi_core_control_plane_root }}/repo/main/xiaozhi-server/data/cloud-soundbank/objects"
+      - --destination
+      - "{{ xiaozhi_core_tts_config | dirname }}/soundbank"
+      - --group
+      - "{{ xiaozhi_core_service_user }}"
+      - --output
+      - "{{ xiaozhi_core_tts_config }}"
+    chdir: "{{ xiaozhi_core_release }}/repo/main/xiaozhi-server"
+    stdin: "{{ xiaozhi_core_tts_worker_bundle.content | b64decode }}"
+  environment: {PYTHONDONTWRITEBYTECODE: '1'}
+  register: xiaozhi_core_tts_bundle_install
+  changed_when: (xiaozhi_core_tts_bundle_install.stdout | from_json).changed
+  no_log: true
+  diff: false
+
+- name: Give only the core group access to its pinned TTS bundle
+  ansible.builtin.file:
+    path: "{{ xiaozhi_core_tts_config }}"
     owner: root
     group: "{{ xiaozhi_core_service_user }}"
     mode: '0640'
-  register: xiaozhi_core_tts_bundle_install
+
+- name: Verify pinned audio as the unprivileged core before activation
+  ansible.builtin.command:
+    argv: ["{{ xiaozhi_core_release }}/venv/bin/python", '-', "{{ xiaozhi_core_tts_config }}", "{{ inventory_hostname }}", "{{ xiaozhi_core_tts_fingerprint }}"]
+    chdir: "{{ xiaozhi_core_release }}/repo/main/xiaozhi-server"
+    stdin: |
+      import sys
+      from core.cluster.tts_config import load_bundle
+      from core.cluster.tts_soundbank import SoundbankPlayback
+      value = load_bundle(sys.argv[1], sys.argv[2])
+      if value['fingerprint'] != sys.argv[3]:
+          raise SystemExit('Core voice identity differs from frozen worker bundle')
+      SoundbankPlayback(value.get('soundbank')).verify()
+  become_user: "{{ xiaozhi_core_service_user }}"
+  environment: {PYTHONDONTWRITEBYTECODE: '1'}
+  changed_when: false
   no_log: true
-  diff: false
 
 - name: Reject desired drift immediately before core TTS activation
   ansible.builtin.include_tasks: voice_preflight.yml

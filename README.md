@@ -1036,8 +1036,12 @@ directories are never overwritten or deleted; their identity must already match.
 Partial staging is resumable. A mismatching existing tree requires explicit
 operator provisioning into a new versioned model directory, not overwriting a
 live native engine's assets. No asset is fetched from the Internet. The selected
-Cloud model path/settings remain authoritative; model mismatch, enabled Soundbank
-or unsupported configuration stops activation rather than changing Cloud.
+Cloud model path/settings remain authoritative. Model mismatch, incomplete
+Soundbank cache or unsupported configuration stops activation rather than changing
+Cloud. Enabled Soundbank requires the local control-plane cache ready index and
+verified blobs to match the frozen desired revision before worker export. The
+bundle carries a separate credential-free audio manifest; workers do not read
+control-plane audio or credential directories.
 
 Copy `examples/worker-tts.vars.yml` to a private local vars file, then supply the
 reviewed/pushed server SHA, existing VAD checksum, current positive Cloud revision
@@ -1059,14 +1063,30 @@ playback latency. The [server TTS guide](https://github.com/hudrucan/xiaozhi-des
 describes limits, abort/failover and user-owned robot acceptance.
 
 `core-tts.yml` is a second explicit activation step after synthesis acceptance.
-It retains serial all-node core deployment, installs only core Opus dependencies,
-keeps a private node-specific copy of the frozen worker bundle, and requires all
-three targeted workers to report the same revision/voice identity before enabling
-core audio. Use the same vars file with its full `xiaozhi_core_revision` and
+It retains serial all-node core deployment, installs core libopus plus FFmpeg
+for canonical MP3 decoding, and requires all three targeted workers to report the
+same revision/voice identity before enabling core audio. For Soundbank it also
+requires complete desired audio caches, copies only frozen verified blobs into
+`/etc/xiaozhi-core-tts/soundbank/<fingerprint>`, validates the complete generation
+before atomic publication, and verifies decode access as the unprivileged core.
+Only the audio root changes in the core's private bundle. Existing immutable
+generations are retained and verified without overwrite. The core is not added
+to the control-plane credential group; no Drive I/O, regeneration or model/provider
+initialization is performed by this copy. The source cache defaults to
+`xiaozhi_core_control_plane_root: /opt/xiaozhi-control-plane`. Use the same vars file with its full `xiaozhi_core_revision` and
 `xiaozhi_core_asr_revision`. Missing or incompatible workers fail activation.
 Cloud drift and local bundle drift stop the next core mutation. `--check` neither
 installs dependencies/models nor changes services. Keep the three desk nodes on
 Python 3.11 for audioop; no Python runtime upgrade is part of this rollout.
+
+Soundbank cache hits play on the selected core through the same ordered response
+audio pipeline and consume no worker synthesis slot. Missing/corrupt matched
+recordings fail explicitly; unmatched segments still distribute across available
+workers. Desired Soundbank saves automatically sync bytes through the control
+planes, while active cores retain their frozen audio generation until an explicit
+matching runtime rollout. This does not hot-apply a new provider/audio revision
+or add standalone Soundbank authoring controls. Choose non-cached phrases for
+native TTS concurrency/RTF measurement.
 
 TTS Play is steady while the native slot is occupied, including cancellation join;
 LLM Play blinks, ASR Clock and fresh idle Pause remain intact. The panel accepts

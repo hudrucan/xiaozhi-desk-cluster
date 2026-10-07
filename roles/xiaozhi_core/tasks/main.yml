@@ -18,7 +18,7 @@
   block:
     - name: Install minimal source and Python deployment prerequisites
       ansible.builtin.apt:
-        name: "{{ ['git', 'python3', 'python3-venv', 'ca-certificates'] + (['libopus0'] if xiaozhi_core_tts_enabled else []) }}"
+        name: "{{ ['git', 'python3', 'python3-venv', 'ca-certificates'] + (['libopus0', 'ffmpeg'] if xiaozhi_core_tts_enabled else []) }}"
         state: present
         install_recommends: false
         update_cache: true

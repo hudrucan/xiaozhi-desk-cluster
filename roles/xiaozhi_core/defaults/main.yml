@@ -17,3 +17,4 @@ xiaozhi_core_asr_revision: null
 xiaozhi_core_tts_enabled: false
 xiaozhi_core_tts_config: /etc/xiaozhi-core-tts/config.json
 xiaozhi_core_tts_worker_config: /etc/xiaozhi-worker-tts/config.json
+xiaozhi_core_control_plane_root: /opt/xiaozhi-control-plane
