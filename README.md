@@ -1093,3 +1093,9 @@ LLM Play blinks, ASR Clock and fresh idle Pause remain intact. The panel accepts
 both the old ASR/LLM activity schema and its optional bounded TTS counter.
 No firmware build/flash, model downloads or live deployment are implied by adding
 these playbooks. Source pins remain explicit until review and commit/push.
+
+TTS worker readiness allows a longer first-start window (30 retries, two-second
+delay, three-second ping timeout): native ASR/TTS initialization happens before
+NATS subscriptions and took about 69 seconds on the canary. Non-TTS worker
+readiness keeps the existing 10 retries. This changes deployment verification
+only; request deadlines and runtime reconnect behavior remain unchanged.

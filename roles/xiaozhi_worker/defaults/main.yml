@@ -5,7 +5,9 @@ xiaozhi_worker_root: /opt/xiaozhi-worker
 xiaozhi_worker_repo_dir: "{{ xiaozhi_worker_root }}/repo"
 xiaozhi_worker_venv_dir: "{{ xiaozhi_worker_root }}/venv"
 xiaozhi_worker_service_user: xiaozhi-worker
-xiaozhi_worker_verify_retries: 10
+# Warm ASR + TTS model initialization precedes NATS subscription registration.
+# A measured first TTS startup took 69 seconds; allow about 150 seconds for ping.
+xiaozhi_worker_verify_retries: "{{ 30 if xiaozhi_worker_tts_enabled else 10 }}"
 xiaozhi_worker_verify_delay: 2
 
 # Explicit text-only provider opt-in. Normal worker deployment stays ping-only.
