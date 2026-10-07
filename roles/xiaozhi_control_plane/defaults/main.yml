@@ -1,6 +1,6 @@
 ---
 xiaozhi_control_plane_repo_url: https://github.com/hudrucan/xiaozhi-desk-robot-server.git
-xiaozhi_control_plane_revision: a72d4b38430b767021abc00f97fc0e2e124134c1
+xiaozhi_control_plane_revision: 7be2800764c9e8273e949a6405888a2fd7f905aa
 xiaozhi_control_plane_root: /opt/xiaozhi-control-plane
 xiaozhi_control_plane_repo_dir: "{{ xiaozhi_control_plane_root }}/repo"
 xiaozhi_control_plane_venv_dir: "{{ xiaozhi_control_plane_root }}/venv"

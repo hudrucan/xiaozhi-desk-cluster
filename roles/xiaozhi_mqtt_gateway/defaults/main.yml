@@ -1,7 +1,7 @@
 ---
 xiaozhi_mqtt_gateway_repo_url: https://github.com/hudrucan/xiaozhi-desk-mqtt-gateway.git
-# Reviewed gateway release with cluster core placement and listener status.
-xiaozhi_mqtt_gateway_revision: 8ac1cec4637b4c65f1122c808bb95154fbcd6d51
+# Reviewed gateway release with bounded, paginated firmware MCP cache replies.
+xiaozhi_mqtt_gateway_revision: e5adc471b79b577960ae6e3cab6f7b6e088f6912
 xiaozhi_mqtt_gateway_chat_servers: []
 # Opt in after deploying core.yml with a reviewed new server/gateway release.
 xiaozhi_mqtt_gateway_cluster_core: false

@@ -1133,3 +1133,31 @@ features and ingress VIP changes still require their deployment playbooks.
 Ansible does not own or pin the Cloud VIP. When deploying cores through Ansible,
 use the current frozen Cloud/runtime revision; the core role updates the installed
 revision overlay to that explicit value and refuses interrupted runtime applies.
+
+
+## Device MCP voice source compatibility
+
+The distributed voice coordinator supports firmware-advertised device tools with
+server source `7be2800764c9e8273e949a6405888a2fd7f905aa` and gateway source
+`e5adc471b79b577960ae6e3cab6f7b6e088f6912`. See the server repository's
+`docs/cluster-device-mcp.md` for the bounded tool/continuation contract. External
+server MCP and Vision endpoint integration remain separate work.
+
+For the existing combined ASR/LLM/TTS deployment, explicitly select that server
+SHA in `xiaozhi_worker_asr_revision`, `xiaozhi_worker_tts_revision` and
+`xiaozhi_core_revision`; the ping-only worker and transport-only core defaults
+remain separate opt-ins. The control-plane and gateway defaults are pinned to
+the compatible releases. Update all workers first (they still accept the old
+text RPC), then gateways and all control planes, and activate the new cores last.
+This prevents new cores from dispatching tool loops before workers can serve
+`xiaozhi.v1.llm.tools.stream`, and ensures every Settings node can validate MCP
+lifecycle diagnostics. Source rollout/restarts interrupt existing conversations.
+
+A code revision and a Cloud configuration revision are different values. Use the
+current frozen Cloud/runtime revision and existing private bundle export process
+for a normal voice deployment. Settings **Apply runtime** applies Cloud settings
+to already installed code; it does not deploy this source upgrade. Do not use an
+old expected Cloud revision or a stale TTS asset bundle after applying a new
+Cloud revision. No model, dependency, firmware or VIP change is required solely
+for device MCP. Firmware build/flash and physical tool smoke tests remain
+user-owned.
