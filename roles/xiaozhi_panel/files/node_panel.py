@@ -180,7 +180,7 @@ def activity_icons(driver, *, asr_active=False, llm_active=False,
                    vlm_active=False, tts_active=False, blink_on=True):
     """Activity policy, independent of transport/VIP roles.
 
-    Worker telemetry is not wired yet: the live caller uses idle defaults.
+    Fresh local worker telemetry supplies compute activity independently.
     A blink-off frame must not show Pause while a job is still running.
     """
     if not (asr_active or llm_active or vlm_active or tts_active):
@@ -198,12 +198,15 @@ def worker_activity(config):
     try:
         value = read_json(path)
         boot = Path("/proc/sys/kernel/random/boot_id").read_text().strip()
-        if (not isinstance(value, dict) or set(value) != {"protocol", "worker_id", "instance", "boot_id", "monotonic", "asr", "llm"}
+        if (not isinstance(value, dict) or set(value) not in (
+                    {"protocol", "worker_id", "instance", "boot_id", "monotonic", "asr", "llm"},
+                    {"protocol", "worker_id", "instance", "boot_id", "monotonic", "asr", "llm", "tts"})
                 or value["protocol"] != "xiaozhi-worker-activity-v1"
                 or value["worker_id"] != config.get("core_id") or value["boot_id"] != boot
                 or not isinstance(value["instance"], str) or not re.fullmatch('[0-9a-f]{32}', value["instance"])
                 or type(value["monotonic"]) not in (float, int)
                 or not 0 <= time.monotonic() - value["monotonic"] <= 3
+                or type(value.get("tts", 0)) is not int or not 0 <= value.get("tts", 0) <= 1
                 or any(type(value[k]) is not int or not 0 <= value[k] <= 2 for k in ("asr", "llm"))):
             return None
         return value
@@ -216,7 +219,7 @@ def worker_icons(config, driver):
     if activity is None:
         return 0  # Unknown/stale activity must not claim compute idle.
     return activity_icons(driver, asr_active=activity["asr"] > 0,
-        llm_active=activity["llm"] > 0, blink_on=not activity["llm"] or int(time.monotonic() * 2) % 2 == 0)
+        llm_active=activity["llm"] > 0, tts_active=activity.get("tts", 0) > 0, blink_on=not activity["llm"] or int(time.monotonic() * 2) % 2 == 0)
 
 
 def connectivity_icons(config, driver):

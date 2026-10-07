@@ -62,6 +62,20 @@ class PanelFixtures(unittest.TestCase):
             value.update(monotonic=10.0,boot_id="old-boot");path.write_text(json.dumps(value))
             self.assertIsNone(panel.worker_activity(self.config))
 
+    def test_optional_tts_counter_keeps_play_lit_during_llm_blink_off(self):
+        path = Path(self.directory.name) / "activity.json"
+        self.config.update(worker_activity_path=str(path), core_id="deskb1x")
+        value = {"protocol":"xiaozhi-worker-activity-v1", "worker_id":"deskb1x",
+            "instance":"a"*32, "boot_id":"fixture-boot", "monotonic":10.5,
+            "asr":0, "llm":1, "tts":1}
+        with patch.object(panel.Path, "read_text", return_value="fixture-boot"), patch.object(panel.time, "monotonic", return_value=10.5):
+            path.write_text(json.dumps(value))
+            self.assertEqual(panel.worker_icons(self.config, self.driver()), 0x08)
+            for invalid in (-1, 2, True, "1"):
+                value['tts'] = invalid
+                path.write_text(json.dumps(value))
+                self.assertIsNone(panel.worker_activity(self.config))
+
     def test_worker_blink_does_not_show_pause_while_active(self):
         with patch.object(panel, "worker_activity", return_value={"asr":0,"llm":1}), patch.object(panel.time, "monotonic", return_value=10.5):
             self.assertEqual(panel.worker_icons(self.config,self.driver()),0)

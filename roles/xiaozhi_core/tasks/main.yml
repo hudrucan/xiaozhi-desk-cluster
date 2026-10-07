@@ -18,7 +18,7 @@
   block:
     - name: Install minimal source and Python deployment prerequisites
       ansible.builtin.apt:
-        name: [git, python3, python3-venv, ca-certificates]
+        name: "{{ ['git', 'python3', 'python3-venv', 'ca-certificates'] + (['libopus0'] if xiaozhi_core_tts_enabled else []) }}"
         state: present
         install_recommends: false
         update_cache: true
@@ -71,10 +71,13 @@
         creates: "{{ xiaozhi_core_release }}/venv/bin/python"
     - name: Install only transport core dependencies
       ansible.builtin.pip:
-        requirements: "{{ xiaozhi_core_release }}/repo/main/xiaozhi-server/requirements-core.txt"
+        requirements: "{{ xiaozhi_core_release }}/repo/main/xiaozhi-server/{{ 'requirements-core-voice.txt' if xiaozhi_core_tts_enabled else 'requirements-core.txt' }}"
         virtualenv: "{{ xiaozhi_core_release }}/venv"
         extra_args: --disable-pip-version-check
       register: xiaozhi_core_dependencies
+    - name: Verify TTS worker agreement and provision the core audio bundle
+      ansible.builtin.include_tasks: tts_config.yml
+      when: xiaozhi_core_tts_enabled
     - name: Install the gateway-matching authentication environment
       ansible.builtin.template:
         src: core.env.j2
@@ -98,7 +101,7 @@
         name: xiaozhi-core
         enabled: true
         daemon_reload: "{{ xiaozhi_core_unit.changed }}"
-        state: "{{ 'restarted' if xiaozhi_core_env.changed or xiaozhi_core_unit.changed or xiaozhi_core_dependencies.changed else 'started' }}"
+        state: "{{ 'restarted' if xiaozhi_core_env.changed or xiaozhi_core_unit.changed or xiaozhi_core_dependencies.changed or (xiaozhi_core_tts_bundle_install.changed | default(false)) else 'started' }}"
     - name: Require identity, transport readiness and resolved VIP observation
       ansible.builtin.uri:
         url: "http://{{ cluster_ip }}:{{ xiaozhi_core_port }}/status"
@@ -113,6 +116,7 @@
         - xiaozhi_core_status.json.status | default('') == 'ready'
         - xiaozhi_core_status.json.local_vip_owner | default(none) is boolean
         - xiaozhi_core_status.json.conversation_runtime | default(true) is sameas false
+        - not xiaozhi_core_tts_enabled or ('voice_tts' in (xiaozhi_core_status.json.capabilities | default([])) and xiaozhi_core_status.json.tts.revision | default(0) == xiaozhi_core_asr_revision)
         - not xiaozhi_core_worker_rpc or xiaozhi_core_status.json.worker_rpc.state | default('') == 'connected'
       retries: 10
       delay: 1

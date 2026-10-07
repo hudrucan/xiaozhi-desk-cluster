@@ -1,0 +1,63 @@
+---
+- name: Require explicit TTS source and controller asset bundle
+  ansible.builtin.assert:
+    that:
+      - xiaozhi_worker_tts_enabled is sameas true
+      - xiaozhi_worker_tts_config is match('^/etc/xiaozhi-worker-tts/[^/]+$')
+      - xiaozhi_worker_tts_asset_bundle is string
+      - xiaozhi_worker_tts_asset_bundle is match('^/[^\n\r]+$')
+      - xiaozhi_worker_tts_controller_server_dir is match('^/[^\n\r]+$')
+      - xiaozhi_worker_revision is string and xiaozhi_worker_revision is match('^[0-9a-f]{40}$')
+    fail_msg: TTS needs a reviewed full source SHA and a private controller asset bundle.
+
+- name: Validate and checksum controller TTS assets without network or mutation
+  ansible.builtin.command:
+    argv: ["{{ ansible_playbook_python }}", '-', "{{ xiaozhi_worker_tts_asset_bundle }}"]
+    chdir: "{{ xiaozhi_worker_tts_controller_server_dir }}"
+    stdin: |
+      import json
+      import sys
+      from pathlib import Path
+      from core.cluster.llm_protocol import decode
+      from core.cluster.tts_config import MAX_BUNDLE, load_bundle, relative_path, verify_assets
+      try:
+          with open(sys.argv[1], 'rb') as stream:
+              raw = decode(stream.read(MAX_BUNDLE + 1), MAX_BUNDLE)
+          value = load_bundle(sys.argv[1], raw['worker_id'])
+          verify_assets(value)
+          root = Path.cwd().resolve()
+          model = Path(value['model_root']).resolve()
+          relative = model.relative_to(root).as_posix()
+          relative_path(relative)
+          if not relative.startswith('models/tts/'):
+              raise ValueError('Model must be under controller source models/tts')
+          print(json.dumps({key: value[key] for key in ('revision', 'workers', 'files', 'fingerprint', 'model_root')} | {'relative': relative}))
+      except Exception:
+          print('TTS asset preflight failed', file=sys.stderr)
+          raise SystemExit(1)
+  delegate_to: localhost
+  become: false
+  environment: {PYTHONDONTWRITEBYTECODE: '1'}
+  register: xiaozhi_worker_tts_controller_assets
+  changed_when: false
+  check_mode: false
+  no_log: true
+
+- name: Retain immutable controller asset metadata for this node
+  ansible.builtin.set_fact:
+    xiaozhi_worker_tts_assets: "{{ xiaozhi_worker_tts_controller_assets.stdout | from_json }}"
+  no_log: true
+  when: xiaozhi_worker_tts_assets is not defined
+
+- name: Reject controller asset drift against the frozen rollout manifest
+  ansible.builtin.assert:
+    that: (xiaozhi_worker_tts_controller_assets.stdout | from_json) == xiaozhi_worker_tts_assets
+  no_log: true
+
+- name: Require frozen Cloud revision and complete TTS membership
+  ansible.builtin.assert:
+    that:
+      - xiaozhi_worker_tts_assets.revision == xiaozhi_worker_llm_expected_revision
+      - xiaozhi_worker_tts_assets.workers | sort == groups['xiaozhi_workers'] | sort
+      - groups['xiaozhi_workers'] | sort == groups['deskboxes'] | sort
+  no_log: true

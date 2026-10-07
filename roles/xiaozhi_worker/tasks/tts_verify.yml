@@ -1,0 +1,18 @@
+---
+- name: Require the local TTS subscriber with matching immutable voice identity
+  ansible.builtin.command:
+    argv: ["{{ xiaozhi_worker_venv_dir }}/bin/python", '-', --bundle, "{{ xiaozhi_worker_tts_config }}", --node-id, "{{ inventory_hostname }}", --revision, "{{ xiaozhi_worker_llm_expected_revision | string }}", --fingerprint, "{{ xiaozhi_worker_tts_assets.fingerprint }}", --workers, "{{ groups['xiaozhi_workers'] | sort | join(',') }}"]
+    chdir: "{{ xiaozhi_worker_repo_dir }}/main/xiaozhi-server"
+    stdin: "{{ lookup('ansible.builtin.file', role_path ~ '/files/verify_tts.py') }}"
+  environment:
+    XIAOZHI_NATS_SERVERS: "{{ xiaozhi_worker_nats_servers }}"
+    XIAOZHI_NATS_USER: "{{ nats_client_user }}"
+    XIAOZHI_NATS_PASSWORD: "{{ nats_client_password }}"
+    PYTHONDONTWRITEBYTECODE: '1'
+  register: xiaozhi_worker_tts_ready
+  changed_when: false
+  until: xiaozhi_worker_tts_ready.rc == 0
+  retries: "{{ xiaozhi_worker_verify_retries }}"
+  delay: "{{ xiaozhi_worker_verify_delay }}"
+  no_log: true
+  diff: false

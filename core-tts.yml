@@ -1,0 +1,40 @@
+---
+# Explicit activation only after worker canary, all-node readiness and synthesis acceptance.
+# The operator supplies both the committed source SHA and frozen Cloud revision.
+- ansible.builtin.import_playbook: core.yml
+  vars:
+    xiaozhi_core_worker_rpc: true
+    xiaozhi_core_tts_enabled: true
+
+- name: Verify final shared desired state and TTS core readiness without mutation
+  hosts: xiaozhi_mqtt_gateways
+  become: true
+  gather_facts: true
+  gather_subset: [min]
+  any_errors_fatal: true
+  vars_files: [vars/vault.yml]
+  vars:
+    xiaozhi_core_worker_rpc: true
+    xiaozhi_core_tts_enabled: true
+  tasks:
+    - name: Recheck frozen worker bundles and all Cloud desired revisions
+      ansible.builtin.include_role:
+        name: xiaozhi_core
+        tasks_from: preflight
+        public: true
+    - name: Require final core audio capability and matching revision
+      ansible.builtin.uri:
+        url: "http://{{ cluster_ip }}:{{ xiaozhi_core_port }}/status"
+        use_proxy: false
+        follow_redirects: none
+        timeout: 2
+      register: xiaozhi_core_tts_final
+      changed_when: false
+      failed_when: >-
+        xiaozhi_core_tts_final.status | default(0) != 200 or
+        xiaozhi_core_tts_final.json.core_id | default('') != inventory_hostname or
+        xiaozhi_core_tts_final.json.status | default('') != 'ready' or
+        'voice_tts' not in (xiaozhi_core_tts_final.json.capabilities | default([])) or
+        xiaozhi_core_tts_final.json.tts.revision | default(0) != xiaozhi_core_asr_revision or
+        xiaozhi_core_tts_final.json.worker_rpc.state | default('') != 'connected'
+      when: not ansible_check_mode

@@ -1,0 +1,11 @@
+---
+# Reviewed opt-in source; fill deployment-local assets and Cloud revision below.
+xiaozhi_worker_tts_revision: badc1a8e8eb76f439bd38bf91c0e72395dd8d0f5
+# Existing local ASR model must remain provisioned with its verified checksum.
+xiaozhi_worker_asr_vad_sha256: ''
+# Generate with export_worker_tts_config.py from the controller validated Cloud cache.
+# Do not commit this generated bundle or put provider credentials in this vars file.
+xiaozhi_worker_tts_asset_bundle: ''
+# Use the same full source SHA and the exported positive Cloud revision for core-tts.yml.
+xiaozhi_core_revision: badc1a8e8eb76f439bd38bf91c0e72395dd8d0f5
+xiaozhi_core_asr_revision: null

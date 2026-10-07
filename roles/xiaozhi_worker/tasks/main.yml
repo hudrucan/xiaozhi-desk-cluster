@@ -29,6 +29,8 @@
       - xiaozhi_worker_llm_enabled is boolean
       - xiaozhi_worker_asr_enabled is boolean
       - xiaozhi_worker_asr_local is boolean
+      - xiaozhi_worker_tts_enabled is boolean
+      - not xiaozhi_worker_tts_enabled or (xiaozhi_worker_asr_enabled and xiaozhi_worker_asr_local and xiaozhi_worker_llm_enabled)
       - not xiaozhi_worker_asr_enabled or xiaozhi_worker_llm_enabled
       - xiaozhi_worker_revision is string
       - xiaozhi_worker_revision is match('^[0-9a-f]{40}$')
@@ -77,6 +79,10 @@
 - name: Validate the existing ASR model before any worker mutation
   ansible.builtin.include_tasks: asr_preflight.yml
   when: xiaozhi_worker_asr_enabled
+
+- name: Validate the controller TTS asset manifest before any worker mutation
+  ansible.builtin.include_tasks: tts_preflight.yml
+  when: xiaozhi_worker_tts_enabled
 
 # These steps depend on packages/accounts/directories created earlier in the
 # block. Do not execute them against nonexistent apply-time state in --check.
@@ -128,7 +134,7 @@
 
     - name: Install only pinned worker requirements into the dedicated venv
       ansible.builtin.pip:
-        requirements: "{{ xiaozhi_worker_repo_dir }}/main/xiaozhi-server/{{ ('requirements-worker-asr-local.txt' if xiaozhi_worker_asr_local else 'requirements-worker-asr.txt') if xiaozhi_worker_asr_enabled else ('requirements-worker-llm.txt' if xiaozhi_worker_llm_enabled else 'requirements-worker.txt') }}"
+        requirements: "{{ xiaozhi_worker_repo_dir }}/main/xiaozhi-server/{{ 'requirements-worker-voice.txt' if xiaozhi_worker_tts_enabled else (('requirements-worker-asr-local.txt' if xiaozhi_worker_asr_local else 'requirements-worker-asr.txt') if xiaozhi_worker_asr_enabled else ('requirements-worker-llm.txt' if xiaozhi_worker_llm_enabled else 'requirements-worker.txt')) }}"
         virtualenv: "{{ xiaozhi_worker_venv_dir }}"
         virtualenv_command: /usr/bin/python3 -m venv
         virtualenv_site_packages: false
@@ -140,7 +146,7 @@
 
 - name: Report worker source and venv desired state during check mode
   ansible.builtin.debug:
-    msg: "Worker {{ inventory_hostname }} would use {{ xiaozhi_worker_repo_url }} @ {{ xiaozhi_worker_revision }} under {{ xiaozhi_worker_root }}, with a dedicated venv and {{ ('requirements-worker-asr-local.txt' if xiaozhi_worker_asr_local else 'requirements-worker-asr.txt') if xiaozhi_worker_asr_enabled else ('requirements-worker-llm.txt' if xiaozhi_worker_llm_enabled else 'requirements-worker.txt') }}. Prerequisite/source/venv mutations and live verification are skipped in check mode."
+    msg: "Worker {{ inventory_hostname }} would use {{ xiaozhi_worker_repo_url }} @ {{ xiaozhi_worker_revision }} under {{ xiaozhi_worker_root }}, with a dedicated venv and {{ 'requirements-worker-voice.txt' if xiaozhi_worker_tts_enabled else (('requirements-worker-asr-local.txt' if xiaozhi_worker_asr_local else 'requirements-worker-asr.txt') if xiaozhi_worker_asr_enabled else ('requirements-worker-llm.txt' if xiaozhi_worker_llm_enabled else 'requirements-worker.txt')) }}. Prerequisite/source/venv mutations and live verification are skipped in check mode."
   when: ansible_check_mode
 
 - name: Export the selected LLM bundle locally before activating the worker
@@ -150,6 +156,10 @@
 - name: Export the selected ASR bundle before worker activation
   ansible.builtin.include_tasks: asr_config.yml
   when: xiaozhi_worker_asr_enabled and not ansible_check_mode
+
+- name: Provision the matching TTS assets and bundle before activation
+  ansible.builtin.include_tasks: tts_config.yml
+  when: xiaozhi_worker_tts_enabled and not ansible_check_mode
 
 - name: Render the root-only worker environment with existing NATS credentials
   ansible.builtin.template:
@@ -186,3 +196,7 @@
 - name: Verify the deployed worker with a targeted read-only probe
   ansible.builtin.include_tasks: verify.yml
   when: not ansible_check_mode
+
+- name: Verify the targeted segment TTS subscriber without synthesizing audio
+  ansible.builtin.include_tasks: tts_verify.yml
+  when: xiaozhi_worker_tts_enabled and not ansible_check_mode

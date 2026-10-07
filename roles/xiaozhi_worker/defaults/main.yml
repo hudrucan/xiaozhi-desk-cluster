@@ -25,3 +25,11 @@ xiaozhi_worker_asr_local: true
 
 # Must be supplied after the ASR source is reviewed/committed.
 xiaozhi_worker_asr_revision: null
+
+# Parallel segments inside one voice turn; not enabled by existing playbooks.
+xiaozhi_worker_tts_enabled: false
+xiaozhi_worker_tts_revision: null
+xiaozhi_worker_tts_config: /etc/xiaozhi-worker-tts/config.json
+# Private cache-only bundle exported on the controller using the server exporter.
+xiaozhi_worker_tts_asset_bundle: ''
+xiaozhi_worker_tts_controller_server_dir: "{{ playbook_dir }}/../xiaozhi-esp32-server/main/xiaozhi-server"

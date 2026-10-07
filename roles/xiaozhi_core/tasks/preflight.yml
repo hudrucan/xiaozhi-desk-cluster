@@ -10,6 +10,8 @@
       - ansible_facts.python.version.major == 3
       - ansible_facts.python.version.minor >= 11
       - xiaozhi_core_worker_rpc is boolean
+      - xiaozhi_core_tts_enabled is boolean
+      - not xiaozhi_core_tts_enabled or (xiaozhi_core_asr_revision is not none and xiaozhi_core_worker_rpc and ansible_facts.python.version.minor == 11)
       - xiaozhi_core_asr_revision is none or (xiaozhi_core_asr_revision is integer and xiaozhi_core_asr_revision > 0 and xiaozhi_core_worker_rpc)
       - xiaozhi_core_revision is string and xiaozhi_core_revision is match('^[0-9a-f]{40}$')
       - xiaozhi_core_port is integer and xiaozhi_core_port >= 1024 and xiaozhi_core_port <= 65535
@@ -59,6 +61,8 @@
     xiaozhi_core_rollout:
       revision: "{{ xiaozhi_core_revision }}"
       port: "{{ xiaozhi_core_port }}"
+      voice_revision: "{{ xiaozhi_core_asr_revision }}"
+      tts_enabled: "{{ xiaozhi_core_tts_enabled }}"
 
 - name: Retain a private comparison fingerprint for the shared auth key
   ansible.builtin.set_fact:
@@ -102,3 +106,13 @@
 - name: Check validated Cloud state before any opt-in voice core mutation
   ansible.builtin.include_tasks: voice_preflight.yml
   when: xiaozhi_core_asr_revision is not none
+
+- name: Require local worker TTS bundle before any audio core mutation
+  ansible.builtin.include_tasks: tts_preflight.yml
+  when: xiaozhi_core_tts_enabled
+
+- name: Include the frozen TTS identity in all-core rollout agreement
+  ansible.builtin.set_fact:
+    xiaozhi_core_rollout: "{{ xiaozhi_core_rollout | combine({'tts_fingerprint': xiaozhi_core_tts_fingerprint}) }}"
+  when: xiaozhi_core_tts_enabled
+  no_log: true

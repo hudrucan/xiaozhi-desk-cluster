@@ -1,0 +1,52 @@
+---
+- name: Require private TTS worker and core bundle destinations
+  ansible.builtin.assert:
+    that:
+      - xiaozhi_core_tts_config is match('^/etc/xiaozhi-core-tts/[^/]+$')
+      - xiaozhi_core_tts_worker_config is match('^/etc/xiaozhi-worker-tts/[^/]+$')
+
+- name: Inspect private regular worker bundle before bounded metadata read
+  ansible.builtin.stat:
+    path: "{{ xiaozhi_core_tts_worker_config }}"
+    follow: false
+  register: xiaozhi_core_tts_worker_stat
+
+- name: Require bounded private TTS bundle metadata
+  ansible.builtin.assert:
+    that:
+      - xiaozhi_core_tts_worker_stat.stat.isreg | default(false)
+      - not (xiaozhi_core_tts_worker_stat.stat.islnk | default(false))
+      - xiaozhi_core_tts_worker_stat.stat.mode | default('') in ['0600', '0640']
+      - xiaozhi_core_tts_worker_stat.stat.size | default(0) > 0
+      - xiaozhi_core_tts_worker_stat.stat.size | default(0) <= 524288
+
+- name: Read the existing local worker bundle metadata without provider initialization
+  ansible.builtin.slurp:
+    src: "{{ xiaozhi_core_tts_worker_config }}"
+  register: xiaozhi_core_tts_worker_live
+  no_log: true
+
+- name: Freeze the local worker TTS bundle once for this core rollout
+  ansible.builtin.set_fact:
+    xiaozhi_core_tts_worker_bundle: "{{ xiaozhi_core_tts_worker_live }}"
+  when: xiaozhi_core_tts_worker_bundle is not defined
+  no_log: true
+
+- name: Reject local worker bundle drift during serial core rollout
+  ansible.builtin.assert:
+    that: xiaozhi_core_tts_worker_live.content == xiaozhi_core_tts_worker_bundle.content
+  no_log: true
+
+- name: Require matching local worker identity and Cloud revision
+  ansible.builtin.assert:
+    that:
+      - (xiaozhi_core_tts_worker_bundle.content | b64decode | from_json).protocol == 'xiaozhi-worker-tts-config-v1'
+      - (xiaozhi_core_tts_worker_bundle.content | b64decode | from_json).worker_id == inventory_hostname
+      - (xiaozhi_core_tts_worker_bundle.content | b64decode | from_json).revision == xiaozhi_core_asr_revision
+      - (xiaozhi_core_tts_worker_bundle.content | b64decode | from_json).workers | sort == groups['xiaozhi_workers'] | sort
+  no_log: true
+
+- name: Retain the preflight voice identity privately
+  ansible.builtin.set_fact:
+    xiaozhi_core_tts_fingerprint: "{{ (xiaozhi_core_tts_worker_bundle.content | b64decode | from_json).fingerprint }}"
+  no_log: true

@@ -1019,3 +1019,57 @@ Run offline/static validation before any rollout. Canary one worker first, using
 a user-provided 16kHz mono PCM WAV with `probe_worker_asr.py`; then deploy all
 workers, opt-in cores and panel serially. Core NATS is not durable: a worker loss
 fails the current speech turn, and a later turn can choose another worker.
+
+
+### Parallel segment TTS opt-in
+
+`worker-tts.yml` is separate from `site.yml` and the existing ASR/text-only
+playbooks. It upgrades the panel reader before worker activation, freezes the
+shared Cloud revision and controller asset manifest, and deploys serially.
+A private controller TTS bundle must be exported with the server's cache-only
+`export_worker_tts_config.py` at that same revision. Its existing local model
+must be under the controller server checkout's `models/tts/` directory.
+
+The playbook copies only that checksummed model/tokens/phoneme tree. A missing
+model directory is staged, checksummed and atomically renamed. Existing model
+directories are never overwritten or deleted; their identity must already match.
+Partial staging is resumable. A mismatching existing tree requires explicit
+operator provisioning into a new versioned model directory, not overwriting a
+live native engine's assets. No asset is fetched from the Internet. The selected
+Cloud model path/settings remain authoritative; model mismatch, enabled Soundbank
+or unsupported configuration stops activation rather than changing Cloud.
+
+Copy `examples/worker-tts.vars.yml` to a private local vars file, then supply the
+reviewed/pushed server SHA, existing VAD checksum, current positive Cloud revision
+and controller asset bundle path. No defaults automatically activate TTS:
+
+```bash
+# Syntax/static checks do not deploy; --check additionally reads existing Cloud state.
+ansible-playbook -i inventory.ini worker-tts.yml --syntax-check --ask-vault-pass
+ansible-playbook -i inventory.ini worker-tts.yml --check --ask-vault-pass -e @/private/path/voice.vars.yml --limit deskb2x
+# Explicit canary; requires separate rollout authorization.
+ansible-playbook -i inventory.ini worker-tts.yml --ask-vault-pass -e @/private/path/voice.vars.yml --limit deskb2x
+```
+
+Targeted readiness is metadata-only and does not synthesize audio. Run the
+server's explicit segment benchmark with concurrency 1 on the canary before expanding workers to
+all three nodes. Compare the same segments at concurrency 1 and 3 after all
+workers are enabled; report effective synthesis RTF separately from LLM/first
+playback latency. The [server TTS guide](https://github.com/hudrucan/xiaozhi-desk-robot-server/blob/main/docs/cluster-worker-tts.md)
+describes limits, abort/failover and user-owned robot acceptance.
+
+`core-tts.yml` is a second explicit activation step after synthesis acceptance.
+It retains serial all-node core deployment, installs only core Opus dependencies,
+keeps a private node-specific copy of the frozen worker bundle, and requires all
+three targeted workers to report the same revision/voice identity before enabling
+core audio. Use the same vars file with its full `xiaozhi_core_revision` and
+`xiaozhi_core_asr_revision`. Missing or incompatible workers fail activation.
+Cloud drift and local bundle drift stop the next core mutation. `--check` neither
+installs dependencies/models nor changes services. Keep the three desk nodes on
+Python 3.11 for audioop; no Python runtime upgrade is part of this rollout.
+
+TTS Play is steady while the native slot is occupied, including cancellation join;
+LLM Play blinks, ASR Clock and fresh idle Pause remain intact. The panel accepts
+both the old ASR/LLM activity schema and its optional bounded TTS counter.
+No firmware build/flash, model downloads or live deployment are implied by adding
+these playbooks. Source pins remain explicit until review and commit/push.

@@ -1,0 +1,146 @@
+---
+- name: Reject Cloud drift before copying TTS assets
+  ansible.builtin.include_tasks: llm_preflight.yml
+
+- name: Resolve model destination from the validated controller relative path
+  ansible.builtin.set_fact:
+    xiaozhi_worker_tts_model_destination: "{{ xiaozhi_worker_llm_control_plane_root }}/repo/main/xiaozhi-server/{{ xiaozhi_worker_tts_assets.relative }}"
+  no_log: true
+
+- name: Inspect existing immutable TTS model destination
+  ansible.builtin.stat:
+    path: "{{ xiaozhi_worker_tts_model_destination }}"
+    follow: false
+  register: xiaozhi_worker_tts_model_stat
+  no_log: true
+
+- name: Require an existing model destination to be a real directory
+  ansible.builtin.assert:
+    that:
+      - not xiaozhi_worker_tts_model_stat.stat.exists or (xiaozhi_worker_tts_model_stat.stat.isdir | default(false) and not (xiaozhi_worker_tts_model_stat.stat.islnk | default(false)))
+  no_log: true
+
+# Existing model directories are never overwritten while native engines may use
+# them. Export below verifies their complete selected asset identity instead.
+- name: Stage a missing model tree before atomic publication
+  when: not xiaozhi_worker_tts_model_stat.stat.exists
+  block:
+    - name: Resolve the staging directory owned by this immutable asset identity
+      ansible.builtin.set_fact:
+        xiaozhi_worker_tts_model_staging: "{{ xiaozhi_worker_tts_model_destination }}.staging-{{ xiaozhi_worker_tts_assets.fingerprint }}"
+      no_log: true
+
+    - name: Reject symlink parents before staging model bytes
+      ansible.builtin.command:
+        argv: [/usr/bin/python3, '-', "{{ xiaozhi_worker_tts_model_staging }}"]
+        stdin: |
+          import sys
+          from pathlib import Path
+          root = Path(sys.argv[1])
+          names = {{ xiaozhi_worker_tts_assets.files.keys() | list | to_json }}
+          for name in names:
+              path = root / name
+              if any(part.is_symlink() for part in (path, *path.parents)):
+                  raise SystemExit('TTS staging must not traverse symlinks')
+      changed_when: false
+      no_log: true
+
+    - name: Create required staging directories
+      ansible.builtin.file:
+        path: "{{ xiaozhi_worker_tts_model_staging }}/{{ item }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+      loop: "{{ xiaozhi_worker_tts_assets.files.keys() | map('dirname') | unique | sort }}"
+      no_log: true
+
+    - name: Copy the exact controller assets into staging only
+      ansible.builtin.copy:
+        src: "{{ xiaozhi_worker_tts_assets.model_root }}/{{ item.key }}"
+        dest: "{{ xiaozhi_worker_tts_model_staging }}/{{ item.key }}"
+        owner: root
+        group: root
+        mode: '0644'
+        follow: false
+      loop: "{{ xiaozhi_worker_tts_assets.files | dict2items }}"
+      no_log: true
+      diff: false
+
+    - name: Verify every staged checksum and atomically publish the missing model tree
+      ansible.builtin.command:
+        argv: [/usr/bin/python3, '-', "{{ xiaozhi_worker_tts_model_staging }}", "{{ xiaozhi_worker_tts_model_destination }}"]
+        stdin: |
+          import hashlib
+          import os
+          import sys
+          from pathlib import Path
+          source, destination = map(Path, sys.argv[1:])
+          files = {{ xiaozhi_worker_tts_assets.files | to_json }}
+          for name, expected in files.items():
+              path = source / name
+              if not path.is_file() or any(p.is_symlink() for p in (path, *path.parents)):
+                  raise SystemExit('Invalid staged TTS asset')
+              with path.open('rb') as stream:
+                  if hashlib.file_digest(stream, 'sha256').hexdigest() != expected:
+                      raise SystemExit('Staged TTS checksum differs')
+          if destination.exists() or destination.is_symlink():
+              raise SystemExit('Model destination appeared during staging; rerun preflight')
+          os.rename(source, destination)
+      changed_when: true
+      no_log: true
+      notify: Restart Xiaozhi worker
+
+- name: Create the private TTS bundle directory
+  ansible.builtin.file:
+    path: "{{ xiaozhi_worker_tts_config | dirname }}"
+    state: directory
+    owner: root
+    group: "{{ xiaozhi_worker_service_user }}"
+    mode: '0750'
+
+- name: Export the Cloud-selected TTS bundle with frozen revision and membership
+  ansible.builtin.command:
+    argv:
+      - "{{ xiaozhi_worker_llm_control_plane_root }}/venv/bin/python"
+      - "{{ xiaozhi_worker_repo_dir }}/main/xiaozhi-server/export_worker_tts_config.py"
+      - --source-root
+      - "{{ xiaozhi_worker_llm_control_plane_root }}/repo/main/xiaozhi-server"
+      - --expected-revision
+      - "{{ xiaozhi_worker_llm_expected_revision | string }}"
+      - --workers
+      - "{{ groups['xiaozhi_workers'] | sort | join(',') }}"
+      - --output
+      - "{{ xiaozhi_worker_tts_config }}"
+  environment: {PYTHONDONTWRITEBYTECODE: '1'}
+  register: xiaozhi_worker_tts_export
+  changed_when: (xiaozhi_worker_tts_export.stdout | from_json).changed
+  no_log: true
+  diff: false
+  notify: Restart Xiaozhi worker
+
+- name: Give only the worker group read access to its TTS bundle
+  ansible.builtin.file:
+    path: "{{ xiaozhi_worker_tts_config }}"
+    owner: root
+    group: "{{ xiaozhi_worker_service_user }}"
+    mode: '0640'
+
+- name: Require the exported local asset identity to match the controller manifest
+  ansible.builtin.command:
+    argv: ["{{ xiaozhi_worker_venv_dir }}/bin/python", '-', "{{ xiaozhi_worker_tts_config }}", "{{ inventory_hostname }}", "{{ xiaozhi_worker_tts_assets.fingerprint }}"]
+    chdir: "{{ xiaozhi_worker_repo_dir }}/main/xiaozhi-server"
+    stdin: |
+      import sys
+      from core.cluster.tts_config import load_bundle, verify_assets
+      value = load_bundle(sys.argv[1], sys.argv[2])
+      verify_assets(value)
+      if value['fingerprint'] != sys.argv[3]:
+          raise SystemExit('Selected TTS configuration/assets differ from the frozen controller manifest')
+  become_user: "{{ xiaozhi_worker_service_user }}"
+  environment: {PYTHONDONTWRITEBYTECODE: '1'}
+  changed_when: false
+  no_log: true
+
+- name: Reject Cloud drift immediately before TTS activation
+  ansible.builtin.include_tasks: llm_preflight.yml
