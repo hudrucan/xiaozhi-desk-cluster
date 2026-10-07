@@ -1138,10 +1138,18 @@ revision overlay to that explicit value and refuses interrupted runtime applies.
 ## Device MCP voice source compatibility
 
 The distributed voice coordinator supports firmware-advertised device tools with
-server source `7be2800764c9e8273e949a6405888a2fd7f905aa` and gateway source
+server source `2e3344d1375aed3fcd2632fa1ce9f8ac8b8e8b30` and gateway source
 `e5adc471b79b577960ae6e3cab6f7b6e088f6912`. See the server repository's
-`docs/cluster-device-mcp.md` for the bounded tool/continuation contract. External
+`docs/cluster-device-mcp.md` for the bounded tool/continuation contract and built-in
+server functions, wake greeting, exit intent and spoken LLM error recovery. External
 server MCP and Vision endpoint integration remain separate work.
+
+The control-plane default pins
+`2881be4e2fcb4858fbbee863e1c9e4a9e415a996`, including a 30-second MQTT bootstrap
+keepalive. Reboot/re-bootstrap firmware to refresh its persisted setting; existing
+connections retain their negotiated interval. Silent connections expire after about
+45 seconds with the new interval; graceful disconnect clears immediately. Ending
+a conversation keeps MQTT connected. No firmware flash is needed.
 
 For the existing combined ASR/LLM/TTS deployment, explicitly select that server
 SHA in `xiaozhi_worker_asr_revision`, `xiaozhi_worker_tts_revision` and
