@@ -1,0 +1,38 @@
+# Managed by Ansible. No TCP listener, shell, package installation or remote SSH.
+[Unit]
+Description=Xiaozhi bounded local voice runtime installer
+Wants=network-online.target
+After=network-online.target nats-server.service
+
+[Service]
+Type=simple
+User=root
+Group={{ xiaozhi_control_plane_service_user }}
+WorkingDirectory={{ xiaozhi_control_plane_repo_dir }}/main/xiaozhi-server
+EnvironmentFile=/etc/xiaozhi-control-plane.env
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart={{ xiaozhi_control_plane_venv_dir }}/bin/python runtime_apply_agent.py
+Restart=on-failure
+RestartSec=3
+KillSignal=SIGTERM
+TimeoutStopSec=300
+RuntimeDirectory=xiaozhi-runtime-apply
+RuntimeDirectoryMode=0750
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectHome=true
+ProtectSystem=strict
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+CapabilityBoundingSet=CAP_CHOWN CAP_DAC_OVERRIDE CAP_FOWNER
+AmbientCapabilities=
+RestrictAddressFamilies=AF_UNIX AF_INET
+ReadWritePaths=/var/lib/xiaozhi-runtime-apply
+ReadWritePaths=/etc/xiaozhi-worker-llm /etc/xiaozhi-worker-asr /etc/xiaozhi-worker-tts
+ReadWritePaths=/etc/xiaozhi-core-tts /etc/xiaozhi-core-runtime
+
+[Install]
+WantedBy=multi-user.target

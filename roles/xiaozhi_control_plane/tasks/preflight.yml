@@ -1,4 +1,17 @@
 ---
+- name: Require no interrupted or active Settings runtime apply before deployment
+  ansible.builtin.include_tasks: "{{ role_path }}/../xiaozhi_runtime_apply/tasks/require_idle.yml"
+
+- name: Inspect installed runtime apply integration before changing the control plane
+  ansible.builtin.stat:
+    path: /etc/systemd/system/xiaozhi-core.service.d/runtime-apply.conf
+  register: xiaozhi_runtime_installed
+
+- name: Retain the installed runtime apply facility on control-plane reruns
+  ansible.builtin.assert:
+    that: not xiaozhi_runtime_installed.stat.exists or xiaozhi_control_plane_runtime_apply
+    fail_msg: Keep xiaozhi_control_plane_runtime_apply=true for an installed facility; deliberate removal requires a separate idle-state cleanup.
+
 - name: Read shared NATS public defaults without deploying NATS
   ansible.builtin.include_vars:
     file: "{{ role_path }}/../nats/defaults/main.yml"
@@ -28,6 +41,9 @@
       - ansible_facts.architecture in ['aarch64', 'arm64']
       - ansible_facts.python.version.major == 3
       - ansible_facts.python.version.minor == 11
+      - xiaozhi_control_plane_runtime_apply is boolean
+      - not xiaozhi_control_plane_runtime_apply or xiaozhi_control_plane_secret_provisioning
+      - xiaozhi_runtime_core_port is integer and xiaozhi_runtime_core_port >= 1024 and xiaozhi_runtime_core_port <= 65535
       - xiaozhi_control_plane_secret_provisioning is boolean
       - xiaozhi_control_plane_mqtt_bootstrap is boolean
       - xiaozhi_control_plane_revision is string and xiaozhi_control_plane_revision is match('^[0-9a-f]{40}$')

@@ -1,0 +1,117 @@
+---
+- name: Require complete deployed voice membership for runtime apply
+  ansible.builtin.assert:
+    that:
+      - xiaozhi_control_plane_secret_provisioning
+      - groups['xiaozhi_control_planes'] | sort == groups['xiaozhi_workers'] | sort
+      - groups['xiaozhi_control_planes'] | sort == groups['xiaozhi_mqtt_gateways'] | sort
+      - groups['xiaozhi_control_planes'] | length == 3
+    fail_msg: Runtime apply is opt-in and requires three existing voice workers/cores and authenticated control-plane peers.
+
+- name: Install the bounded node-local runtime apply facility
+  when: not ansible_check_mode
+  block:
+    - name: Inspect the required existing private voice deployment
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      register: xiaozhi_runtime_existing
+      loop:
+        - "{{ xiaozhi_control_plane_repo_dir }}/main/xiaozhi-server/runtime_apply_agent.py"
+        - /etc/xiaozhi-worker-llm/config.json
+        - /etc/xiaozhi-worker-asr/config.json
+        - /etc/xiaozhi-worker-tts/config.json
+        - /etc/xiaozhi-core-tts/config.json
+        - /etc/xiaozhi-core.env
+
+    - name: Require existing voice bundles before enabling runtime apply
+      ansible.builtin.assert:
+        that: item.stat.isreg | default(false)
+        quiet: true
+      loop: "{{ xiaozhi_runtime_existing.results }}"
+      no_log: true
+
+    - name: Create the root-owned runtime installer and environment directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0700'
+      loop:
+        - /var/lib/xiaozhi-runtime-apply
+        - /etc/xiaozhi-core-runtime
+
+    - name: Install only fixed public local installer paths and identities
+      ansible.builtin.template:
+        src: runtime-apply.json.j2
+        dest: /etc/xiaozhi-runtime-apply.json
+        owner: root
+        group: root
+        mode: '0600'
+      notify: Restart runtime apply agent
+
+    - name: Initialize the core revision overlay from the existing deployed environment only if absent
+      ansible.builtin.command:
+        argv: [/usr/bin/python3, '-']
+        creates: /etc/xiaozhi-core-runtime/revision.env
+        stdin: |
+          import os
+          import re
+          from pathlib import Path
+          source = Path('/etc/xiaozhi-core.env').read_text()
+          values = re.findall(r'(?m)^XIAOZHI_CORE_ASR_REVISION="?([0-9]+)"?$', source)
+          if len(values) != 1 or int(values[0]) < 1:
+              raise SystemExit('An existing deployed voice revision is required')
+          fd = os.open('/etc/xiaozhi-core-runtime/revision.env', os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+          with os.fdopen(fd, 'w') as output:
+              output.write('XIAOZHI_CORE_ASR_REVISION=' + values[0] + '\n')
+      no_log: true
+
+    - name: Create root-owned runtime boot-guard drop-in directories
+      ansible.builtin.file:
+        path: "/etc/systemd/system/xiaozhi-{{ item }}.service.d"
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+      loop: [worker, core]
+
+    - name: Prevent partial runtime transactions from auto-starting after power loss
+      ansible.builtin.template:
+        src: runtime-guard.conf.j2
+        dest: "/etc/systemd/system/xiaozhi-{{ item }}.service.d/runtime-apply.conf"
+        owner: root
+        group: root
+        mode: '0644'
+      loop: [worker, core]
+      notify: Reload runtime apply units
+
+    - name: Install the Unix-socket-only runtime apply agent unit
+      ansible.builtin.template:
+        src: runtime-apply.service.j2
+        dest: /etc/systemd/system/xiaozhi-runtime-apply.service
+        owner: root
+        group: root
+        mode: '0644'
+      notify:
+        - Reload runtime apply units
+        - Restart runtime apply agent
+
+    - name: Apply runtime-agent changes without restarting voice services
+      ansible.builtin.meta: flush_handlers
+
+    - name: Enable the local runtime agent
+      ansible.builtin.systemd_service:
+        name: xiaozhi-runtime-apply
+        state: started
+        enabled: true
+
+    - name: Require the private local runtime socket
+      ansible.builtin.wait_for:
+        path: /run/xiaozhi-runtime-apply/apply.sock
+        timeout: 30
+
+- name: Describe runtime apply in check mode without cache or service mutations
+  ansible.builtin.debug:
+    msg: Runtime apply would install a root-owned fixed-operation Unix socket agent and boot guards for the existing worker/core services. No bundles, models or services are changed in check mode.
+  when: ansible_check_mode

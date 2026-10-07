@@ -1,0 +1,17 @@
+---
+- name: Reject deployment during a pending Settings runtime transaction
+  ansible.builtin.command:
+    argv: [/usr/bin/python3, '-']
+    stdin: |
+      import json
+      from pathlib import Path
+      path = Path('/var/lib/xiaozhi-runtime-apply/journal.json')
+      if path.exists():
+          state = json.loads(path.read_bytes()).get('state')
+          if state not in ('complete', 'rolled_back'):
+              raise SystemExit('Finish or recover the Settings runtime transaction before Ansible deployment')
+  changed_when: false
+  check_mode: false
+  delegate_to: "{{ item }}"
+  loop: "{{ groups['deskboxes'] | sort }}"
+  run_once: true

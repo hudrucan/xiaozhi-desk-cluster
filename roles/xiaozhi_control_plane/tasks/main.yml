@@ -46,7 +46,9 @@
         umask: "0022"
       environment:
         GIT_TERMINAL_PROMPT: "0"
-      notify: Restart Xiaozhi control plane
+      notify:
+        - Restart Xiaozhi control plane
+        - Restart runtime apply agent
 
     - name: Install only control-plane requirements into its dedicated root-owned venv
       ansible.builtin.pip:
@@ -128,6 +130,11 @@
   notify:
     - Reload control-plane systemd units
     - Restart Xiaozhi control plane
+
+- name: Install the optional bounded runtime apply facility
+  ansible.builtin.include_role:
+    name: xiaozhi_runtime_apply
+  when: xiaozhi_control_plane_runtime_apply
 
 - name: Apply material control-plane changes before local readiness verification
   ansible.builtin.meta: flush_handlers

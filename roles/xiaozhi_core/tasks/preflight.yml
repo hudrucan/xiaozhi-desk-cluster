@@ -1,4 +1,7 @@
 ---
+- name: Require no interrupted or active Settings runtime apply before deployment
+  ansible.builtin.include_tasks: "{{ role_path }}/../xiaozhi_runtime_apply/tasks/require_idle.yml"
+
 - name: Require all three core members and pinned Debian ARM64 source
   ansible.builtin.assert:
     that:
@@ -17,6 +20,16 @@
       - xiaozhi_core_port is integer and xiaozhi_core_port >= 1024 and xiaozhi_core_port <= 65535
       - cluster_ip is match('^10\.10\.10\.(?:[1-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-4])$')
     fail_msg: Require three Debian ARM64 nodes, Python >=3.11 and a reviewed full core_server.py source SHA.
+
+- name: Inspect an installed Settings runtime revision overlay before core mutation
+  ansible.builtin.stat:
+    path: /etc/xiaozhi-core-runtime/revision.env
+  register: xiaozhi_core_preflight_overlay
+
+- name: Preserve enabled voice runtime when a Settings overlay is installed
+  ansible.builtin.assert:
+    that: not xiaozhi_core_preflight_overlay.stat.exists or (xiaozhi_core_tts_enabled and xiaozhi_core_worker_rpc and xiaozhi_core_asr_revision is not none)
+    fail_msg: An installed Settings runtime apply facility requires an explicit current frozen voice revision and voice core deployment.
 
 - name: Require the same gateway backend authentication key from Vault
   ansible.builtin.assert:

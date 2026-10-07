@@ -1,0 +1,10 @@
+{
+  "node_id": {{ inventory_hostname | to_json }},
+  "nodes": {{ groups['xiaozhi_control_planes'] | sort | to_json }},
+  "source_root": {{ (xiaozhi_control_plane_repo_dir ~ '/main/xiaozhi-server') | to_json }},
+  "core_host": {{ cluster_ip | to_json }},
+  "core_port": {{ xiaozhi_runtime_core_port }},
+  "control_plane_user": {{ xiaozhi_control_plane_service_user | to_json }},
+  "worker_group": "xiaozhi-worker",
+  "core_group": "xiaozhi-core"
+}

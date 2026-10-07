@@ -1,4 +1,7 @@
 ---
+- name: Require no interrupted or active Settings runtime apply before deployment
+  ansible.builtin.include_tasks: "{{ role_path }}/../xiaozhi_runtime_apply/tasks/require_idle.yml"
+
 - name: Read shared NATS public defaults without deploying NATS
   ansible.builtin.include_vars:
     file: "{{ role_path }}/../nats/defaults/main.yml"
@@ -37,6 +40,16 @@
       - nats_client_user is string and nats_client_user | trim | length > 0
       - nats_client_port | int > 0 and nats_client_port | int < 65536
     fail_msg: Worker deployment requires an explicit worker member, three Desk NATS nodes, Debian ARM64 Python 3.11 and a full pinned Git SHA.
+
+- name: Inspect the installed runtime apply boot guard before worker mutation
+  ansible.builtin.stat:
+    path: /etc/systemd/system/xiaozhi-worker.service.d/runtime-apply.conf
+  register: xiaozhi_worker_runtime_guard
+
+- name: Preserve the combined voice worker when runtime apply is installed
+  ansible.builtin.assert:
+    that: not xiaozhi_worker_runtime_guard.stat.exists or (xiaozhi_worker_llm_enabled and xiaozhi_worker_asr_enabled and xiaozhi_worker_tts_enabled)
+    fail_msg: Keep the explicit combined ASR/LLM/TTS worker deployment while Settings runtime apply is installed.
 
 - name: Validate the existing private NATS node addresses
   ansible.builtin.assert:

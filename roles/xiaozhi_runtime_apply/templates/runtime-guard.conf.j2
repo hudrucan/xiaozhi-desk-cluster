@@ -1,0 +1,6 @@
+# Managed by Ansible. Pending transactions may start only through the root agent.
+[Service]
+ExecStartPre=+{{ xiaozhi_control_plane_venv_dir }}/bin/python {{ xiaozhi_control_plane_repo_dir }}/main/xiaozhi-server/runtime_apply_agent.py --boot-guard {{ item }}
+{% if item == 'core' %}
+EnvironmentFile=/etc/xiaozhi-core-runtime/revision.env
+{% endif %}

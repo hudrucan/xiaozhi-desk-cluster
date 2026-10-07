@@ -88,6 +88,24 @@
       no_log: true
       diff: false
       register: xiaozhi_core_env
+    - name: Inspect an installed Settings runtime revision overlay
+      ansible.builtin.stat:
+        path: /etc/xiaozhi-core-runtime/revision.env
+      register: xiaozhi_core_runtime_overlay
+    - name: Require an explicit voice revision when the runtime apply overlay exists
+      ansible.builtin.assert:
+        that: xiaozhi_core_asr_revision is not none
+      when: xiaozhi_core_runtime_overlay.stat.exists
+    - name: Converge the existing runtime overlay to the frozen Ansible voice revision
+      ansible.builtin.copy:
+        content: "XIAOZHI_CORE_ASR_REVISION={{ xiaozhi_core_asr_revision }}\n"
+        dest: /etc/xiaozhi-core-runtime/revision.env
+        owner: root
+        group: root
+        mode: '0600'
+      when: xiaozhi_core_runtime_overlay.stat.exists
+      register: xiaozhi_core_runtime_overlay_update
+      diff: false
     - name: Install the core systemd candidate
       ansible.builtin.template:
         src: core.service.j2
@@ -101,7 +119,7 @@
         name: xiaozhi-core
         enabled: true
         daemon_reload: "{{ xiaozhi_core_unit.changed }}"
-        state: "{{ 'restarted' if xiaozhi_core_env.changed or xiaozhi_core_unit.changed or xiaozhi_core_dependencies.changed or (xiaozhi_core_tts_bundle_install.changed | default(false)) else 'started' }}"
+        state: "{{ 'restarted' if xiaozhi_core_env.changed or xiaozhi_core_unit.changed or xiaozhi_core_dependencies.changed or (xiaozhi_core_runtime_overlay_update.changed | default(false)) or (xiaozhi_core_tts_bundle_install.changed | default(false)) else 'started' }}"
     - name: Require identity, transport readiness and resolved VIP observation
       ansible.builtin.uri:
         url: "http://{{ cluster_ip }}:{{ xiaozhi_core_port }}/status"

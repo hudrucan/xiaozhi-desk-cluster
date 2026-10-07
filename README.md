@@ -1099,3 +1099,37 @@ delay, three-second ping timeout): native ASR/TTS initialization happens before
 NATS subscriptions and took about 69 seconds on the canary. Non-TTS worker
 readiness keeps the existing 10 retries. This changes deployment verification
 only; request deadlines and runtime reconnect behavior remain unchanged.
+
+## Apply voice runtime from shared Settings
+
+`xiaozhi_control_plane_runtime_apply: true` is an explicit opt-in for an already
+deployed three-node ASR/LLM/TTS cluster; it requires secret provisioning's existing
+authenticated private peer map. `site.yml --tags control-plane` installs only the
+local agent/boot guards and enables the Settings action. It does not apply a new
+voice revision or restart worker/core services by itself.
+
+Save publishes Cloud desired state. **Apply runtime** first validates offline
+bundles, existing models, local keys and Soundbank readiness on all three nodes.
+Then it pauses conversation cores, stops workers, installs the bundles, verifies
+workers serially, and only then reopens cores. Settings, NATS, MQTT and VIP remain
+running. Expect a maintenance pause while native models warm; end an ongoing
+conversation before applying. Inference/providers are not loaded by the control
+plane or local installer.
+
+The root-owned installer exposes a permission-restricted Unix socket only. It
+accepts fixed revision operations, no command/service/path supplied by browsers,
+and never sends credentials/config bodies over NATS. Internal HTTP peer commands
+use authenticated encryption and remain blocked by HAProxy's `/internal/` rule.
+The control plane retains its unprivileged systemd sandbox; it has no sudo/SSH.
+
+An interrupted apply retains root-only backups/journals. **Recover runtime**
+restores the previous bundles on every prepared node; all three nodes must be
+reachable. Boot guards prevent partially installed runtimes from auto-starting
+after power loss. A failed worker verification never reopens new cores.
+
+The action applies supported ASR/VAD, Gemini LLM, Sherpa TTS and Soundbank settings
+using installed adapters/model files. New models/dependencies, unsupported runtime
+features and ingress VIP changes still require their deployment playbooks.
+Ansible does not own or pin the Cloud VIP. When deploying cores through Ansible,
+use the current frozen Cloud/runtime revision; the core role updates the installed
+revision overlay to that explicit value and refuses interrupted runtime applies.

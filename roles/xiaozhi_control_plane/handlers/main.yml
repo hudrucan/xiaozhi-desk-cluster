@@ -11,3 +11,15 @@
     enabled: true
     state: restarted
   when: not ansible_check_mode
+
+- name: Reload runtime apply units
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+  when: not ansible_check_mode and xiaozhi_control_plane_runtime_apply
+
+- name: Restart runtime apply agent
+  ansible.builtin.systemd_service:
+    name: xiaozhi-runtime-apply
+    enabled: true
+    state: restarted
+  when: not ansible_check_mode and xiaozhi_control_plane_runtime_apply
