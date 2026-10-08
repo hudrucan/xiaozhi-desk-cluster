@@ -1198,5 +1198,26 @@ matching authority/revision readiness, including temporarily offline nodes.
 See the server's `docs/cluster-memory.md` for Memory V2 migration, legacy
 single-writer compatibility, conflict/uncertain-write handling and per-device
 conversation tool semantics. Code rollout and Cloud runtime Apply remain separate
-operations. The control-plane source default now pins the above Memory-compatible
-release; the prior VLM/device-MCP release remains documented for comparison.
+operations. The control-plane source default pins the current compatible release documented
+below; the prior Memory and VLM/device-MCP releases remain documented for comparison.
+
+
+## Distributed response emotion
+
+The compatible server source is `9c86a30501a2051cb9852aa63c4a49c54a16dd65`. Upgrade all combined
+ASR/LLM/TTS workers before activating this source on any conversation core: old
+workers reject the new optional emotion capability on tool-aware LLM requests.
+Update control planes to the same source. The control-plane default pins this
+release; ping-only worker and transport-only core defaults remain separate
+opt-ins. Source rollout restarts interrupt existing conversations.
+
+This is a source-only upgrade with unchanged requirements, models and runtime
+bundles. Preserve the current Cloud/runtime revision and deployed credentials;
+no runtime Apply, Cloud migration or firmware flash is needed. The core sends
+the existing firmware emotion message once at response start, using the same
+emoji mapping as `app.py`. Later chunks, tool continuation and TTS segments do
+not overwrite it; abort discards stale response chunks. An explicit false
+`features.emoji` capability disables emotion messages.
+
+See server `docs/cluster-emotion.md` for compatibility and the user-owned face,
+interrupt and device-tool verification checks.
