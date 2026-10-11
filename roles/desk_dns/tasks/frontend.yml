@@ -54,3 +54,29 @@
       retries: 5
       delay: 2
       changed_when: false
+
+    - name: Validate and install the independent DNS UI proxy candidate
+      ansible.builtin.template:
+        src: ui-haproxy.cfg.j2
+        dest: /etc/desk-dns/ui-haproxy.cfg
+        owner: root
+        group: root
+        mode: '0644'
+        validate: /usr/sbin/haproxy -c -f %s
+      register: desk_dns_ui_config
+
+    - name: Install the independent DNS UI proxy unit
+      ansible.builtin.template:
+        src: desk-dns-ui.service.j2
+        dest: /etc/systemd/system/desk-dns-ui.service
+        owner: root
+        group: root
+        mode: '0644'
+      register: desk_dns_ui_unit
+
+    - name: Start or restart only the DNS UI proxy
+      ansible.builtin.systemd_service:
+        name: desk-dns-ui
+        state: "{{ 'restarted' if desk_dns_ui_config.changed or desk_dns_ui_unit.changed else 'started' }}"
+        enabled: true
+        daemon_reload: true

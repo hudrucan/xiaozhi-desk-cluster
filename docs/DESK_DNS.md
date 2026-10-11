@@ -54,7 +54,7 @@ Package installation suppresses the vendor dnsdist service startup; only the
 custom `desk-dnsdist` unit is activated. An already active vendor dnsdist service
 is rejected in preflight; the unused vendor unit is disabled for subsequent boots.
 
-`desk-adguard`, `desk-dnsdist`, `desk-dns-vip`, `desk-dns-activity`
+`desk-adguard`, `desk-dnsdist`, `desk-dns-vip`, `desk-dns-activity`, `desk-dns-ui`
 and `desk-dns-peer-arp.timer` are
 separate from every Xiaozhi service. DNS has a dedicated slice with total CPU
 quota 50% of one CPU, low CPU/IO weights, 256 MiB memory pressure threshold and
@@ -86,8 +86,15 @@ all service changes. It is not an actual service/configuration acceptance test.
 
 ## UI, policy and monitoring
 
-Each AdGuard has its own authenticated UI, query log and statistics. The UI is
-loopback-only; use a tunnel to the desired node, for example:
+Open `http://192.168.1.250:3001/` for the authenticated UI on the current DNS
+VIP owner. `desk-dns-ui` is a separate unprivileged HAProxy process restricted
+to the management LAN, with a bounded DNS-slice budget. It never changes or
+reloads the Xiaozhi HAProxy service. The backend remains loopback-only. UI failure
+does not withdraw otherwise healthy DNS. A VIP failover may require signing in
+again because login sessions and statistics remain node-local.
+
+Each AdGuard has its own policy, query log and statistics; automatic policy sync
+is a separate next step. For a specific node, use an SSH tunnel, for example:
 
 ```bash
 ssh -N -L 3001:127.0.0.1:3001 ops@192.168.1.101
@@ -219,3 +226,12 @@ validators. Those validators remain mandatory before activation on real nodes.
 - [dnsdist selection policies](https://www.dnsdist.org/guides/serverselection.html)
 - [dnsdist backend health](https://www.dnsdist.org/guides/downstreams.html)
 - [dnsdist source address handling](https://www.dnsdist.org/advanced/passing-source-address.html)
+
+## Runtime file naming
+
+The managed configuration is `/var/lib/desk-adguard/adguard-home.yaml`.
+An existing `AdGuardHome.yaml` is moved only while that node's AdGuard is stopped,
+preserving local UI policy and credentials. The unit explicitly selects the new
+name with `-c`; the vendor binary remains `AdGuardHome`. Conflicting old/new files
+stop migration rather than overwriting either. Subsequent applies use only the
+kebab-case configuration path.

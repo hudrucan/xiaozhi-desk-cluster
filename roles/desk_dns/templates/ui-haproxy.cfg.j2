@@ -1,0 +1,18 @@
+# Separate from the Xiaozhi HAProxy process and configuration.
+global
+    maxconn 64
+
+defaults
+    mode http
+    timeout connect 2s
+    timeout client 60s
+    timeout server 60s
+
+frontend dns_admin
+    bind {{ desk_dns_vip }}:{{ desk_dns_web_port }}
+    http-request deny unless { src 192.168.1.0/24 127.0.0.1 }
+    http-response set-header X-Desk-DNS-Node {{ inventory_hostname }}
+    default_backend local_adguard
+
+backend local_adguard
+    server local 127.0.0.1:{{ desk_dns_web_port }}

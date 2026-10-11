@@ -196,7 +196,7 @@ def topology(config, node):
         raise ValueError('Unmanaged vendor dnsdist service is active')
     # Check only managed endpoints; leave local resolver/other service ports alone.
     managed = set()
-    for service in ('desk-adguard', 'desk-dnsdist'):
+    for service in ('desk-adguard', 'desk-dnsdist', 'desk-dns-ui'):
         for line in run('systemctl', 'show', service, '--property=MainPID').splitlines():
             managed.add(line.split('=', 1)[1])
     for line in run('ss', '-H', '-lnutp').splitlines():
@@ -206,7 +206,7 @@ def topology(config, node):
         endpoint = fields[4]
         for host, port in ((address, config['test_port']), (config['vip'], 53),
                            (config['nodes'][node]['private'], config['backend_port']),
-                           ('127.0.0.1', config['web_port'])):
+                           ('127.0.0.1', config['web_port']), (config['vip'], config['web_port'])):
             if endpoint in (host + ':' + str(port), '0.0.0.0:' + str(port), '*:' + str(port), '[::]:' + str(port)):
                 if not set(re.findall(r'pid=(\d+)', line)) & managed:
                     raise ValueError('DNS endpoint is already used by an unmanaged service')

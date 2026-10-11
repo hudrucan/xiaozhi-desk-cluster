@@ -45,6 +45,10 @@ for node, address in nodes.items():
             assert 'roundrobin' in rendered
             assert '192.168.1.186' not in rendered
             assert 'webserver(' not in rendered
+        if path.name=='ui-haproxy.cfg.j2':
+            assert 'bind 192.168.1.250:3001' in rendered
+            assert 'server local 127.0.0.1:3001' in rendered
+            assert '192.168.1.186' not in rendered
         if path.name=='desk-dns-vip.service.j2':
             assert 'RestrictAddressFamilies=AF_UNIX AF_INET AF_NETLINK AF_PACKET' in rendered
         if path.name=='desk-dns-activity.service.j2':
@@ -75,4 +79,4 @@ assert backend[-1]['ansible.builtin.systemd_service']['name']=='desk-dns-activit
 assert 'desk_dns_activity_script.changed or desk_dns_activity_unit.changed' in backend[-1]['ansible.builtin.systemd_service']['state']
 assert all('desk-dns-activity' not in (role/'templates'/name).read_text() for name in ('desk-adguard.service.j2','desk-dnsdist.service.j2','desk-dns-vip.service.j2'))
 
-print(f'PASS: {len(yamls)} YAML files, {len(pyfiles)} Python ASTs, 21 rendered templates, check-mode/rollout isolation fixtures')
+print(f'PASS: {len(yamls)} YAML files, {len(pyfiles)} Python ASTs, 27 rendered templates, check-mode/rollout isolation fixtures')

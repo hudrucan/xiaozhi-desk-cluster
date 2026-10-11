@@ -55,6 +55,7 @@ class ProbeTests(unittest.TestCase):
                 ('/usr/sbin/keepalived', '--version'): '',
                 ('systemctl', 'show', 'desk-adguard', '--property=MainPID'): 'MainPID=0',
                 ('systemctl', 'show', 'desk-dnsdist', '--property=MainPID'): 'MainPID=0',
+                ('systemctl', 'show', 'desk-dns-ui', '--property=MainPID'): 'MainPID=0',
                 ('ss', '-H', '-lnutp'): '',
                 ('apt-cache', 'policy', 'dnsdist'): 'Installed: (none)\nCandidate: 1.7.3-2',
                 ('apt-get', '--simulate', '--no-install-recommends', 'install', 'dnsdist=1.7.3-2'): 'Inst dnsdist (1.7.3-2)',

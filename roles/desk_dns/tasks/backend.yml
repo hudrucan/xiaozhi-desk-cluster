@@ -11,6 +11,21 @@
   block:
     - ansible.builtin.include_tasks: common.yml
 
+    - name: Inspect the former mixed-case runtime configuration
+      ansible.builtin.stat:
+        path: /var/lib/desk-adguard/AdGuardHome.yaml
+      register: desk_dns_legacy_config
+
+    - name: Inspect the kebab-case runtime configuration
+      ansible.builtin.stat:
+        path: /var/lib/desk-adguard/adguard-home.yaml
+      register: desk_dns_named_config
+
+    - name: Reject ambiguous runtime configuration migration
+      ansible.builtin.assert:
+        that: not (desk_dns_legacy_config.stat.exists and desk_dns_named_config.stat.exists)
+        fail_msg: Both runtime names exist. Preserve the live policy and resolve the duplicate before migration.
+
     - name: Download checksum-pinned official ARM64 archive
       ansible.builtin.get_url:
         url: "https://github.com/AdguardTeam/AdGuardHome/releases/download/{{ desk_dns_adguard_version }}/AdGuardHome_linux_arm64.tar.gz"
@@ -57,9 +72,57 @@
       changed_when: false
       no_log: true
 
+    - name: Migrate the validated runtime name while preserving local policy
+      when: desk_dns_legacy_config.stat.exists
+      block:
+        - name: Validate the retained policy before interrupting AdGuard
+          ansible.builtin.command:
+            argv: ["/opt/desk-adguard/{{ desk_dns_adguard_version }}/AdGuardHome/AdGuardHome", --check-config, --no-check-update, -w, /var/lib/desk-adguard, -c, /var/lib/desk-adguard/AdGuardHome.yaml]
+          changed_when: false
+          no_log: true
+        - name: Stop only AdGuard before preserving its latest mutable configuration
+          ansible.builtin.systemd_service:
+            name: desk-adguard
+            state: stopped
+        - name: Move the existing policy without rendering or replacing its contents
+          ansible.builtin.command:
+            argv: [/usr/bin/mv, /var/lib/desk-adguard/AdGuardHome.yaml, /var/lib/desk-adguard/adguard-home.yaml]
+            creates: /var/lib/desk-adguard/adguard-home.yaml
+        - name: Install the renamed runtime unit with a rollback copy
+          ansible.builtin.template:
+            src: desk-adguard.service.j2
+            dest: /etc/systemd/system/desk-adguard.service
+            mode: '0644'
+            backup: true
+          register: desk_dns_migration_unit
+        - name: Resume AdGuard using the renamed policy
+          ansible.builtin.systemd_service:
+            name: desk-adguard
+            state: started
+            daemon_reload: true
+      rescue:
+        - name: Restore the former runtime filename if it was moved
+          ansible.builtin.command:
+            argv: [/usr/bin/python3, '-c', "from pathlib import Path; old=Path('/var/lib/desk-adguard/AdGuardHome.yaml'); new=Path('/var/lib/desk-adguard/adguard-home.yaml'); new.rename(old) if new.exists() and not old.exists() else None"]
+        - name: Restore the former service candidate
+          ansible.builtin.copy:
+            src: "{{ desk_dns_migration_unit.backup_file }}"
+            dest: /etc/systemd/system/desk-adguard.service
+            remote_src: true
+            mode: '0644'
+          when: desk_dns_migration_unit.backup_file | default('') | length > 0
+        - name: Resume the preserved AdGuard service after failed migration
+          ansible.builtin.systemd_service:
+            name: desk-adguard
+            state: started
+            daemon_reload: true
+        - name: Stop rollout after restoring the original runtime name
+          ansible.builtin.fail:
+            msg: Runtime filename migration failed; original policy and unit were restored.
+
     - name: Check installed AdGuard configuration
       ansible.builtin.stat:
-        path: /var/lib/desk-adguard/AdGuardHome.yaml
+        path: /var/lib/desk-adguard/adguard-home.yaml
       register: desk_dns_existing_config
 
     - name: Determine whether managed policy must be replaced
@@ -75,7 +138,7 @@
           - -w
           - /var/lib/desk-adguard
           - -c
-          - /var/lib/desk-adguard/AdGuardHome.yaml
+          - /var/lib/desk-adguard/adguard-home.yaml
       changed_when: false
       no_log: true
       when: not desk_dns_policy_changed
@@ -97,7 +160,7 @@
     - name: Install already validated policy
       ansible.builtin.copy:
         src: /var/lib/desk-adguard/candidate.yaml
-        dest: /var/lib/desk-adguard/AdGuardHome.yaml
+        dest: /var/lib/desk-adguard/adguard-home.yaml
         remote_src: true
         owner: desk-adguard
         group: desk-adguard
