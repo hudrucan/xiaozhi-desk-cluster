@@ -4,9 +4,13 @@ http:
   session_ttl: 720h
   pprof: {enabled: false, port: 6060}
   doh: {insecure_enabled: false}
+{% if desk_dns_ui_auth_enabled %}
 users:
   - name: {{ desk_dns_admin_user | to_json }}
     password: {{ desk_dns_admin_password_hash | to_json }}
+{% else %}
+users: []
+{% endif %}
 dns:
   bind_hosts: [{{ cluster_ip | to_json }}]
   port: {{ desk_dns_backend_port }}

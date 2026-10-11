@@ -1,0 +1,11 @@
+---
+desk_monitoring_version: "0.21.0"
+desk_monitoring_hub_port: 8090
+desk_dns_adguard_version: v0.107.79
+desk_dns_backend_port: 5354
+desk_dns_web_port: 3001
+desk_dns_admin_user: admin
+desk_dns_admin_password_hash: ''
+desk_dns_upstreams: [1.1.1.1, 9.9.9.9]
+desk_dns_filter_url: https://adguardteam.github.io/AdGuardSDNSFilter/Filters/filter.txt
+desk_dns_user_rules: []

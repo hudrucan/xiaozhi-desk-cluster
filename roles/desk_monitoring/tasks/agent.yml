@@ -1,0 +1,32 @@
+---
+- name: Install the metrics agent only on a real apply
+  when: not ansible_check_mode
+  block:
+    - name: Trust each independent hub's public SSH key
+      ansible.builtin.copy:
+        content: "{{ groups['desk_monitoring'] | sort | map('extract', hostvars, 'desk_monitoring_public_key') | join('\n') }}\n"
+        dest: /etc/desk-monitoring/hub-keys.pub
+        mode: '0644'
+      register: desk_monitoring_trust
+    - name: Install the private metrics agent unit
+      ansible.builtin.template:
+        src: beszel-agent.service.j2
+        dest: /etc/systemd/system/beszel-agent.service
+        mode: '0644'
+      register: desk_monitoring_agent_unit
+    - name: Start or update only the metrics agent
+      ansible.builtin.systemd_service:
+        name: beszel-agent
+        state: "{{ 'restarted' if desk_monitoring_trust.changed or desk_monitoring_agent_unit.changed else 'started' }}"
+        enabled: true
+        daemon_reload: true
+    - name: Require all three systems to have a recent sample from this hub
+      ansible.builtin.command:
+        argv: [/usr/bin/python3, /usr/local/libexec/desk-monitoring/bootstrap.py, --host, "{{ cluster_ip }}", --verify]
+        stdin: "{{ {'credentials': desk_monitoring_credentials, 'nodes': desk_monitoring_nodes} | to_json }}"
+      register: desk_monitoring_agent_ready
+      no_log: true
+      changed_when: false
+      until: desk_monitoring_agent_ready.rc == 0
+      retries: 12
+      delay: 5

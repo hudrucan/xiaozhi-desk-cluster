@@ -15,3 +15,9 @@ xiaozhi_ingress_garp_refresh_repeat: 2
 
 # Owner-only unicast ARP supplements broadcast GARP on Wi-Fi offload adapters.
 xiaozhi_ingress_peer_arp_seconds: 5
+
+# Optional monitoring route; the monitoring services are deployed only by monitoring.yml.
+xiaozhi_ingress_monitoring_enabled: false
+xiaozhi_ingress_unified_ui_enabled: false
+# DNS has its own Ansible-owned VIP; the Settings VIP remains Cloud-owned.
+desk_dns_vip: 192.168.1.250

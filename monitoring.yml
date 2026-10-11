@@ -1,0 +1,66 @@
+---
+# Opt-in trial; never imported by site.yml. Histories/accounts are independent.
+- name: Freeze the cluster before installing independent monitoring hubs
+  hosts: desk_monitoring
+  become: true
+  gather_facts: true
+  any_errors_fatal: true
+  tasks:
+    - ansible.builtin.include_role:
+        name: desk_monitoring
+        tasks_from: preflight
+        public: true
+    - name: Require a single shared existing ingress VIP
+      ansible.builtin.assert:
+        that: groups['desk_monitoring'] | map('extract', hostvars, 'desk_monitoring_vip') | unique | list | length == 1
+      run_once: true
+    - name: Load ignored bootstrap credentials without exposing them
+      ansible.builtin.set_fact:
+        desk_monitoring_credentials: "{{ lookup('ansible.builtin.file', playbook_dir + '/secret/desk-monitoring.json') | from_json }}"
+      no_log: true
+      when: not ansible_check_mode
+    - name: Build the symmetric private agent membership
+      ansible.builtin.set_fact:
+        desk_monitoring_nodes: "{{ desk_monitoring_nodes | default({}) | combine({item: hostvars[item].cluster_ip}) }}"
+      loop: "{{ groups['desk_monitoring'] | sort }}"
+- name: Install private hubs with isolated databases one node at a time
+  hosts: desk_monitoring
+  become: true
+  gather_facts: false
+  serial: 1
+  any_errors_fatal: true
+  tasks:
+    - ansible.builtin.include_role:
+        name: desk_monitoring
+        tasks_from: hub
+- name: Connect each agent to all three independent hubs
+  hosts: desk_monitoring
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  tasks:
+    - ansible.builtin.include_role:
+        name: desk_monitoring
+        tasks_from: agent
+- name: Expose monitoring behind the existing management frontend
+  hosts: desk_monitoring
+  become: true
+  gather_facts: false
+  serial: 1
+  any_errors_fatal: true
+  tasks:
+    - ansible.builtin.include_role:
+        name: desk_monitoring
+        tasks_from: proxy
+- name: Verify protected services after the trial rollout
+  hosts: desk_monitoring
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  tasks:
+    - name: Require unchanged runtime PIDs, DNS role and non-monitoring configuration
+      ansible.builtin.command:
+        argv: [/usr/bin/python3, '-c', "{{ lookup('ansible.builtin.file', playbook_dir + '/roles/desk_monitoring/files/monitoring_probe.py') }}", guard, --private, "{{ cluster_ip }}", --vip, "{{ desk_monitoring_vip }}", --after-proxy]
+        stdin: "{{ desk_monitoring_snapshot | to_json }}"
+      changed_when: false
+      check_mode: false

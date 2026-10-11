@@ -12,6 +12,9 @@ def account_candidate(document, config):
     if document.get('schema_version') != 34:
         raise ValueError('Unexpected AdGuard schema')
     users = document.get('users', [])
+    if not config.get('local_auth', True):
+        document['users'] = []
+        return document, bool(users)
     wanted = {'name': config['username'], 'password': config['password_hash']}
     existing = [x for x in users if x['name'] == config['username']]
     if len(existing) > 1 or (existing and existing[0] != wanted):

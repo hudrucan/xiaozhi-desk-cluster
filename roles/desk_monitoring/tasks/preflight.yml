@@ -1,0 +1,27 @@
+---
+- name: Require symmetric Debian ARM64 membership
+  ansible.builtin.assert:
+    that:
+      - groups.get('desk_monitoring', []) | sort == ['deskb1x', 'deskb2x', 'deskb3x']
+      - ansible_play_hosts_all | sort == groups['desk_monitoring'] | sort
+      - ansible_facts.distribution == 'Debian'
+      - ansible_facts.architecture == 'aarch64'
+      - desk_monitoring_version == '0.21.0'
+      - desk_monitoring_hub_port == 8090
+      - desk_monitoring_agent_port == 45876
+- name: Read deployment VIP snapshot without assigning it
+  ansible.builtin.slurp:
+    src: /etc/xiaozhi-ingress.json
+  register: desk_monitoring_ingress
+- name: Resolve the existing management URL
+  ansible.builtin.set_fact:
+    desk_monitoring_vip: "{{ (desk_monitoring_ingress.content | b64decode | from_json).vip }}"
+- name: Freeze existing process state and validate available trial ports
+  ansible.builtin.command:
+    argv: [/usr/bin/python3, '-c', "{{ lookup('ansible.builtin.file', role_path + '/files/monitoring_probe.py') }}", freeze, --private, "{{ cluster_ip }}", --vip, "{{ desk_monitoring_vip }}"]
+  register: desk_monitoring_freeze
+  changed_when: false
+  check_mode: false
+- name: Retain the original monitoring preflight for final verification
+  ansible.builtin.set_fact:
+    desk_monitoring_snapshot: "{{ desk_monitoring_freeze.stdout | from_json }}"

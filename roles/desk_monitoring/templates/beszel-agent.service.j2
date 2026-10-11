@@ -1,0 +1,37 @@
+[Unit]
+Description=Beszel metrics agent for all three independent hubs
+After=network-online.target
+Wants=network-online.target
+[Service]
+User=beszel-agent
+Group=beszel-agent
+SupplementaryGroups=systemd-journal
+StateDirectory=beszel-agent
+StateDirectoryMode=0700
+Environment="DATA_DIR=/var/lib/beszel-agent"
+Environment="LISTEN={{ cluster_ip }}:{{ desk_monitoring_agent_port }}"
+Environment="KEY_FILE=/etc/desk-monitoring/hub-keys.pub"
+Environment="DOCKER_HOST="
+Environment="DOCKER_IMAGE_CHECK=false"
+Environment="SKIP_GPU=true"
+Environment="SMART_DEVICES="
+Environment="SERVICE_PATTERNS=xiaozhi*,desk-*,beszel*,nats-server*,haproxy*,keepalived*"
+ExecStart=/opt/desk-monitoring/{{ desk_monitoring_version }}/beszel-agent
+Restart=on-failure
+RestartSec=5
+Slice=desk-monitoring.slice
+MemoryMax=64M
+TasksMax=32
+Nice=10
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+CapabilityBoundingSet=
+RestrictSUIDSGID=true
+[Install]
+WantedBy=multi-user.target

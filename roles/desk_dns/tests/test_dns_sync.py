@@ -35,6 +35,14 @@ class PolicyTests(unittest.TestCase):
         self.assertEqual(result['users'][0], original['users'][0])
         self.assertFalse(account.account_candidate(result, {'username': 'desk-sync', 'password_hash': 'service-hash'})[1])
 
+    def test_anonymous_local_mode_does_not_reintroduce_automation_user(self):
+        document = {'schema_version': 34, 'users': [{'name': 'admin', 'password': 'fixture'}], 'dns': {'port': 5354}}
+        result, changed = account.account_candidate(document, {'local_auth': False})
+        self.assertTrue(changed)
+        self.assertEqual(result['users'], [])
+        self.assertEqual(result['dns'], {'port': 5354})
+        self.assertFalse(account.account_candidate(result, {'local_auth': False})[1])
+
     def test_unknown_existing_account_is_not_rotated(self):
         with self.assertRaises(ValueError):
             account.account_candidate({'schema_version': 34, 'users': [{'name': 'desk-sync', 'password': 'old'}]},
@@ -165,6 +173,25 @@ class BoundaryTests(unittest.TestCase):
 
 
 class SessionTests(unittest.TestCase):
+    def test_anonymous_local_fetch_skips_login_and_keeps_peer_auth(self):
+        import io
+        config = {'adguard': 'http://127.0.0.1:3001', 'local_auth': False,
+                  'username': 'desk-sync', 'password': 'fixture-peer-password'}
+        requests = []
+        class FakeOpener:
+            def open(self, request, timeout):
+                requests.append(request)
+                return io.BytesIO(b'{"ok":true}')
+        with patch.object(sync.urllib.request, 'build_opener', return_value=FakeOpener()):
+            self.assertEqual(sync.fetch(config['adguard'] + '/control/status', config), {'ok': True})
+            sync.fetch(config['adguard'] + '/control/profile/update', config, 'PUT', {'name': 'desk-sync', 'theme': 'dark'})
+            sync.fetch('https://192.168.1.250:3002/control/status', config)
+        self.assertEqual(len(requests), 3)
+        self.assertNotIn('Cookie', requests[0].headers)
+        self.assertNotIn('Authorization', requests[0].headers)
+        self.assertEqual(json.loads(requests[1].data), {'theme': 'dark'})
+        self.assertEqual(requests[2].headers['Authorization'], sync.basic(config))
+
     def test_local_adguard_authenticates_once_and_refreshes_revoked_session(self):
         state = {'logins': 0, 'revoked': False}
         class FakeAdGuard(sync.http.server.BaseHTTPRequestHandler):

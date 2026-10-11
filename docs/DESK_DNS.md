@@ -356,3 +356,11 @@ its last local policy if synchronization stops. Turning off a node's timer does
 not affect DNS forwarding. No router DNS changes occur in this playbook.
 
 Reference: [upstream sync documentation](https://github.com/bakito/adguardhome-sync/tree/v0.9.3).
+
+## Current unified UI and local auth mode
+
+Use the management VIP at `http://192.168.1.186/dns/` for the current DNS owner's
+UI. The inventory explicitly disables local UI authentication on all three
+AdGuard instances. Protected peer sync still requires its existing token/TLS
+boundary. The legacy DNS-VIP UI port accepts only the three cluster proxies and rejects other LAN devices;
+DNS traffic still uses `.250:53`. See [Unified UI](DESK_UI.md) for deployment.

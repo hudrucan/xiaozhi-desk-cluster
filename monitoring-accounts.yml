@@ -1,0 +1,87 @@
+---
+- name: Freeze protected state and validate every existing hub before account migration
+  hosts: desk_monitoring
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  tasks:
+    - name: Require the complete cluster and requested email
+      ansible.builtin.assert:
+        that:
+          - ansible_play_hosts_all | sort == ['deskb1x', 'deskb2x', 'deskb3x']
+          - desk_monitoring_auto_login_email == 'admin@desk.cluster'
+    - name: Require one existing admin and no conflicting target account
+      ansible.builtin.command:
+        argv: [/usr/bin/python3, '-c', "{{ lookup('ansible.builtin.file', playbook_dir + '/roles/desk_monitoring/files/account_email.py') }}", --email, "{{ desk_monitoring_auto_login_email }}", --check-existing]
+      changed_when: false
+      check_mode: false
+    - name: Freeze Xiaozhi and DNS runtime and configuration
+      ansible.builtin.command:
+        argv: [/usr/bin/python3, '-c', "{{ lookup('ansible.builtin.file', playbook_dir + '/roles/desk_ui/files/ui_guard.py') }}", freeze]
+      register: desk_account_protected
+      changed_when: false
+      check_mode: false
+
+- name: Align existing Beszel administrator email without resetting accounts
+  hosts: desk_monitoring
+  become: true
+  gather_facts: false
+  serial: 1
+  any_errors_fatal: true
+  tasks:
+    - name: Require unchanged protected state before this node migration
+      ansible.builtin.command:
+        argv: [/usr/bin/python3, '-c', "{{ lookup('ansible.builtin.file', playbook_dir + '/roles/desk_ui/files/ui_guard.py') }}", guard]
+        stdin: "{{ desk_account_protected.stdout }}"
+      changed_when: false
+      check_mode: false
+    - name: Install the transactional existing-account migration
+      ansible.builtin.copy:
+        src: roles/desk_monitoring/files/account_email.py
+        dest: /usr/local/libexec/desk-monitoring/account-email.py
+        mode: '0755'
+    - name: Rename only the existing administrator email and matching auto-login
+      ansible.builtin.command:
+        argv: [/usr/bin/python3, /usr/local/libexec/desk-monitoring/account-email.py, --email, "{{ desk_monitoring_auto_login_email }}"]
+      register: desk_account_email
+      changed_when: desk_account_email.stdout == 'changed'
+      when: not ansible_check_mode
+    - name: Install bootstrap verification compatible with native auto-login
+      ansible.builtin.copy:
+        src: roles/desk_monitoring/files/bootstrap.py
+        dest: /usr/local/libexec/desk-monitoring/bootstrap.py
+        mode: '0755'
+    - name: Verify the requested existing administrator through native auto-login
+      ansible.builtin.uri:
+        url: "http://{{ cluster_ip }}:8090/api/collections/users/auth-refresh"
+        method: POST
+        body_format: json
+        body: {}
+        return_content: true
+        use_proxy: false
+      register: desk_account_auth
+      no_log: true
+      until: desk_account_auth.status == 200
+      retries: 10
+      delay: 1
+      when: not ansible_check_mode
+    - name: Require the same administrator email on this hub
+      ansible.builtin.assert:
+        that:
+          - desk_account_auth.json.record.email == desk_monitoring_auto_login_email
+          - desk_account_auth.json.record.role == 'admin'
+      no_log: true
+      when: not ansible_check_mode
+
+- name: Verify cluster runtime isolation after account migration
+  hosts: desk_monitoring
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  tasks:
+    - name: Require unchanged Xiaozhi and DNS services and configuration
+      ansible.builtin.command:
+        argv: [/usr/bin/python3, '-c', "{{ lookup('ansible.builtin.file', playbook_dir + '/roles/desk_ui/files/ui_guard.py') }}", guard]
+        stdin: "{{ desk_account_protected.stdout }}"
+      changed_when: false
+      check_mode: false

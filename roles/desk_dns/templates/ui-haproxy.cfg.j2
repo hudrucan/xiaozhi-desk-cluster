@@ -10,7 +10,11 @@ defaults
 
 frontend dns_admin
     bind {{ desk_dns_vip }}:{{ desk_dns_web_port }}
+{% if desk_dns_ui_vip_proxy_only | default(false) %}
+    http-request deny unless { src {% for node, addresses in desk_dns_nodes | dictsort %}{{ addresses.management }} {% endfor %}127.0.0.1 }
+{% else %}
     http-request deny unless { src 192.168.1.0/24 127.0.0.1 }
+{% endif %}
     http-response set-header X-Desk-DNS-Node {{ inventory_hostname }}
     default_backend local_adguard
 

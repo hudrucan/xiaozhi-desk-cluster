@@ -1,0 +1,90 @@
+---
+- name: Require frozen protected state before installation
+  ansible.builtin.command:
+    argv: [/usr/bin/python3, '-c', "{{ lookup('ansible.builtin.file', role_path + '/files/monitoring_probe.py') }}", guard, --private, "{{ cluster_ip }}", --vip, "{{ desk_monitoring_vip }}"]
+    stdin: "{{ desk_monitoring_snapshot | to_json }}"
+  changed_when: false
+  check_mode: false
+- name: Install the optional hub only on a real apply
+  when: not ansible_check_mode
+  block:
+    - name: Create dedicated unprivileged service accounts
+      ansible.builtin.user:
+        name: "{{ item }}"
+        system: true
+        create_home: false
+        shell: /usr/sbin/nologin
+      loop: [beszel-hub, beszel-agent]
+    - name: Create root-owned binary and metadata directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+      loop: [/var/cache/desk-monitoring, "/opt/desk-monitoring/{{ desk_monitoring_version }}", /etc/desk-monitoring, /usr/local/libexec/desk-monitoring]
+    - name: Download pinned official ARM64 payloads
+      ansible.builtin.get_url:
+        url: "https://github.com/henrygd/beszel/releases/download/v{{ desk_monitoring_version }}/{{ item.name }}_linux_arm64.tar.gz"
+        dest: "/var/cache/desk-monitoring/{{ item.name }}-{{ desk_monitoring_version }}.tar.gz"
+        checksum: "sha256:{{ item.sha256 }}"
+        mode: '0644'
+      loop:
+        - {name: beszel, sha256: "{{ desk_monitoring_hub_sha256 }}"}
+        - {name: beszel-agent, sha256: "{{ desk_monitoring_agent_sha256 }}"}
+    - name: Extract versioned real executables without vendor installers
+      ansible.builtin.unarchive:
+        src: "/var/cache/desk-monitoring/{{ item }}-{{ desk_monitoring_version }}.tar.gz"
+        dest: "/opt/desk-monitoring/{{ desk_monitoring_version }}"
+        remote_src: true
+        creates: "/opt/desk-monitoring/{{ desk_monitoring_version }}/{{ item }}"
+      loop: [beszel, beszel-agent]
+    - name: Install restricted local bootstrap helper
+      ansible.builtin.copy:
+        src: bootstrap.py
+        dest: /usr/local/libexec/desk-monitoring/bootstrap.py
+        mode: '0755'
+    - name: Install transactional administrator email convergence
+      ansible.builtin.copy:
+        src: account_email.py
+        dest: /usr/local/libexec/desk-monitoring/account-email.py
+        mode: '0755'
+    - name: Align an existing administrator before enabling its auto-login
+      ansible.builtin.command:
+        argv: [/usr/bin/python3, /usr/local/libexec/desk-monitoring/account-email.py, --email, "{{ desk_monitoring_auto_login_email }}"]
+      register: desk_monitoring_account_email
+      changed_when: desk_monitoring_account_email.stdout == 'changed'
+      when: desk_monitoring_auto_login_email | default('') | length > 0
+    - name: Install bounded monitoring slice and private hub unit
+      ansible.builtin.template:
+        src: "{{ item }}.j2"
+        dest: "/etc/systemd/system/{{ item }}"
+        mode: '0644'
+      loop: [desk-monitoring.slice, beszel-hub.service]
+      register: desk_monitoring_hub_units
+    - name: Start or update only the monitoring hub
+      ansible.builtin.systemd_service:
+        name: beszel-hub
+        state: "{{ 'restarted' if desk_monitoring_hub_units.changed else 'started' }}"
+        enabled: true
+        daemon_reload: true
+    - name: Wait for the private hub API before account bootstrap
+      ansible.builtin.uri:
+        url: "http://{{ cluster_ip }}:{{ desk_monitoring_hub_port }}/api/health"
+        use_proxy: false
+        timeout: 3
+      register: desk_monitoring_hub_health
+      until: desk_monitoring_hub_health.status == 200
+      retries: 10
+      delay: 1
+    - name: Initialize the independent hub and register exactly the expected private agents
+      ansible.builtin.command:
+        argv: [/usr/bin/python3, /usr/local/libexec/desk-monitoring/bootstrap.py, --host, "{{ cluster_ip }}"]
+        stdin: "{{ {'credentials': desk_monitoring_credentials, 'nodes': desk_monitoring_nodes} | to_json }}"
+      register: desk_monitoring_bootstrap
+      no_log: true
+      changed_when: (desk_monitoring_bootstrap.stdout | from_json).changed
+    - name: Retain only this hub's public trust key
+      ansible.builtin.set_fact:
+        desk_monitoring_public_key: "{{ (desk_monitoring_bootstrap.stdout | from_json).key }}"
+      no_log: true

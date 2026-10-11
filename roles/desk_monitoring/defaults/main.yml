@@ -1,0 +1,7 @@
+---
+desk_monitoring_version: "0.21.0"
+desk_monitoring_hub_sha256: c574e351cc870194e6afaaec36cdfbc2ec2388da767f2f1b544692eb53b8d36e
+desk_monitoring_agent_sha256: 82804205a370a790679e836c3c3d658bc804205517e1c3f676dba9fad064ade5
+desk_monitoring_hub_port: 8090
+desk_monitoring_agent_port: 45876
+desk_monitoring_auto_login_email: ""

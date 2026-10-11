@@ -1,0 +1,9 @@
+backend desk_adguard_ui
+    timeout server 60s
+    option httpchk
+    http-check send meth GET uri /control/status ver HTTP/1.1 hdr Host localhost
+    http-check expect status 200
+    http-request replace-path ^/dns/(.*)$ /\1
+    http-response replace-header Location ^/(.*)$ /dns/\1
+    http-response replace-header Set-Cookie (.*[Pp]ath=)/([^;]*)(.*) \1/dns/\2\3
+    server dns_vip {{ desk_dns_vip }}:3001 check inter 5s fall 2 rise 2

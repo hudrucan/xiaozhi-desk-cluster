@@ -1,0 +1,79 @@
+---
+- name: Preserve protected state immediately before this node's changes
+  ansible.builtin.command:
+    argv: [/usr/bin/python3, '-c', "{{ lookup('ansible.builtin.file', role_path + '/files/ui_guard.py') }}", guard]
+    stdin: "{{ desk_ui_snapshot | to_json }}"
+  changed_when: false
+  check_mode: false
+- name: Change only local UI auth and the matching loopback sync mode
+  when: not ansible_check_mode
+  block:
+    - name: Install policy-preserving local auth migration
+      ansible.builtin.copy:
+        src: ui_auth.py
+        dest: /usr/local/libexec/desk-dns/ui-auth.py
+        owner: root
+        group: root
+        mode: '0755'
+    - name: Install sync helpers with anonymous-local and protected-peer support
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/roles/desk_dns/files/{{ item }}"
+        dest: "/usr/local/libexec/desk-dns/{{ item | replace('_', '-') }}"
+        mode: '0755'
+      loop: [desk_dns_sync.py, dns_sync_account.py]
+      register: desk_ui_sync_scripts
+    - name: Validate and migrate only local auth with private rollback policy
+      ansible.builtin.command:
+        argv: [/usr/bin/python3, /usr/local/libexec/desk-dns/ui-auth.py]
+      register: desk_ui_auth
+      changed_when: desk_ui_auth.stdout == 'changed'
+    - name: Update base-policy fingerprint without replacing live UI policy
+      ansible.builtin.copy:
+        content: "{{ lookup('ansible.builtin.template', playbook_dir + '/roles/desk_dns/templates/adguard-home.yaml.j2') | hash('sha256') }}\n"
+        dest: /etc/desk-dns/policy.sha256
+        owner: root
+        group: root
+        mode: '0600'
+      no_log: true
+      diff: false
+    - name: Restart only the sync boundary when its local auth mode changed
+      ansible.builtin.systemd_service:
+        name: desk-dns-sync-agent
+        state: "{{ 'restarted' if desk_ui_auth.changed or desk_ui_sync_scripts.changed else 'started' }}"
+    - name: Require anonymous local AdGuard status
+      ansible.builtin.uri:
+        url: http://127.0.0.1:3001/control/status
+        use_proxy: false
+        timeout: 4
+      register: desk_ui_adguard_health
+      until: desk_ui_adguard_health.status == 200
+      retries: 5
+      delay: 1
+      changed_when: false
+    - name: Require retained DNS filtering and UDP/TCP backend identity
+      ansible.builtin.command:
+        argv: [/usr/bin/python3, /usr/local/libexec/desk-dns/dns-probe.py, backend, --config, /etc/desk-dns/public.json, --host, "{{ cluster_ip }}", --port, '5354']
+      changed_when: false
+    - name: Install native Beszel auto-login in the existing hub unit
+      ansible.builtin.template:
+        src: "{{ playbook_dir }}/roles/desk_monitoring/templates/beszel-hub.service.j2"
+        dest: /etc/systemd/system/beszel-hub.service
+        mode: '0644'
+      register: desk_ui_hub_unit
+    - name: Restart only this independent hub if its auto-login changed
+      ansible.builtin.systemd_service:
+        name: beszel-hub
+        state: "{{ 'restarted' if desk_ui_hub_unit.changed else 'started' }}"
+        daemon_reload: true
+    - name: Require Beszel auth refresh without credentials
+      ansible.builtin.uri:
+        url: "http://{{ cluster_ip }}:8090/api/collections/users/auth-refresh"
+        method: POST
+        use_proxy: false
+        timeout: 4
+      no_log: true
+      register: desk_ui_beszel_auth
+      until: desk_ui_beszel_auth.status == 200
+      retries: 10
+      delay: 1
+      changed_when: false

@@ -18,6 +18,25 @@ frontend xiaozhi_settings
     bind {{ xiaozhi_ingress_vip }}:{{ xiaozhi_ingress_port }}
     # Private encrypted peer operations never traverse the management frontend.
     http-request deny deny_status 404 if { path_beg /internal/ }
+{% if xiaozhi_ingress_unified_ui_enabled | default(false) %}
+# BEGIN DESK DNS UI ROUTE
+    http-request deny unless { src 192.168.1.0/24 127.0.0.1 } or !{ path_beg /dns /monitor } !{ path / }
+    http-request return status 200 content-type text/html file /etc/desk-ui/index.html if { path / }
+    http-request redirect location /dns/ code 302 if { path /dns }
+{% if xiaozhi_ingress_monitoring_enabled | default(false) %}
+    http-request redirect location /monitor/ code 302 if { path /monitor }
+{% endif %}
+    use_backend desk_adguard_ui if { path_beg /dns/ }
+# END DESK DNS UI ROUTE
+{% endif %}
+{% if xiaozhi_ingress_monitoring_enabled | default(false) %}
+# BEGIN DESK MONITORING ROUTE
+{% if not (xiaozhi_ingress_unified_ui_enabled | default(false)) %}
+    http-request redirect location /monitor/ code 302 if { path /monitor }
+{% endif %}
+    use_backend desk_monitoring_hubs if { path_beg /monitor/ }
+# END DESK MONITORING ROUTE
+{% endif %}
     default_backend xiaozhi_control_planes
 
 backend xiaozhi_control_planes
@@ -28,3 +47,32 @@ backend xiaozhi_control_planes
 {% for node in groups['xiaozhi_ingress'] | sort %}
     server {{ node }} {{ hostvars[node].cluster_ip }}:{{ xiaozhi_ingress_backend_port }} check inter 2s fall 2 rise 2
 {% endfor %}
+{% if xiaozhi_ingress_monitoring_enabled | default(false) %}
+# BEGIN DESK MONITORING BACKEND
+backend desk_monitoring_hubs
+    balance roundrobin
+    cookie desk_monitor_hub insert indirect nocache httponly attr "SameSite=Lax"
+    timeout server 360s
+    http-response set-header X-Desk-Monitor-Hub %[srv_name]
+    option httpchk
+    http-check send meth GET uri /api/health ver HTTP/1.1 hdr Host localhost
+    http-check expect status 200
+    http-request replace-path ^/monitor/(.*)$ /\1
+{% for node in groups.get('desk_monitoring', []) | sort %}
+    server {{ node }} {{ hostvars[node].cluster_ip }}:8090 cookie {{ node }} check inter 5s fall 2 rise 2
+{% endfor %}
+# END DESK MONITORING BACKEND
+{% endif %}
+{% if xiaozhi_ingress_unified_ui_enabled | default(false) %}
+# BEGIN DESK DNS UI BACKEND
+backend desk_adguard_ui
+    timeout server 60s
+    option httpchk
+    http-check send meth GET uri /control/status ver HTTP/1.1 hdr Host localhost
+    http-check expect status 200
+    http-request replace-path ^/dns/(.*)$ /\1
+    http-response replace-header Location ^/(.*)$ /dns/\1
+    http-response replace-header Set-Cookie (.*[Pp]ath=)/([^;]*)(.*) \1/dns/\2\3
+    server dns_vip {{ desk_dns_vip }}:3001 check inter 5s fall 2 rise 2
+# END DESK DNS UI BACKEND
+{% endif %}

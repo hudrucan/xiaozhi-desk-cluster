@@ -1,0 +1,34 @@
+[Unit]
+Description=Independent Beszel monitoring hub
+After=network-online.target
+Wants=network-online.target
+[Service]
+User=beszel-hub
+Group=beszel-hub
+WorkingDirectory=/var/lib/beszel-hub
+StateDirectory=beszel-hub
+StateDirectoryMode=0700
+Environment="APP_URL=http://{{ desk_monitoring_vip }}/monitor"
+Environment="CHECK_UPDATES=false"
+{% if desk_monitoring_auto_login_email | default('') %}
+Environment="AUTO_LOGIN={{ desk_monitoring_auto_login_email }}"
+{% endif %}
+ExecStart=/opt/desk-monitoring/{{ desk_monitoring_version }}/beszel serve --http={{ cluster_ip }}:{{ desk_monitoring_hub_port }} --dir=/var/lib/beszel-hub
+Restart=on-failure
+RestartSec=5
+Slice=desk-monitoring.slice
+MemoryMax=192M
+TasksMax=64
+Nice=10
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+CapabilityBoundingSet=
+RestrictSUIDSGID=true
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,32 @@
+---
+- name: Mount monitoring only after the private hubs are verified
+  when: not ansible_check_mode
+  block:
+    - name: Install monitoring backend candidate
+      ansible.builtin.template:
+        src: backend.cfg.j2
+        dest: /etc/desk-monitoring/backend.cfg
+        mode: '0644'
+    - name: Install atomic monitoring route validator
+      ansible.builtin.copy:
+        src: install_proxy.py
+        dest: /usr/local/libexec/desk-monitoring/install-proxy.py
+        mode: '0755'
+    - name: Recheck protected state immediately before changing HTTP routing
+      ansible.builtin.command:
+        argv: [/usr/bin/python3, '-c', "{{ lookup('ansible.builtin.file', role_path + '/files/monitoring_probe.py') }}", guard, --private, "{{ cluster_ip }}", --vip, "{{ desk_monitoring_vip }}"]
+        stdin: "{{ desk_monitoring_snapshot | to_json }}"
+      changed_when: false
+    - name: Validate complete HTTP and MQTT configuration then gracefully reload if changed
+      ansible.builtin.command:
+        argv: [/usr/bin/python3, /usr/local/libexec/desk-monitoring/install-proxy.py, --backend, /etc/desk-monitoring/backend.cfg]
+      register: desk_monitoring_proxy
+      changed_when: desk_monitoring_proxy.stdout == 'changed'
+    - name: Require the selected hub through the existing management VIP
+      ansible.builtin.uri:
+        url: "http://{{ desk_monitoring_vip }}/monitor/api/health"
+        headers:
+          Cookie: "desk_monitor_hub={{ inventory_hostname }}"
+        use_proxy: false
+        timeout: 5
+      changed_when: false

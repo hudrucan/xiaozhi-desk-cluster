@@ -81,15 +81,15 @@
   check_mode: false
   changed_when: false
 
-- name: Require the authenticated AdGuard UI through the DNS VIP
+- name: Require the chosen DNS UI access boundary from the management LAN
   ansible.builtin.uri:
     url: "http://{{ desk_dns_vip }}:{{ desk_dns_web_port }}/"
     use_proxy: false
     follow_redirects: none
-    status_code: [200, 302]
+    status_code: "{{ [403] if desk_dns_ui_vip_proxy_only | default(false) else [200, 302] }}"
     timeout: 3
   register: desk_dns_ui_ready
-  until: desk_dns_ui_ready.status | default(-1) in [200, 302]
+  until: desk_dns_ui_ready.status | default(-1) in ([403] if desk_dns_ui_vip_proxy_only | default(false) else [200, 302])
   retries: 5
   delay: 2
   delegate_to: localhost

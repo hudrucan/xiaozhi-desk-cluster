@@ -1258,3 +1258,19 @@ Xiaozhi VIP avoidance, per-node monitoring UI and deployment prerequisites.
 Router DNS and deployed panel services are unchanged by these source edits.
 The optional panel reader supports `dn` ownership and bounded DNS activity metadata;
 see the DNS document for telemetry readiness and a separate panel rollout.
+
+## Optional cluster monitoring
+
+Beszel monitoring is an opt-in three-hub trial, deployed only with `monitoring.yml`.
+Use the existing management VIP at `/monitor/`; each hub has independent history.
+See [Desk monitoring](docs/DESK_MONITORING.md) for resource limits, bootstrap,
+rollout and removal. Full-site convergence preserves an enabled ingress route
+but does not install monitoring services.
+
+## Unified LAN UI
+
+The current management entrypoint is `http://192.168.1.186/`, with `/settings/`,
+`/dns/` and `/monitor/`. The explicitly selected LAN mode uses anonymous AdGuard
+administration and native Beszel auto-login on all three hubs. `ui.yml` deploys
+this mode serially; protected DNS peer sync and DNS VIP `.250:53` remain separate.
+See [Unified LAN administration](docs/DESK_UI.md) for behavior and rollback.

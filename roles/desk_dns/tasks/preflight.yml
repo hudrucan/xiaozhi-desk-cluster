@@ -20,7 +20,7 @@
     that: desk_dns_admin_password_hash is match('^\$2[aby]\$(0[4-9]|[12][0-9]|3[01])\$[./A-Za-z0-9]{53}$')
     fail_msg: Supply desk_dns_admin_password_hash as a bcrypt hash through an ignored secret file or Vault.
   no_log: true
-  when: not ansible_check_mode and not (desk_dns_verify_only | default(false))
+  when: desk_dns_ui_auth_enabled and not ansible_check_mode and not (desk_dns_verify_only | default(false))
 
 - name: Assemble only public endpoint metadata
   ansible.builtin.set_fact:

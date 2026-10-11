@@ -1,0 +1,12 @@
+backend desk_monitoring_hubs
+    balance roundrobin
+    cookie desk_monitor_hub insert indirect nocache httponly attr "SameSite=Lax"
+    timeout server 360s
+    http-response set-header X-Desk-Monitor-Hub %[srv_name]
+    option httpchk
+    http-check send meth GET uri /api/health ver HTTP/1.1 hdr Host localhost
+    http-check expect status 200
+    http-request replace-path ^/monitor/(.*)$ /\1
+{% for node in groups['desk_monitoring'] | sort %}
+    server {{ node }} {{ hostvars[node].cluster_ip }}:{{ desk_monitoring_hub_port }} cookie {{ node }} check inter 5s fall 2 rise 2
+{% endfor %}

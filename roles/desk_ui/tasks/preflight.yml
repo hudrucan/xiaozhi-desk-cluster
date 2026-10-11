@@ -1,0 +1,41 @@
+---
+- name: Require the complete existing cluster and explicit anonymous administration
+  ansible.builtin.assert:
+    that:
+      - ansible_play_hosts_all | sort == ['deskb1x', 'deskb2x', 'deskb3x']
+      - groups['desk_dns'] | sort == ansible_play_hosts_all | sort
+      - groups['desk_monitoring'] | sort == ansible_play_hosts_all | sort
+      - desk_dns_ui_auth_enabled is sameas false
+      - desk_monitoring_auto_login_email is string
+      - desk_monitoring_auto_login_email | length > 0
+      - desk_dns_ui_vip_proxy_only is sameas true
+      - (desk_ui_auth_nodes | default(groups['desk_monitoring']) | difference(groups['desk_monitoring'])) | length == 0
+      - xiaozhi_ingress_unified_ui_enabled is sameas true
+- name: Freeze protected processes and live DNS policy without printing private contents
+  ansible.builtin.command:
+    argv: [/usr/bin/python3, '-c', "{{ lookup('ansible.builtin.file', role_path + '/files/ui_guard.py') }}", freeze]
+  register: desk_ui_before
+  changed_when: false
+  check_mode: false
+- name: Retain safe isolation snapshot and existing floating endpoints
+  ansible.builtin.set_fact:
+    desk_ui_snapshot: "{{ desk_ui_before.stdout | from_json }}"
+    desk_monitoring_vip: "{{ (desk_ui_before.stdout | from_json).vip }}"
+    desk_dns_vip: "{{ (desk_ui_before.stdout | from_json).dns_vip }}"
+- name: Require the cached local Settings health
+  ansible.builtin.uri:
+    url: "http://{{ cluster_ip }}:8004/healthz"
+    use_proxy: false
+    timeout: 5
+  changed_when: false
+  check_mode: false
+- name: Build public symmetric DNS membership for the managed-policy fingerprint
+  ansible.builtin.set_fact:
+    desk_dns_nodes: "{{ desk_dns_nodes | default({}) | combine({item: {'private': hostvars[item].cluster_ip, 'management': hostvars[item].ansible_host}}) }}"
+  loop: "{{ groups['desk_dns'] | sort }}"
+
+- name: Require the configured native auto-login to match an existing admin account
+  ansible.builtin.command:
+    argv: [/usr/bin/python3, '-c', "import sqlite3,sys; d=sqlite3.connect('file:/var/lib/beszel-hub/data.db?mode=ro',uri=True); count=d.execute('select count(*) from users where email=? and role=?',(sys.argv[1],'admin')).fetchone()[0]; d.close(); sys.exit(0 if count == 1 else 1)", "{{ desk_monitoring_auto_login_email }}"]
+  changed_when: false
+  check_mode: false

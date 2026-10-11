@@ -102,7 +102,7 @@ def validate_write(route, value):
     if route == 'filtering/set_rules':
         value['rules'] = [RULE] + [r for r in value['rules'] if r != RULE]
     if route == 'profile/update':
-        if set(value) - {'name', 'language', 'theme'} or value.get('name') != 'desk-sync':
+        if set(value) - {'name', 'language', 'theme'} or value.get('name') not in ('desk-sync', ''):
             raise ValueError('Account changes are not policy')
     return value
 
@@ -115,10 +115,13 @@ def fetch(url, config, method='GET', value=None, context=None):
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect(),
                                         urllib.request.HTTPSHandler(context=context))
     local = url.startswith(config.get('adguard', '') + '/control/')
+    local_auth = config.get('local_auth', True)
+    if local and not local_auth and url.endswith('/control/profile/update') and isinstance(value, dict):
+        value = {k: v for k, v in value.items() if k != 'name'}
     key = (config.get('adguard'), config['username'], config['password'])
     for attempt in range(2):
         headers = {'Content-Type': 'application/json'}
-        if local:
+        if local and local_auth:
             # AdGuard checks bcrypt on every Basic request. Authenticate once, then
             # reuse its own session cookie in memory; this is outside DNS forwarding.
             with _SESSION_LOCK:
@@ -135,7 +138,7 @@ def fetch(url, config, method='GET', value=None, context=None):
                             raise ValueError('Login did not create a session')
                         _SESSIONS[key] = token.value
                 headers['Cookie'] = 'agh_session=' + _SESSIONS[key]
-        else:
+        elif not local:
             # The protected boundary verifies this shared token cheaply, without bcrypt.
             headers['Authorization'] = basic(config)
         request = urllib.request.Request(url, data=None if value is None else encoded(value),
@@ -151,7 +154,7 @@ def fetch(url, config, method='GET', value=None, context=None):
         except urllib.error.HTTPError as error:
             # A revoked/expired session is refreshed once; never retry a mutation
             # that received any response other than authentication rejection.
-            if local and error.code in (401, 403) and attempt == 0:
+            if local and local_auth and error.code in (401, 403) and attempt == 0:
                 error.close()
                 with _SESSION_LOCK:
                     _SESSIONS.pop(key, None)

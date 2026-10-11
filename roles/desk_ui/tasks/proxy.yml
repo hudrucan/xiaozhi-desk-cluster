@@ -1,0 +1,57 @@
+---
+- name: Add the unified LAN HTTP entrypoint after every node supports anonymous UI
+  when: not ansible_check_mode
+  block:
+    - name: Create public static UI metadata directory
+      ansible.builtin.file:
+        path: /etc/desk-ui
+        state: directory
+        mode: '0755'
+    - name: Install the small cluster landing page
+      ansible.builtin.template:
+        src: index.html.j2
+        dest: /etc/desk-ui/index.html
+        mode: '0644'
+      register: desk_ui_landing
+    - name: Render DNS UI forwarding to its existing floating authority
+      ansible.builtin.template:
+        src: backend.cfg.j2
+        dest: /etc/desk-ui/backend.cfg
+        mode: '0644'
+    - name: Update the atomic HTTP and MQTT candidate validator
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/roles/desk_monitoring/files/install_proxy.py"
+        dest: /usr/local/libexec/desk-monitoring/install-proxy.py
+        mode: '0755'
+    - name: Recheck protected state immediately before HTTP reload
+      ansible.builtin.command:
+        argv: [/usr/bin/python3, '-c', "{{ lookup('ansible.builtin.file', role_path + '/files/ui_guard.py') }}", guard]
+        stdin: "{{ desk_ui_snapshot | to_json }}"
+      changed_when: false
+    - name: Validate combined HTTP and MQTT then reload only HAProxy if needed
+      ansible.builtin.command:
+        argv: "{{ ['/usr/bin/python3', '/usr/local/libexec/desk-monitoring/install-proxy.py', '--backend', '/etc/desk-monitoring/backend.cfg', '--dns-backend', '/etc/desk-ui/backend.cfg'] + (['--reload-page'] if desk_ui_landing.changed else []) }}"
+      register: desk_ui_proxy
+      changed_when: desk_ui_proxy.stdout == 'changed'
+
+    - name: Restrict the legacy DNS VIP UI port to cluster proxies
+      ansible.builtin.template:
+        src: "{{ playbook_dir }}/roles/desk_dns/templates/ui-haproxy.cfg.j2"
+        dest: /etc/desk-dns/ui-haproxy.cfg
+        mode: '0644'
+        validate: /usr/sbin/haproxy -c -f %s
+      register: desk_ui_private_proxy
+    - name: Restart only the dedicated DNS UI proxy when its access rule changes
+      ansible.builtin.systemd_service:
+        name: desk-dns-ui
+        state: "{{ 'restarted' if desk_ui_private_proxy.changed else 'started' }}"
+    - name: Require the cluster proxy to retain access to the current DNS owner
+      ansible.builtin.uri:
+        url: "http://{{ desk_dns_vip }}:3001/control/status"
+        use_proxy: false
+        timeout: 4
+      register: desk_ui_internal_ready
+      until: desk_ui_internal_ready.status == 200
+      retries: 5
+      delay: 1
+      changed_when: false

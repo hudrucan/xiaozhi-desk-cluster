@@ -1,0 +1,13 @@
+---
+- name: Restore policy timers on every reachable node after a failed UI rollout
+  ansible.builtin.systemd_service:
+    name: desk-dns-sync.timer
+    state: started
+  delegate_to: "{{ item }}"
+  loop: "{{ groups['desk_monitoring'] | sort }}"
+  when: not ansible_check_mode
+  ignore_errors: true
+  ignore_unreachable: true
+- name: Stop the UI rollout after restoring periodic reconciliation
+  ansible.builtin.fail:
+    msg: UI rollout failed. Periodic DNS reconciliation was restored on reachable nodes; inspect the failed task before rerunning.
