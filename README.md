@@ -1209,8 +1209,8 @@ below; the prior Memory and VLM/device-MCP releases remain documented for compar
 The compatible server source is `9c86a30501a2051cb9852aa63c4a49c54a16dd65`. Upgrade all combined
 ASR/LLM/TTS workers before activating this source on any conversation core: old
 workers reject the new optional emotion capability on tool-aware LLM requests.
-Update control planes to the same source. The control-plane default pins this
-release; ping-only worker and transport-only core defaults remain separate
+Update control planes to the same source. The control-plane default pins the newest compatible
+release documented below; ping-only worker and transport-only core defaults remain separate
 opt-ins. Source rollout restarts interrupt existing conversations.
 
 This is a source-only upgrade with unchanged requirements, models and runtime
@@ -1223,6 +1223,31 @@ not overwrite it; abort discards stale response chunks. An explicit false
 
 See server `docs/cluster-emotion.md` for compatibility and the user-owned face,
 interrupt and device-tool verification checks.
+
+## Distributed conversation inactivity
+
+The compatible source is `b2185c8a00d070014e3e5e6c6f6a9565f5767b8a` for control planes,
+runtime-apply agents, combined voice workers and conversation cores. The
+control-plane source default pins this release. It retains response emotion,
+MCP, Memory and transport contracts from the prior release.
+
+The core ends a silent conversation after `close_connection_no_voice_time`
+(120 seconds by default). VAD speech, ASR text and explicit user input reset
+activity; silence, worker recovery and pings do not. LLM/tool/TTS work is
+protected. Configured `end_prompt` may produce a closing response before the
+firmware receives terminal TTS stop/goodbye and returns to idle. The MQTT
+connection remains independent of the conversation audio session.
+
+Legacy runtime bundles remain valid with defaults. Upgrade every relevant
+process before using Runtime Apply to export the additional session controls.
+A source-only rollout can preserve existing validated bundles, models and
+credentials while live Cloud reconciliation is unavailable; it must not claim
+that saved Cloud changes were applied. Existing dependencies are unchanged.
+When release venvs reuse an older validated environment through a symlink,
+retain that referenced environment until it is replaced deliberately.
+
+See server `docs/cluster-conversation-idle.md` for focused tests and the physical
+idle/wake verification. Source restarts interrupt existing conversations.
 
 ## Optional three-node DNS
 
