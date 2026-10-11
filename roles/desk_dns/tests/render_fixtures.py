@@ -25,7 +25,7 @@ for node, address in nodes.items():
     for path in role.joinpath('templates').glob('*.j2'):
         rendered=env.from_string(path.read_text()).render(**values)
         assert '{{' not in rendered and '{%' not in rendered, path
-        if path.name=='AdGuardHome.yaml.j2':
+        if path.name=='adguard-home.yaml.j2':
             agh=yaml.safe_load(rendered)
             assert agh['dns']['bind_hosts']==[address['private']]
             assert agh['http']['address']=='127.0.0.1:3001'

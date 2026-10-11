@@ -35,7 +35,7 @@
 
     - name: Render authenticated AdGuard candidate
       ansible.builtin.template:
-        src: AdGuardHome.yaml.j2
+        src: adguard-home.yaml.j2
         dest: /var/lib/desk-adguard/candidate.yaml
         owner: desk-adguard
         group: desk-adguard
@@ -46,7 +46,7 @@
 
     - name: Compute managed policy fingerprint without exposing the password hash
       ansible.builtin.set_fact:
-        desk_dns_policy_digest: "{{ lookup('ansible.builtin.template', 'AdGuardHome.yaml.j2') | hash('sha256') }}"
+        desk_dns_policy_digest: "{{ lookup('ansible.builtin.template', 'adguard-home.yaml.j2') | hash('sha256') }}"
       no_log: true
 
     - name: Read previous managed policy fingerprint
