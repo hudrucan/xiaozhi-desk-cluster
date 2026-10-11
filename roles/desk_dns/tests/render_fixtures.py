@@ -67,7 +67,7 @@ for node, address in nodes.items():
             assert sync['api']['port']==0
             assert sync['features']['dhcp']=={'serverConfig': False, 'staticLeases': False}
             assert sync['features']['dns']['accessLists'] is False
-            assert not sync['features']['tlsConfig'] and not sync['features']['statsConfig']
+            assert not sync['features']['tlsConfig'] and sync['features']['statsConfig'] and sync['features']['queryLogConfig']
             assert sync['origin']['insecureSkipVerify'] is False
         if path.name=='desk-dns.slice.j2':
             assert 'CPUQuota=100%' in rendered and 'CPUWeight=10' in rendered

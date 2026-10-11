@@ -1,0 +1,81 @@
+---
+- ansible.builtin.include_tasks: guard.yml
+- name: Verify every authenticated peer before changing forwarding
+  ansible.builtin.uri:
+    url: "https://{{ item.private }}:5443/desk-observe/control/status"
+    headers:
+      Authorization: "Basic {{ ('desk-sync:' + desk_dns_sync_password) | b64encode }}"
+    ca_path: /etc/desk-dns/backend/peer.crt
+    use_proxy: false
+  loop: "{{ desk_dns_nodes.values() | list }}"
+  no_log: true
+  when: not ansible_check_mode
+- name: Switch this frontend only after every private peer is ready
+  when: not ansible_check_mode
+  block:
+    - name: Preserve current frontend for rollback
+      ansible.builtin.copy:
+        src: /etc/desk-dns/dnsdist.conf
+        dest: /etc/desk-dns/pre-client-dnsdist.conf
+        remote_src: true
+        mode: '0644'
+    - name: Validate and install the DNS frontend with original client forwarding
+      ansible.builtin.template:
+        src: dnsdist.conf.j2
+        dest: /etc/desk-dns/dnsdist.conf
+        mode: '0644'
+        validate: /usr/bin/dnsdist --check-config -C %s
+      register: desk_dns_client_frontend
+    - name: Activate only changed DNS frontends
+      ansible.builtin.systemd_service:
+        name: desk-dnsdist
+        state: "{{ 'restarted' if desk_dns_client_frontend.changed else 'started' }}"
+    - name: Require all three identities through local UDP and TCP
+      ansible.builtin.command:
+        argv: [/usr/bin/python3, /usr/local/libexec/desk-dns/dns-probe.py, balanced, --config, /etc/desk-dns/public.json, --host, "{{ ansible_host }}", --port, '5353']
+      register: desk_dns_client_ready
+      until: desk_dns_client_ready.rc == 0
+      retries: 5
+      delay: 2
+      changed_when: false
+    - name: Enable the native DNS request counter for the panel
+      ansible.builtin.copy:
+        content: 'enabled'
+        dest: /etc/desk-dns/client-identity-enabled
+        mode: '0644'
+      register: desk_dns_activity_mode
+    - name: Restart only the panel DNS observer if its source changed
+      ansible.builtin.systemd_service:
+        name: desk-dns-activity
+        state: "{{ 'restarted' if desk_dns_activity_mode.changed or desk_dns_cluster_scripts.changed else 'started' }}"
+    - name: Validate and install aggregate AdGuard UI routes
+      ansible.builtin.template:
+        src: ui-haproxy.cfg.j2
+        dest: /etc/desk-dns/ui-haproxy.cfg
+        mode: '0644'
+        validate: /usr/sbin/haproxy -c -f %s
+      register: desk_dns_aggregate_proxy
+    - name: Restart only a changed dedicated AdGuard UI proxy
+      ansible.builtin.systemd_service:
+        name: desk-dns-ui
+        state: "{{ 'restarted' if desk_dns_aggregate_proxy.changed else 'started' }}"
+    - name: Require complete cluster statistics and node coverage
+      ansible.builtin.uri:
+        url: http://127.0.0.1:3003/control/desk_cluster
+        use_proxy: false
+        return_content: true
+      register: desk_dns_aggregate_ready
+      failed_when: desk_dns_aggregate_ready.status != 200 or desk_dns_aggregate_ready.json.available != 3
+  rescue:
+    - name: Restore the previous DNS forwarding configuration
+      ansible.builtin.copy:
+        src: /etc/desk-dns/pre-client-dnsdist.conf
+        dest: /etc/desk-dns/dnsdist.conf
+        remote_src: true
+        mode: '0644'
+    - name: Resume this node's previous DNS frontend
+      ansible.builtin.systemd_service:
+        name: desk-dnsdist
+        state: restarted
+    - ansible.builtin.fail:
+        msg: Cluster DNS frontend validation failed; previous forwarding configuration restored.

@@ -1,0 +1,18 @@
+---
+- ansible.builtin.include_tasks: guard.yml
+- ansible.builtin.include_tasks: check_backends.yml
+- name: Require DNS serving and aggregate UI services without changing VIP eligibility
+  ansible.builtin.command:
+    argv: [systemctl, is-active, desk-adguard, desk-dnsdist, desk-dns-backend, desk-dns-cluster-ui, desk-dns-ui, desk-dns-activity]
+  changed_when: false
+- name: Require three backend identities through UDP and TCP
+  ansible.builtin.command:
+    argv: [/usr/bin/python3, /usr/local/libexec/desk-dns/dns-probe.py, balanced, --config, /etc/desk-dns/public.json, --host, "{{ ansible_host }}", --port, '5353']
+  changed_when: false
+- name: Require complete aggregate statistics from each node
+  ansible.builtin.uri:
+    url: http://127.0.0.1:3003/control/desk_cluster
+    return_content: true
+    use_proxy: false
+  register: desk_dns_cluster_verified
+  failed_when: desk_dns_cluster_verified.status != 200 or desk_dns_cluster_verified.json.available != 3

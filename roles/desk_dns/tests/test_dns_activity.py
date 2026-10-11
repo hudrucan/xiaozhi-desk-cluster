@@ -205,6 +205,18 @@ class ActivityTests(unittest.TestCase):
 
     def test_collector_receives_only_and_transport_units_do_not_depend_on_it(self):
         tree = ast.parse((ROLE / 'files/dns_activity.py').read_text())
+        observer = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == 'observe_http_counter')
+        tree.body.remove(observer)
+        # Packet observation remains receive-only. The DoH observer can only ask
+        # the local UNIX stats socket for its fixed numeric request counter.
+        calls = [node for node in ast.walk(observer) if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)]
+        socket_calls = [node for node in calls if node.func.attr == 'socket']
+        self.assertEqual(len(socket_calls), 1)
+        self.assertEqual(socket_calls[0].args[0].attr, 'AF_UNIX')
+        connects = [node for node in calls if node.func.attr == 'connect']
+        self.assertEqual([node.args[0].value for node in connects], ['/run/desk-dns-backend/admin.sock'])
+        sends = [node for node in calls if node.func.attr == 'sendall']
+        self.assertEqual([node.args[0].value for node in sends], [b'show table private_dns_backend\n'])
         methods = {node.func.attr for node in ast.walk(tree)
                    if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)}
         self.assertIn('recvfrom', methods)

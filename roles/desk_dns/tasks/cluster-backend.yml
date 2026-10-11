@@ -1,0 +1,84 @@
+---
+- ansible.builtin.include_tasks: guard.yml
+- name: Install cluster DNS identity and unified observability
+  when: not ansible_check_mode
+  block:
+    - name: Create private DNS transport certificate directory
+      ansible.builtin.file:
+        path: /etc/desk-dns/backend
+        state: directory
+        owner: root
+        group: desk-dnsdist
+        mode: '0750'
+    - name: Install pinned internal TLS trust and key
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/secret/desk-dns-backend.{{ item }}"
+        dest: "/etc/desk-dns/backend/peer.{{ item }}"
+        owner: root
+        group: desk-dnsdist
+        mode: "{{ '0644' if item == 'crt' else '0640' }}"
+      loop: [crt, pem]
+      no_log: true
+      diff: false
+    - name: Install cluster observability and transport helpers
+      ansible.builtin.copy:
+        src: "{{ item }}"
+        dest: "/usr/local/libexec/desk-dns/{{ item | replace('_', '-') }}"
+        mode: '0755'
+      loop: [cluster_ui.py, client_identity.py, dns_activity.py]
+      register: desk_dns_cluster_scripts
+    - name: Install private aggregate configuration without exposing peer credentials
+      ansible.builtin.copy:
+        content: "{{ {'node': inventory_hostname, 'nodes': desk_dns_nodes, 'authorization': 'Basic ' + ('desk-sync:' + desk_dns_sync_password) | b64encode, 'ca': '/etc/desk-dns/backend/peer.crt'} | to_nice_json }}"
+        dest: /etc/desk-dns/cluster-ui.json
+        owner: root
+        group: desk-dnsdist
+        mode: '0640'
+      no_log: true
+      diff: false
+      register: desk_dns_cluster_config
+    - name: Preserve mutable policy while enabling real client forwarding
+      ansible.builtin.command:
+        argv: [/usr/bin/python3, /usr/local/libexec/desk-dns/client-identity.py]
+      register: desk_dns_identity_patch
+      changed_when: desk_dns_identity_patch.stdout == 'changed'
+    - name: Record matching base fingerprint without replacing live policy
+      ansible.builtin.copy:
+        content: "{{ lookup('ansible.builtin.template', 'adguard-home.yaml.j2') | hash('sha256') }}\n"
+        dest: /etc/desk-dns/policy.sha256
+        mode: '0600'
+      no_log: true
+      diff: false
+    - name: Install validated private TLS DNS backend
+      ansible.builtin.template:
+        src: backend-haproxy.cfg.j2
+        dest: /etc/desk-dns/backend-haproxy.cfg
+        mode: '0644'
+        validate: /usr/sbin/haproxy -c -f %s
+      register: desk_dns_backend_proxy
+    - name: Install bounded DNS-only services
+      ansible.builtin.template:
+        src: "{{ item }}.j2"
+        dest: "/etc/systemd/system/{{ item }}"
+        mode: '0644'
+      loop: [desk-dns-backend.service, desk-dns-cluster-ui.service]
+      register: desk_dns_cluster_units
+    - name: Activate only the new DNS-only services
+      ansible.builtin.systemd_service:
+        name: "{{ item }}"
+        state: "{{ 'restarted' if desk_dns_cluster_scripts.changed or desk_dns_cluster_config.changed or desk_dns_backend_proxy.changed or desk_dns_cluster_units.changed else 'started' }}"
+        enabled: true
+        daemon_reload: true
+      loop: [desk-dns-cluster-ui, desk-dns-backend]
+    - name: Require authenticated TLS peer observability before switching DNS
+      ansible.builtin.uri:
+        url: "https://{{ cluster_ip }}:5443/desk-observe/control/status"
+        headers:
+          Authorization: "Basic {{ ('desk-sync:' + desk_dns_sync_password) | b64encode }}"
+        ca_path: /etc/desk-dns/backend/peer.crt
+        use_proxy: false
+      register: desk_dns_peer_ready
+      until: desk_dns_peer_ready.status == 200
+      retries: 5
+      delay: 1
+      no_log: true

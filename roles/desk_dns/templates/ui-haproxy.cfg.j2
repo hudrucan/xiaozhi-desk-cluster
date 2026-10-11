@@ -16,7 +16,17 @@ frontend dns_admin
     http-request deny unless { src 192.168.1.0/24 127.0.0.1 }
 {% endif %}
     http-response set-header X-Desk-DNS-Node {{ inventory_hostname }}
+{% if desk_dns_client_identity_enabled | default(false) %}
+    http-request deny if { path_beg /dns-query /desk-observe/ }
+    acl cluster_view path / /control/stats /control/querylog /control/clients /control/clients/find /control/clients/search /control/stats_reset /control/querylog_clear /control/querylog/config/update /control/stats/config/update /control/querylog_config /control/stats_config /control/desk_cluster /control/cluster.js
+    use_backend cluster_ui if cluster_view
+{% endif %}
     default_backend local_adguard
 
 backend local_adguard
     server local 127.0.0.1:{{ desk_dns_web_port }}
+
+{% if desk_dns_client_identity_enabled | default(false) %}
+backend cluster_ui
+    server local 127.0.0.1:3003
+{% endif %}

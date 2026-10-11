@@ -22,8 +22,10 @@ RULE = '||blocked.desk-dns.test^'
 READS = {'status', 'profile', 'parental/status', 'safesearch/status',
          'safebrowsing/status', 'rewrite/settings', 'rewrite/list',
          'blocked_services/get', 'filtering/status', 'clients',
-         'querylog/config', 'stats/config', 'access/list', 'dns_info'}
-WRITES = {'profile/update': 'PUT', 'dns_config': 'POST',
+         'querylog/config', 'stats/config', 'querylog_info', 'stats_info', 'access/list', 'dns_info'}
+WRITES = {'querylog/config/update': 'PUT', 'stats/config/update': 'PUT',
+          'querylog_config': 'POST', 'stats_config': 'POST',
+          'profile/update': 'PUT', 'dns_config': 'POST',
           'parental/enable': 'POST', 'parental/disable': 'POST',
           'safebrowsing/enable': 'POST', 'safebrowsing/disable': 'POST',
           'safesearch/settings': 'PUT', 'rewrite/settings/update': 'PUT',
@@ -69,6 +71,8 @@ def basic(config):
 
 def project(route, value):
     """Exclude host-local state and runtime counters from replicated policy."""
+    if route in ('querylog/config', 'stats/config'):
+        return {**value, 'ignored': sorted(value.get('ignored') or [])}
     if route == 'rewrite/list':
         return [x for x in (value or []) if x['domain'].lower().rstrip('.') not in RESERVED]
     if route == 'rewrite/settings':
@@ -91,6 +95,9 @@ def project(route, value):
 
 
 def validate_write(route, value):
+    if route in ('querylog/config/update', 'querylog_config', 'stats/config/update', 'stats_config'):
+        allowed = {'enabled', 'interval', 'ignored', 'ignored_enabled', 'anonymize_client_ip'}
+        if not isinstance(value, dict) or set(value) - allowed: raise ValueError('Only shared observation settings allowed')
     if route == 'dns_config' and set(value) - DNS_FIELDS:
         raise ValueError('Host-local DNS configuration cannot be synchronized')
     if route.startswith('rewrite/'):
@@ -274,7 +281,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
     do_PUT = handle_api
 
 
-POLICY_ROUTES = ['dns_info', 'filtering/status', 'rewrite/list', 'rewrite/settings',
+POLICY_ROUTES = ['querylog/config', 'stats/config', 'dns_info', 'filtering/status', 'rewrite/list', 'rewrite/settings',
                  'clients', 'blocked_services/get', 'safesearch/status',
                  'safebrowsing/status', 'parental/status']
 

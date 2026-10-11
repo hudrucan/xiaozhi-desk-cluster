@@ -3,7 +3,7 @@ http:
   address: "127.0.0.1:{{ desk_dns_web_port }}"
   session_ttl: 720h
   pprof: {enabled: false, port: 6060}
-  doh: {insecure_enabled: false}
+  doh: {insecure_enabled: {{ 'true' if desk_dns_client_identity_enabled | default(false) else 'false' }}}
 {% if desk_dns_ui_auth_enabled %}
 users:
   - name: {{ desk_dns_admin_user | to_json }}
@@ -18,7 +18,10 @@ dns:
   upstream_mode: load_balance
   fallback_dns: []
   bootstrap_dns: []
-  allowed_clients: {{ (desk_dns_nodes.values() | map(attribute='private') | list + ['127.0.0.1']) | to_json }}
+  allowed_clients: {{ (desk_dns_nodes.values() | map(attribute='private') | list + ['127.0.0.1'] + (['192.168.1.0/24', 'fe80::/10'] if desk_dns_client_identity_enabled | default(false) else [])) | to_json }}
+{% if desk_dns_client_identity_enabled | default(false) %}
+  trusted_proxies: [127.0.0.1/32]
+{% endif %}
   disallowed_clients: []
   ratelimit: 0
   refuse_any: true
@@ -51,11 +54,19 @@ user_rules: {{ (['||blocked.desk-dns.test^'] + desk_dns_user_rules) | to_json }}
 dhcp:
   enabled: false
 querylog:
+{% if desk_dns_client_identity_enabled | default(false) %}
+  ignored: [health.desk-dns.test, who.desk-dns.test, blocked.desk-dns.test]
+  ignored_enabled: true
+{% endif %}
   enabled: true
   file_enabled: false
   interval: 24h
   size_memory: 1000
 statistics:
+{% if desk_dns_client_identity_enabled | default(false) %}
+  ignored: [health.desk-dns.test, who.desk-dns.test, blocked.desk-dns.test]
+  ignored_enabled: true
+{% endif %}
   enabled: true
   interval: 24h
 schema_version: 34

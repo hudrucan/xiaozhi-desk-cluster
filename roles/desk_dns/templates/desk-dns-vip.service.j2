@@ -23,7 +23,7 @@ PrivateTmp=true
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true
-RestrictAddressFamilies=AF_UNIX AF_INET AF_NETLINK AF_PACKET
+RestrictAddressFamilies=AF_UNIX AF_INET{% if desk_dns_ipv6_vip_enabled | default(false) %} AF_INET6{% endif %} AF_NETLINK AF_PACKET
 ReadWritePaths=/run/desk-dns-vip
 
 [Install]

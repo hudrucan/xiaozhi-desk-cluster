@@ -1,0 +1,24 @@
+[Unit]
+Description=Private DNS client identity and cluster observability boundary
+After=network-online.target desk-adguard.service
+Wants=network-online.target desk-adguard.service
+[Service]
+User=desk-dnsdist
+Group=desk-dnsdist
+RuntimeDirectory=desk-dns-backend
+RuntimeDirectoryMode=0700
+ExecStartPre=/usr/sbin/haproxy -c -f /etc/desk-dns/backend-haproxy.cfg
+ExecStart=/usr/sbin/haproxy -db -f /etc/desk-dns/backend-haproxy.cfg
+Restart=on-failure
+RestartSec=3
+Slice=desk-dns.slice
+MemoryMax=48M
+TasksMax=16
+LimitNOFILE=2048
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+RestrictAddressFamilies=AF_UNIX AF_INET
+[Install]
+WantedBy=multi-user.target

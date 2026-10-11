@@ -22,3 +22,10 @@ desk_dns_reconcile_policy: false
 desk_dns_sync_version: "0.9.3"
 desk_dns_sync_port: 3002
 desk_dns_sync_interval: 30
+
+# Preserve device IPs and aggregate all three backends in the native UI.
+desk_dns_client_identity_enabled: false
+
+# Opt-in LAN link-local IPv6 DNS attached to the existing DNS election.
+desk_dns_ipv6_vip_enabled: false
+desk_dns_ipv6_vip: fe80::250

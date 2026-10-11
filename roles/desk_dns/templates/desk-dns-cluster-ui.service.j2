@@ -1,0 +1,22 @@
+[Unit]
+Description=Three-node AdGuard UI statistics clients and query log aggregation
+After=network-online.target desk-adguard.service
+Wants=network-online.target desk-adguard.service
+[Service]
+User=desk-dnsdist
+Group=desk-dnsdist
+ExecStart=/usr/bin/python3 /usr/local/libexec/desk-dns/cluster-ui.py
+Restart=on-failure
+RestartSec=3
+Slice=desk-dns.slice
+MemoryMax=64M
+TasksMax=32
+LimitNOFILE=256
+CPUWeight=5
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+RestrictAddressFamilies=AF_UNIX AF_INET
+[Install]
+WantedBy=multi-user.target

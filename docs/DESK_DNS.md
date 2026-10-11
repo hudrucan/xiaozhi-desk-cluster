@@ -15,9 +15,9 @@ That frontend sends queries round-robin to equally weighted AdGuard backends:
 
 | Node | Backend | Local frontend probe | AdGuard UI |
 | --- | --- | --- | --- |
-| deskb1x | 10.10.10.11:5354 | 192.168.1.101:5353 | 127.0.0.1:3001 |
-| deskb2x | 10.10.10.12:5354 | 192.168.1.102:5353 | 127.0.0.1:3001 |
-| deskb3x | 10.10.10.13:5354 | 192.168.1.103:5353 | 127.0.0.1:3001 |
+| deskb1x | 10.10.10.11:5443 (TLS DoH) | 192.168.1.101:5353 | 127.0.0.1:3001 |
+| deskb2x | 10.10.10.12:5443 (TLS DoH) | 192.168.1.102:5353 | 127.0.0.1:3001 |
+| deskb3x | 10.10.10.13:5443 (TLS DoH) | 192.168.1.103:5353 | 127.0.0.1:3001 |
 
 VIP ownership is independent of backend selection: the owner also remains an
 equal backend. There is no node-1-first DNS policy. Initial VRRP ranks 100/110/120
@@ -119,9 +119,10 @@ variables or passing `-e desk_dns_reconcile_policy=true` intentionally replaces
 UI policy. The automation login is retained even in those base candidates.
 Do not remove the synthetic health/filter/identity records.
 
-AdGuard sees dnsdist's private source IP; query logs are split across the three
-backends and do not identify the original LAN client. This iteration does not
-claim shared logs, per-client policy or retained client identity. Query logs use
+Production forwarding uses private TLS DoH at 5443 and trusted original-client
+headers, preserving real LAN client IPs. The original private port 5354 remains
+available for strict backend probes. `/dns/` aggregates the three backends'
+statistics, clients and query logs; entries retain backend provenance in the API. Query logs use
 a 1000-entry memory buffer with file logging disabled; statistics retain one day.
 AdGuard caches are independent. DNS frontend caching is disabled so queries
 actually reach the three equal backends.
@@ -286,8 +287,8 @@ limitation described above. Files referenced by `upstream_dns_file` are rejected
 as non-portable; enter upstreams in the UI instead.
 
 Node-specific bindings, ports, DNS access lists, DHCP, TLS listeners, admin
-accounts/passwords, query logs/statistics and their settings, caches and UI
-theme are excluded. The small API boundary omits reserved health/identity
+accounts/passwords, query log/statistics records, caches and UI
+theme are excluded. Query-log/statistics settings are now shared. The small API boundary omits reserved health/identity
 rewrites from both sides of upstream reconciliation and rejects changes to
 them. Rewrite processing remains enabled, and the internal filtering probe rule
 is retained. Global disabling of protection/filtering still conflicts with the
@@ -364,3 +365,30 @@ UI. The inventory explicitly disables local UI authentication on all three
 AdGuard instances. Protected peer sync still requires its existing token/TLS
 boundary. The legacy DNS-VIP UI port accepts only the three cluster proxies and rejects other LAN devices;
 DNS traffic still uses `.250:53`. See [Unified UI](DESK_UI.md) for deployment.
+
+## Unified real-client UI (2026-10-11)
+
+`dns-cluster.yml` adds a restricted TLS-only backend boundary and a loopback UI
+aggregator on each node. Run `python3 scripts/create-dns-backend-trust.py` first;
+its key/certificate remain ignored and are never printed. Inventory opts into
+client identity forwarding; full DNS reruns retain it. UI aggregation is outside
+the DNS packet path. Settings health, MQTT, providers and Xiaozhi process/config
+snapshots are unchanged by this rollout. The modem is changed only by the user.
+
+Global statistics sum node counters and use query-count-weighted latency; top
+lists merge the upstream API's bounded lists. Logs merge by timestamp with global
+pagination. Partial read coverage is supplied in `X-Desk-DNS-Coverage`; failed
+mutations return an error. Native client names are retained and known node names
+come from public inventory. Unknown names remain IP-only; no names are invented.
+
+Query-log/statistics saves use PUT and synchronize across all nodes. No-body Clear
+and Reset requests omit Content-Type as required by pinned AdGuard. Internal
+health/identity/filtering names are excluded from new logging/statistics. Existing
+historical entries remain until a user-authorized Clear/Reset or normal expiry.
+No client IP is hidden to disguise historical relay/probe traffic.
+
+For DoH forwarding, panel activity reads a fixed native HAProxy request counter
+over a local UNIX socket; it stores no domains and is outside DNS forwarding.
+The plain-DNS packet observer remains available for the disabled identity mode.
+IPv6 router DNS is a separate opt-in extension; see `DESK_DNS_IPV6.md`. It is not
+yet deployed, and no modem change is made by Ansible.

@@ -1,0 +1,32 @@
+global
+    maxconn 256
+    stats socket /run/desk-dns-backend/admin.sock mode 600 level user
+
+defaults
+    mode http
+    timeout connect 2s
+    timeout client 30s
+    timeout server 10s
+
+frontend private_dns_backend
+    bind {{ cluster_ip }}:5443 ssl crt /etc/desk-dns/backend/peer.pem alpn h2,http/1.1
+    http-request deny unless { src 10.10.10.11 10.10.10.12 10.10.10.13 }
+    acl dns_query path /dns-query
+    acl peer_api path_beg /desk-observe/control/
+    http-request deny unless dns_query or peer_api
+    http-request del-header CF-Connecting-IP
+    http-request del-header True-Client-IP
+    http-request del-header X-Real-IP
+    acl real_client req.hdr_ip(X-Forwarded-For) -m ip 192.168.1.0/24 fe80::/10
+    acl node_probe req.hdr_ip(X-Forwarded-For) -m ip 192.168.1.101 192.168.1.102 192.168.1.103
+    stick-table type integer size 1 store gpc0
+    http-request track-sc0 int(1) if dns_query real_client !node_probe
+    http-request sc-inc-gpc0(0) if dns_query real_client !node_probe
+    use_backend observe_api if peer_api
+    default_backend adguard_doh
+
+backend adguard_doh
+    server local 127.0.0.1:3001
+
+backend observe_api
+    server local 127.0.0.1:3003

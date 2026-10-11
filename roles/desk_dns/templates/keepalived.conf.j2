@@ -46,6 +46,11 @@ vrrp_instance DESK_DNS {
     virtual_ipaddress {
         {{ desk_dns_vip }}/{{ desk_dns_snapshot.topology.prefix }} dev {{ desk_dns_snapshot.topology.interface }}
     }
+{% if desk_dns_ipv6_vip_enabled | default(false) %}
+    virtual_ipaddress_excluded {
+        {{ desk_dns_ipv6_vip }}/128 dev {{ desk_dns_snapshot.topology.interface }}
+    }
+{% endif %}
     track_script {
         dns_ready
         avoid_xiaozhi_vip

@@ -13,3 +13,4 @@ xiaozhi_ingress_unified_ui_enabled: true
 desk_dns_ui_auth_enabled: false
 desk_dns_ui_vip_proxy_only: true
 desk_monitoring_auto_login_email: admin@desk.cluster
+desk_dns_client_identity_enabled: true

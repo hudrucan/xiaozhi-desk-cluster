@@ -168,6 +168,42 @@ def publish(path, node_id, instance, boot_id, count, last_query, now):
     os.replace(temporary, path)
 
 
+def observe_http_counter(node):
+    # HAProxy counts only real LAN-client DoH requests, excluding health probes.
+    output = Path('/run/desk-dns/activity.json')
+    instance = uuid.uuid4().hex
+    boot_id = Path('/proc/sys/kernel/random/boot_id').read_text().strip()
+    stopping = threading.Event()
+    signal.signal(signal.SIGTERM, lambda *_: stopping.set())
+    signal.signal(signal.SIGINT, lambda *_: stopping.set())
+    count, last_query, previous = 0, None, None
+    while not stopping.is_set():
+        now = time.monotonic()
+        try:
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as stats:
+                stats.settimeout(.2)
+                stats.connect('/run/desk-dns-backend/admin.sock')
+                stats.sendall(b'show table private_dns_backend\n')
+                stats.shutdown(socket.SHUT_WR)
+                raw = b''
+                while len(raw) < 4096:
+                    part = stats.recv(4096 - len(raw))
+                    if not part: break
+                    raw += part
+            matched = re.search(rb'gpc0=(\d+)', raw)
+            current = int(matched[1]) if matched else 0
+            delta = max(0, current - previous) if previous is not None else 0
+            if delta:
+                count += delta
+                last_query = now
+            previous = current
+        except OSError:
+            previous = None
+        publish(output, node, instance, boot_id, count, last_query, now)
+        stopping.wait(PUBLISH_INTERVAL)
+    output.unlink(missing_ok=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--config', default='/etc/desk-dns/public.json')
@@ -175,6 +211,9 @@ def main():
     args = parser.parse_args()
     if not re.fullmatch(r'deskb[123]x', args.node):
         raise ValueError('Invalid DNS node identity')
+    if Path('/etc/desk-dns/client-identity-enabled').exists():
+        observe_http_counter(args.node)
+        return
     with Path(args.config).open('rb') as source:
         raw = source.read(65537)
     if len(raw) > 65536:

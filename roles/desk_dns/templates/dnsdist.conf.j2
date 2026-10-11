@@ -1,7 +1,12 @@
 -- No console/API exposed. AGH monitoring UI is loopback-only on each node.
 setLocal("{{ desk_dns_vip }}:53")
 addLocal("{{ ansible_host }}:{{ desk_dns_test_port }}")
+{% if desk_dns_ipv6_vip_enabled | default(false) %}
+addLocal("[::]:53")
+setACL({"192.168.1.0/24", "10.10.10.0/24", "127.0.0.0/8", "fe80::/10", "::1/128"})
+{% else %}
 setACL({"192.168.1.0/24", "10.10.10.0/24", "127.0.0.0/8"})
+{% endif %}
 setServerPolicy(roundrobin)
 setRoundRobinFailOnNoServer(true)
 setServFailWhenNoServer(true)
@@ -12,6 +17,10 @@ setTCPRecvTimeout(2)
 setTCPSendTimeout(2)
 setRingBuffersSize(1000)
 {% for node, addresses in desk_dns_nodes | dictsort %}
-newServer({address="{{ addresses.private }}:{{ desk_dns_backend_port }}", name="{{ node }}", source="{{ cluster_ip }}", weight=1, checkName="health.desk-dns.test.", checkType="A", mustResolve=true, checkInterval=2, checkTimeout=1000, maxCheckFailures=2})
+{% if desk_dns_client_identity_enabled | default(false) %}
+newServer({address="{{ addresses.private }}:5443", tls="openssl", caStore="/etc/desk-dns/backend/peer.crt", subjectName="dns-backend.desk.cluster", dohPath="/dns-query", addXForwardedHeaders=true,
+{% else %}
+newServer({address="{{ addresses.private }}:{{ desk_dns_backend_port }}",
+{% endif %} name="{{ node }}", source="{{ cluster_ip }}", weight=1, checkName="health.desk-dns.test.", checkType="A", mustResolve=true, checkInterval=2, checkTimeout=1000, maxCheckFailures=2})
 {% endfor %}
 -- No frontend packet cache: every eligible query reaches one of the AGH nodes.

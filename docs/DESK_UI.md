@@ -15,9 +15,15 @@ Beszel history, users and preferences remain independent across hubs.
 `/dns/` forwards to the current DNS VIP owner, rather than round-robin across
 independent AdGuard UIs. Existing protected peer synchronization replicates that
 owner's policy. Local loopback synchronization skips UI login, but peer tokens,
-TLS, source restrictions and write boundaries remain required. Query logs and
-statistics remain per backend. dnsdist currently hides original client IPs, so
-this change does not provide per-device identification or aggregate statistics.
+TLS, source restrictions and write boundaries remain required. `/dns/` now
+aggregates statistics, client discovery/lookup and timestamp-ordered query logs
+from all three backends. Query-log/statistics saves commit to the DNS VIP owner
+and apply to all peers; periodic reconciliation repairs offline replicas.
+Clear query logs and Reset statistics act on every backend and report incomplete
+operations instead of claiming success. The native AdGuard layout is retained.
+Original client addresses pass over private TLS DoH with trusted forwarding
+headers. Hostnames are retained when known; the original IP remains available
+for AdGuard's native display. Local logs/caches are still stored per backend.
 
 Run `ansible-playbook -i inventory.ini ui.yml` explicitly; it is not part of
 `site.yml`. The play freezes process/configuration state and live DNS policy,
