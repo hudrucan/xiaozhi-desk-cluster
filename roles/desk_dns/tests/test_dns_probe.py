@@ -49,8 +49,8 @@ class ProbeTests(unittest.TestCase):
         from types import SimpleNamespace
         def command(*args):
             outputs = {
-                ('ip', '-j', '-4', 'route', 'get', '192.168.1.250'): '[{"dev":"wlan0"}]',
-                ('ip', '-j', '-4', 'addr', 'show', 'dev', 'wlan0'): '[{"addr_info":[{"family":"inet","local":"192.168.1.101","prefixlen":24}]}]',
+                ('ip', '-j', '-4', 'route', 'get', '192.168.1.250'): '[{"dev":"lo"}]',
+                ('ip', '-j', '-4', 'addr', 'show'): '[{"ifname":"lo","addr_info":[{"family":"inet","local":"127.0.0.1","prefixlen":8}]},{"ifname":"wlan0","addr_info":[{"family":"inet","local":"192.168.1.101","prefixlen":24}]}]',
                 ('ip', '-j', 'link', 'show', 'dev', 'wlan0'): '[{"address":"aa:bb:cc:dd:ee:ff"}]',
                 ('/usr/sbin/keepalived', '--version'): '',
                 ('systemctl', 'show', 'desk-adguard', '--property=MainPID'): 'MainPID=0',
@@ -70,6 +70,7 @@ class ProbeTests(unittest.TestCase):
             result=probe.topology(config(), 'deskb1x')
         self.assertEqual(result['mac'], 'aa:bb:cc:dd:ee:ff')
         self.assertEqual(result['dnsdist_version'], '1.7.3-2')
+        self.assertEqual(result['interface'], 'wlan0')
 
     def test_private_or_named_upstreams_and_shared_vrid_rejected(self):
         for upstream in ('10.10.10.11', '192.168.1.1', 'resolver.example'):

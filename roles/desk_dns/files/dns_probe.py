@@ -158,11 +158,17 @@ def protected_state():
 
 def topology(config, node):
     address = config['nodes'][node]['management']
-    routes = json.loads(run('ip', '-j', '-4', 'route', 'get', config['vip']))
-    interface = routes[0]['dev']
+    # A locally owned VIP routes through lo; identify the management link from
+    # the node's permanent management address instead of routing to the VIP.
+    all_addresses = json.loads(run('ip', '-j', '-4', 'addr', 'show'))
+    addresses = [dev for dev in all_addresses if any(
+        entry.get('family') == 'inet' and entry.get('local') == address
+        for entry in dev.get('addr_info', []))]
+    if len(addresses) != 1:
+        raise ValueError('Ambiguous management address assignment')
+    interface = addresses[0]['ifname']
     if not re.fullmatch(r'[A-Za-z0-9_.-]{1,15}', interface):
         raise ValueError('Unsupported management interface name')
-    addresses = json.loads(run('ip', '-j', '-4', 'addr', 'show', 'dev', interface))
     links = json.loads(run('ip', '-j', 'link', 'show', 'dev', interface))
     mac = links[0]['address']
     if not re.fullmatch(r'[0-9a-fA-F]{2}(?::[0-9a-fA-F]{2}){5}', mac):
