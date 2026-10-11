@@ -1,0 +1,72 @@
+---
+- name: Create isolated DNS users
+  ansible.builtin.user:
+    name: "{{ item }}"
+    system: true
+    create_home: false
+    shell: /usr/sbin/nologin
+  loop: [desk-adguard, desk-dnsdist]
+
+- name: Create dedicated root-owned DNS directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  loop: [/etc/desk-dns, /opt/desk-adguard, /var/cache/desk-dns, /usr/local/libexec/desk-dns]
+
+- name: Create private AdGuard working directory
+  ansible.builtin.file:
+    path: /var/lib/desk-adguard
+    state: directory
+    owner: desk-adguard
+    group: desk-adguard
+    mode: '0700'
+
+- name: Install standard-library DNS and ownership probes
+  ansible.builtin.copy:
+    src: "{{ item }}"
+    dest: "/usr/local/libexec/desk-dns/{{ item }}"
+    owner: root
+    group: root
+    mode: '0755'
+  loop: [dns_probe.py, peer_arp.py]
+
+- name: Install passive DNS panel telemetry collector
+  ansible.builtin.copy:
+    src: dns_activity.py
+    dest: /usr/local/libexec/desk-dns/dns_activity.py
+    owner: root
+    group: root
+    mode: '0755'
+  register: desk_dns_activity_script
+
+- name: Record public frozen endpoints and election
+  ansible.builtin.copy:
+    content: "{{ item.value | to_nice_json }}\n"
+    dest: "/etc/desk-dns/{{ item.name }}.json"
+    owner: root
+    group: root
+    mode: '0644'
+  loop:
+    - {name: public, value: "{{ desk_dns_config }}"}
+    - {name: election, value: "{{ desk_dns_election }}"}
+    - {name: vip, value: "{{ {'vip': desk_dns_vip} }}"}
+
+- name: Install bounded DNS resource slice
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/desk-dns.slice
+    owner: root
+    group: root
+    mode: '0644'
+    content: |
+      [Unit]
+      Description=Desk DNS resource budget
+      [Slice]
+      CPUWeight=10
+      IOWeight=10
+      CPUQuota=50%
+      MemoryHigh=256M
+      MemoryMax=320M
+      TasksMax=128

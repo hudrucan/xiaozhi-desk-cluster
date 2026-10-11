@@ -1,0 +1,13 @@
+---
+- name: Require frozen Xiaozhi processes and configuration immediately before changes
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/python3
+      - -c
+      - "{{ lookup('ansible.builtin.file', role_path + '/files/dns_probe.py') }}"
+      - guard
+      - --config
+      - '-'
+    stdin: "{{ desk_dns_config | combine({'snapshot': desk_dns_snapshot}) | to_json }}"
+  check_mode: false
+  changed_when: false

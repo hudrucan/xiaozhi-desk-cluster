@@ -1,0 +1,17 @@
+-- No console/API exposed. AGH monitoring UI is loopback-only on each node.
+setLocal("{{ desk_dns_vip }}:53")
+addLocal("{{ ansible_host }}:{{ desk_dns_test_port }}")
+setACL({"192.168.1.0/24", "10.10.10.0/24", "127.0.0.0/8"})
+setServerPolicy(roundrobin)
+setRoundRobinFailOnNoServer(true)
+setServFailWhenNoServer(true)
+setMaxTCPClientThreads(2)
+setMaxTCPQueuedConnections(64)
+setMaxTCPQueriesPerConnection(100)
+setTCPRecvTimeout(2)
+setTCPSendTimeout(2)
+setRingBuffersSize(1000)
+{% for node, addresses in desk_dns_nodes | dictsort %}
+newServer({address="{{ addresses.private }}:{{ desk_dns_backend_port }}", name="{{ node }}", source="{{ cluster_ip }}", weight=1, checkName="health.desk-dns.test.", checkType="A", mustResolve=true, checkInterval=2, checkTimeout=1000, maxCheckFailures=2})
+{% endfor %}
+-- No frontend packet cache: every eligible query reaches one of the AGH nodes.

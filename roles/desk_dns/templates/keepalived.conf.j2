@@ -1,0 +1,53 @@
+# Separate DNS VRRP process: never shares Xiaozhi config, PIDs or sync groups.
+global_defs {
+    router_id DNS_{{ inventory_hostname }}
+    enable_script_security
+    script_user root
+}
+
+vrrp_script dns_ready {
+    script "/usr/bin/python3 /usr/local/libexec/desk-dns/dns_probe.py ready --config /etc/desk-dns/public.json --host {{ ansible_host }} --port {{ desk_dns_test_port }}"
+    interval 3
+    timeout 4
+    fall 2
+    rise 2
+    weight 0
+    init_fail
+}
+
+vrrp_script avoid_xiaozhi_vip {
+    script "/usr/bin/python3 /usr/local/libexec/desk-dns/dns_probe.py prefer --config /etc/desk-dns/public.json"
+    interval 3
+    timeout 2
+    fall 2
+    rise 2
+    weight -50
+    init_fail
+}
+
+vrrp_instance DESK_DNS {
+    state BACKUP
+    interface {{ desk_dns_snapshot.topology.interface }}
+    virtual_router_id {{ desk_dns_vrid }}
+    priority {{ desk_dns_election[inventory_hostname] }}
+    advert_int 1
+    # Preemption lets an eligible non-Xiaozhi owner replace a penalized owner.
+    preempt_delay 5
+    garp_master_refresh 30
+    garp_master_refresh_repeat 2
+    unicast_src_ip {{ ansible_host }}
+    check_unicast_src
+    track_src_ip
+    unicast_peer {
+{% for node, addresses in desk_dns_nodes | dictsort if node != inventory_hostname %}
+        {{ addresses.management }}
+{% endfor %}
+    }
+    virtual_ipaddress {
+        {{ desk_dns_vip }}/{{ desk_dns_snapshot.topology.prefix }} dev {{ desk_dns_snapshot.topology.interface }}
+    }
+    track_script {
+        dns_ready
+        avoid_xiaozhi_vip
+    }
+}

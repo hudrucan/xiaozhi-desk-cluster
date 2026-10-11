@@ -1,0 +1,69 @@
+---
+- name: Require full symmetric membership and supported operating system
+  ansible.builtin.assert:
+    that:
+      - groups.get('desk_dns', []) | sort == ['deskb1x', 'deskb2x', 'deskb3x']
+      - ansible_play_hosts_all | sort == groups['desk_dns'] | sort
+      - ansible_facts.distribution == 'Debian'
+      - ansible_facts.architecture == 'aarch64'
+      - ansible_facts.service_mgr == 'systemd'
+      - desk_dns_admin_user is match('^[a-zA-Z0-9_-]{1,32}$')
+      - desk_dns_filter_url is match('^https://[^\s]+$')
+      - desk_dns_adguard_version == 'v0.107.79'
+      - desk_dns_adguard_sha256 == '3f7893c18e8aaadc456d0452839190561c306ca95175a2254958be80a769c1ae'
+      - desk_dns_user_rules is sequence and desk_dns_user_rules is not string
+      - desk_dns_user_rules | length <= 1000
+    fail_msg: DNS requires the complete Debian ARM64 cluster and reviewed release/policy values.
+
+- name: Require an authenticated UI before real deployment
+  ansible.builtin.assert:
+    that: desk_dns_admin_password_hash is match('^\$2[aby]\$(0[4-9]|[12][0-9]|3[01])\$[./A-Za-z0-9]{53}$')
+    fail_msg: Supply desk_dns_admin_password_hash as a bcrypt hash through an ignored secret file or Vault.
+  no_log: true
+  when: not ansible_check_mode and not (desk_dns_verify_only | default(false))
+
+- name: Assemble only public endpoint metadata
+  ansible.builtin.set_fact:
+    desk_dns_nodes: "{{ desk_dns_nodes | default({}) | combine({item: {'management': hostvars[item].ansible_host, 'private': hostvars[item].cluster_ip}}) }}"
+  loop: "{{ groups['desk_dns'] | sort }}"
+
+- name: Assemble the frozen public DNS configuration
+  ansible.builtin.set_fact:
+    desk_dns_config: "{{ {'nodes': desk_dns_nodes, 'vip': desk_dns_vip, 'vrid': desk_dns_vrid, 'backend_port': desk_dns_backend_port, 'test_port': desk_dns_test_port, 'web_port': desk_dns_web_port, 'upstreams': desk_dns_upstreams} }}"
+
+- name: Read management topology and protected state without creating files
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/python3
+      - -c
+      - "{{ lookup('ansible.builtin.file', role_path + '/files/dns_probe.py') }}"
+      - preflight
+      - --config
+      - '-'
+      - --node
+      - "{{ inventory_hostname }}"
+    stdin: "{{ desk_dns_config | to_json }}"
+  register: desk_dns_preflight_result
+  check_mode: false
+  changed_when: false
+
+- name: Freeze read-only prerequisites for this run
+  ansible.builtin.set_fact:
+    desk_dns_snapshot: "{{ desk_dns_preflight_result.stdout | from_json }}"
+
+- name: Require managed DNS VIP metadata to match on reruns
+  ansible.builtin.stat:
+    path: /etc/desk-dns/public.json
+  register: desk_dns_previous
+
+- name: Read existing deployment metadata
+  ansible.builtin.slurp:
+    src: /etc/desk-dns/public.json
+  register: desk_dns_previous_data
+  when: desk_dns_previous.stat.exists
+
+- name: Reject dynamic DNS VIP migration and port/topology changes
+  ansible.builtin.assert:
+    that: ((desk_dns_previous_data.content | b64decode | from_json) | dict2items | rejectattr('key', 'equalto', 'upstreams') | list | items2dict) == (desk_dns_config | dict2items | rejectattr('key', 'equalto', 'upstreams') | list | items2dict)
+    fail_msg: Existing DNS topology differs. VIP/port migration needs a separate reviewed operation.
+  when: desk_dns_previous.stat.exists

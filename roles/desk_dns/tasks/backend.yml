@@ -1,0 +1,148 @@
+---
+- ansible.builtin.include_tasks: guard.yml
+
+- name: Report the non-mutating check-mode plan
+  ansible.builtin.debug:
+    msg: AdGuard candidates, downloads, packages and service changes are skipped in check mode. Real apply requires a bcrypt UI password hash.
+  when: ansible_check_mode
+
+- name: Prepare and activate the pinned AdGuard backend
+  when: not ansible_check_mode
+  block:
+    - ansible.builtin.include_tasks: common.yml
+
+    - name: Download checksum-pinned official ARM64 archive
+      ansible.builtin.get_url:
+        url: "https://github.com/AdguardTeam/AdGuardHome/releases/download/{{ desk_dns_adguard_version }}/AdGuardHome_linux_arm64.tar.gz"
+        dest: "/var/cache/desk-dns/AdGuardHome-{{ desk_dns_adguard_version }}.tar.gz"
+        checksum: "sha256:{{ desk_dns_adguard_sha256 }}"
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Create versioned installation directory
+      ansible.builtin.file:
+        path: "/opt/desk-adguard/{{ desk_dns_adguard_version }}"
+        state: directory
+        mode: '0755'
+
+    - name: Extract binary without running the vendor installer
+      ansible.builtin.unarchive:
+        src: "/var/cache/desk-dns/AdGuardHome-{{ desk_dns_adguard_version }}.tar.gz"
+        dest: "/opt/desk-adguard/{{ desk_dns_adguard_version }}"
+        remote_src: true
+        creates: "/opt/desk-adguard/{{ desk_dns_adguard_version }}/AdGuardHome/AdGuardHome"
+
+    - name: Render authenticated AdGuard candidate
+      ansible.builtin.template:
+        src: AdGuardHome.yaml.j2
+        dest: /var/lib/desk-adguard/candidate.yaml
+        owner: desk-adguard
+        group: desk-adguard
+        mode: '0600'
+        validate: "/opt/desk-adguard/{{ desk_dns_adguard_version }}/AdGuardHome/AdGuardHome --check-config --no-check-update -w /var/lib/desk-adguard -c %s"
+      no_log: true
+      diff: false
+
+    - name: Compute managed policy fingerprint without exposing the password hash
+      ansible.builtin.set_fact:
+        desk_dns_policy_digest: "{{ lookup('ansible.builtin.template', 'AdGuardHome.yaml.j2') | hash('sha256') }}"
+      no_log: true
+
+    - name: Read previous managed policy fingerprint
+      ansible.builtin.slurp:
+        src: /etc/desk-dns/policy.sha256
+      register: desk_dns_old_policy
+      failed_when: false
+      changed_when: false
+      no_log: true
+
+    - name: Check installed AdGuard configuration
+      ansible.builtin.stat:
+        path: /var/lib/desk-adguard/AdGuardHome.yaml
+      register: desk_dns_existing_config
+
+    - name: Determine whether managed policy must be replaced
+      ansible.builtin.set_fact:
+        desk_dns_policy_changed: "{{ not desk_dns_existing_config.stat.exists or desk_dns_reconcile_policy or (desk_dns_old_policy.content | default('') | b64decode | trim) != desk_dns_policy_digest }}"
+
+    - name: Validate installed DNS policy if retaining local UI changes
+      ansible.builtin.command:
+        argv:
+          - "/opt/desk-adguard/{{ desk_dns_adguard_version }}/AdGuardHome/AdGuardHome"
+          - --check-config
+          - --no-check-update
+          - -w
+          - /var/lib/desk-adguard
+          - -c
+          - /var/lib/desk-adguard/AdGuardHome.yaml
+      changed_when: false
+      no_log: true
+      when: not desk_dns_policy_changed
+
+    - name: Install isolated AdGuard unit
+      ansible.builtin.template:
+        src: desk-adguard.service.j2
+        dest: /etc/systemd/system/desk-adguard.service
+        mode: '0644'
+      register: desk_dns_adguard_unit
+
+    - name: Stop only AdGuard before replacing its mutable YAML
+      ansible.builtin.systemd_service:
+        name: desk-adguard
+        state: stopped
+        daemon_reload: true
+      when: desk_dns_policy_changed
+
+    - name: Install already validated policy
+      ansible.builtin.copy:
+        src: /var/lib/desk-adguard/candidate.yaml
+        dest: /var/lib/desk-adguard/AdGuardHome.yaml
+        remote_src: true
+        owner: desk-adguard
+        group: desk-adguard
+        mode: '0600'
+        backup: true
+      no_log: true
+      diff: false
+      when: desk_dns_policy_changed
+
+    - name: Record applied managed policy fingerprint
+      ansible.builtin.copy:
+        content: "{{ desk_dns_policy_digest }}\n"
+        dest: /etc/desk-dns/policy.sha256
+        owner: root
+        group: root
+        mode: '0600'
+
+    - name: Start or restart only the dedicated AdGuard unit
+      ansible.builtin.systemd_service:
+        name: desk-adguard
+        state: "{{ 'restarted' if desk_dns_adguard_unit.changed else 'started' }}"
+        enabled: true
+        daemon_reload: true
+
+    - name: Require the local AdGuard identity, filtering and UDP/TCP answers
+      ansible.builtin.command:
+        argv: [/usr/bin/python3, /usr/local/libexec/desk-dns/dns_probe.py, backend, --config, /etc/desk-dns/public.json, --host, "{{ cluster_ip }}", --port, "{{ desk_dns_backend_port | string }}"]
+      register: desk_dns_backend_ready
+      until: desk_dns_backend_ready.rc == 0
+      retries: 5
+      delay: 2
+      changed_when: false
+
+    - name: Install isolated passive DNS activity unit
+      ansible.builtin.template:
+        src: desk-dns-activity.service.j2
+        dest: /etc/systemd/system/desk-dns-activity.service
+        owner: root
+        group: root
+        mode: '0644'
+      register: desk_dns_activity_unit
+
+    - name: Start or restart only the DNS activity collector
+      ansible.builtin.systemd_service:
+        name: desk-dns-activity
+        state: "{{ 'restarted' if desk_dns_activity_script.changed or desk_dns_activity_unit.changed else 'started' }}"
+        enabled: true
+        daemon_reload: true

@@ -9,6 +9,7 @@ import importlib.util
 import ipaddress
 import json
 import logging
+import math
 import os
 from pathlib import Path
 import re
@@ -23,10 +24,13 @@ CONFIG_PATH = "/etc/xiaozhi-node-panel.json"
 DRIVER_PATH = "/usr/libexec/deskbox-front-panel"
 MAX_JSON_BYTES = 65536
 GLYPHS = {"-": 0x40, "i": 0x04, "P": 0x73, "n": 0x54, "t": 0x78,
-          "C": 0x39, "o": 0x5C}
+          "C": 0x39, "o": 0x5C, "d": 0x5E}
 ROLE_INTERVAL_SECONDS = 1.5
 STATUS_INTERVAL_SECONDS = 1.0
-FRAME_INTERVAL_SECONDS = 0.25
+FRAME_INTERVAL_SECONDS = 0.05
+DNS_PULSE_SECONDS = 0.15
+DNS_PULSE_PERIOD_SECONDS = 0.5
+DNS_EVENT_MAX_AGE_SECONDS = 0.75
 LOGGER = logging.getLogger("xiaozhi-node-panel")
 
 
@@ -80,13 +84,17 @@ def load_config(path):
         if not isinstance(config.get("core_id"), str) or not re.fullmatch(
             r"[A-Za-z0-9_-]{1,128}", config["core_id"]):
             raise ValueError("invalid local core identity")
+    for key, expected in (("dns_state_file", "/etc/desk-dns/vip.json"),
+                          ("dns_activity_path", "/run/desk-dns/activity.json")):
+        if key in config and config[key] != expected:
+            raise ValueError("invalid DNS panel metadata path")
     return config
 
 
-def local_vip_owner(config):
+def local_vip_owner(config, state_key="ingress_state_file"):
     """Read applied ingress state and actual addresses; never query Cloud/HTTP."""
     try:
-        state = read_json(config["ingress_state_file"])
+        state = read_json(config[state_key])
         vip = str(ipaddress.IPv4Address(state["vip"]))
         result = subprocess.run(
             ["/usr/sbin/ip", "-j", "-4", "address", "show", "dev",
@@ -159,7 +167,7 @@ def core_session_active(config):
         return False
 
 
-def display_text(node_number, vip_owner, mqtt_active=False, core_active=False, phase=0):
+def display_text(node_number, vip_owner, mqtt_active=False, core_active=False, phase=0, dns_owner=False):
     roles = []
     if mqtt_active:
         roles.append("nt")
@@ -167,6 +175,8 @@ def display_text(node_number, vip_owner, mqtt_active=False, core_active=False, p
         roles.append("Co")
     if vip_owner:
         roles.append("iP")
+    if dns_owner:
+        roles.append("dn")
     status = roles[phase % len(roles)] if roles else "--"
     return status + f"{node_number:02d}"
 
@@ -222,6 +232,61 @@ def worker_icons(config, driver):
         llm_active=activity["llm"] > 0, tts_active=activity.get("tts", 0) > 0, blink_on=not activity["llm"] or int(time.monotonic() * 2) % 2 == 0)
 
 
+def dns_activity(config, now):
+    path = config.get("dns_activity_path")
+    if path is None:
+        return None
+    try:
+        value = read_json(path)
+        boot = Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+        if (not isinstance(value, dict) or set(value) != {
+                "protocol", "node_id", "instance", "boot_id", "monotonic", "queries", "last_query"}
+                or value["protocol"] != "desk-dns-activity-v1"
+                or value["node_id"] != config.get("core_id") or value["boot_id"] != boot
+                or not isinstance(value["instance"], str) or not re.fullmatch('[0-9a-f]{32}', value["instance"])
+                or type(value["monotonic"]) not in (float, int) or not math.isfinite(value["monotonic"])
+                or not 0 <= now - value["monotonic"] <= 2
+                or type(value["queries"]) is not int or not 0 <= value["queries"] < 2 ** 63):
+            return None
+        last = value["last_query"]
+        if last is None:
+            return value if value["queries"] == 0 else None
+        if (type(last) not in (float, int) or not math.isfinite(last)
+                or not 0 <= last <= value["monotonic"] or value["queries"] == 0):
+            return None
+        return value
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+class DnsPulse:
+    """Coalesce bursts; cap colon pulses at two per second without blocking."""
+    def __init__(self):
+        self.instance = None
+        self.queries = 0
+        self.pending = False
+        self.on_until = 0.0
+        self.next_allowed = 0.0
+
+    def update(self, value, now):
+        if value is None:
+            self.pending = False
+            self.on_until = 0.0
+            return False
+        changed = value["instance"] != self.instance or value["queries"] > self.queries
+        self.instance, self.queries = value["instance"], value["queries"]
+        recent = value["last_query"] is not None and 0 <= now - value["last_query"] <= DNS_EVENT_MAX_AGE_SECONDS
+        if changed and recent:
+            self.pending = True
+        if not recent:
+            self.pending = False
+        if self.pending and now >= self.next_allowed:
+            self.pending = False
+            self.on_until = now + DNS_PULSE_SECONDS
+            self.next_allowed = now + DNS_PULSE_PERIOD_SECONDS
+        return now < self.on_until
+
+
 def connectivity_icons(config, driver):
     icons = worker_icons(config, driver)
     if driver.carrier(config["management_interface"]):
@@ -230,7 +295,7 @@ def connectivity_icons(config, driver):
         icons |= driver.ICON_LAN
     if driver.external_usb_present():
         icons |= driver.ICON_USB
-    # Colon remains off; activity icons never depend on transport roles.
+    # Colon is composed separately from DNS metadata; compute icons keep their policy.
     return icons & ~driver.ICON_COLON
 
 
@@ -265,6 +330,9 @@ def run(config, driver, placeholder=False):
             previous_owner = None
             previous_mqtt = None
             previous_core = None
+            previous_dns_owner = None
+            dns_owner = False
+            dns_pulse = DnsPulse()
             owner = mqtt_active = core_active = False
             icons = 0
             next_status_poll = 0.0
@@ -274,19 +342,20 @@ def run(config, driver, placeholder=False):
                 now = time.monotonic()
                 if not placeholder and now >= next_status_poll:
                     owner = local_vip_owner(config)
+                    dns_owner = local_vip_owner(config, "dns_state_file") if "dns_state_file" in config else False
                     mqtt_active = mqtt_connection_active(config)
                     core_active = core_session_active(config)
                     icons = connectivity_icons(config, driver)
                     now = time.monotonic()
                     next_status_poll = now + STATUS_INTERVAL_SECONDS
-                roles = (owner, mqtt_active, core_active)
+                roles = (owner, mqtt_active, core_active, dns_owner)
                 if roles != previous_roles:
                     # Restart the sequence when ownership/activity changes.
                     rotation_started = now
                     previous_roles = roles
                 phase = int((now - rotation_started) / ROLE_INTERVAL_SECONDS)
                 segments = segments_for(display_text(
-                    config["node_number"], owner, mqtt_active, core_active, phase), driver)
+                    config["node_number"], owner, mqtt_active, core_active, phase, dns_owner), driver)
                 if segments != previous_segments:
                     for index, (address, value) in enumerate(zip(driver.DIGIT_ADDRS, segments)):
                         if previous_segments is None or value != previous_segments[index]:
@@ -294,6 +363,9 @@ def run(config, driver, placeholder=False):
                     previous_segments = segments
                 if not placeholder:
                     icons = (icons & ~(driver.ICON_CLOCK | driver.ICON_PLAY | driver.ICON_PAUSE)) | worker_icons(config, driver)
+                icons &= ~driver.ICON_COLON
+                if not placeholder and dns_pulse.update(dns_activity(config, now), now):
+                    icons |= driver.ICON_COLON
                 if icons != previous_icons:
                     driver.write_register(driver.ICON_ADDR, icons)
                     previous_icons = icons
@@ -306,6 +378,9 @@ def run(config, driver, placeholder=False):
                 if core_active != previous_core and not placeholder:
                     LOGGER.info("node=%02d core_session_active=%s", config["node_number"], core_active)
                     previous_core = core_active
+                if dns_owner != previous_dns_owner and not placeholder:
+                    LOGGER.info("node=%02d dns_vip_owner=%s", config["node_number"], dns_owner)
+                    previous_dns_owner = dns_owner
                 if placeholder:
                     break
                 stopping.wait(FRAME_INTERVAL_SECONDS)

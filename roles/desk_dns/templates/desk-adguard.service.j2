@@ -1,0 +1,34 @@
+[Unit]
+Description=Desk AdGuard Home private DNS backend
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=desk-adguard
+Group=desk-adguard
+Slice=desk-dns.slice
+Environment=GOMAXPROCS=1
+Environment=GOMEMLIMIT=160MiB
+ExecStart=/opt/desk-adguard/{{ desk_dns_adguard_version }}/AdGuardHome/AdGuardHome --no-check-update -w /var/lib/desk-adguard -c /var/lib/desk-adguard/AdGuardHome.yaml
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=15
+CPUWeight=10
+MemoryHigh=160M
+MemoryMax=224M
+TasksMax=64
+LimitNOFILE=4096
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/var/lib/desk-adguard
+
+[Install]
+WantedBy=multi-user.target

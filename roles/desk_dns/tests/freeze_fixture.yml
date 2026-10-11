@@ -1,0 +1,25 @@
+---
+- name: Exercise DNS all-node freeze on controller aliases only
+  hosts: desk_dns
+  connection: local
+  gather_facts: false
+  become: false
+  vars:
+    ansible_python_interpreter: "{{ ansible_playbook_python }}"
+    ansible_remote_tmp: /private/tmp/desk-dns-local-fixture
+  tasks:
+    - ansible.builtin.set_fact:
+        desk_dns_snapshot:
+          topology:
+            xiaozhi_vip: 192.168.1.186
+            dnsdist_version: 1.7.3-1
+            election: null
+        desk_dns_config: {vip: 192.168.1.250}
+    - ansible.builtin.import_role:
+        name: desk_dns
+        tasks_from: freeze
+    - ansible.builtin.assert:
+        that:
+          - desk_dns_election.keys() | sort == ['deskb1x','deskb2x','deskb3x']
+          - desk_dns_election.values() | sort == [100,110,120]
+          - groups['desk_dns'] | map('extract', hostvars, 'desk_dns_election') | unique | list | length == 1

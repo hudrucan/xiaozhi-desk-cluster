@@ -1,0 +1,56 @@
+---
+- ansible.builtin.include_tasks: guard.yml
+
+- name: Validate and start only the isolated DNS frontend
+  when: not ansible_check_mode
+  block:
+    - ansible.builtin.include_tasks: check_backends.yml
+
+    - name: Install the frozen dnsdist package without starting the vendor service
+      ansible.builtin.apt:
+        name: "dnsdist={{ desk_dns_package_version }}"
+        state: present
+        install_recommends: false
+        policy_rc_d: 101
+        update_cache: false
+      environment:
+        NEEDRESTART_MODE: l
+
+    - name: Keep the unused vendor service disabled on future boots
+      ansible.builtin.systemd_service:
+        name: dnsdist
+        enabled: false
+        state: stopped
+
+    - name: Validate and install dnsdist candidate
+      ansible.builtin.template:
+        src: dnsdist.conf.j2
+        dest: /etc/desk-dns/dnsdist.conf
+        owner: root
+        group: root
+        mode: '0644'
+        validate: /usr/bin/dnsdist --check-config -C %s
+      register: desk_dns_frontend_config
+
+    - name: Install dedicated frontend unit
+      ansible.builtin.template:
+        src: desk-dnsdist.service.j2
+        dest: /etc/systemd/system/desk-dnsdist.service
+        mode: '0644'
+      register: desk_dns_frontend_unit
+
+    - name: Activate only desk-dnsdist
+      ansible.builtin.systemd_service:
+        name: desk-dnsdist
+        state: "{{ 'restarted' if desk_dns_frontend_config.changed or desk_dns_frontend_unit.changed else 'started' }}"
+        enabled: true
+        daemon_reload: true
+
+    - name: Require all three identities through the local UDP/TCP frontend
+      ansible.builtin.command:
+        argv: [/usr/bin/python3, /usr/local/libexec/desk-dns/dns_probe.py, balanced, --config, /etc/desk-dns/public.json, --host, "{{ ansible_host }}", --port, "{{ desk_dns_test_port | string }}"]
+      register: desk_dns_frontend_ready
+      until: desk_dns_frontend_ready.rc == 0
+      retries: 5
+      delay: 2
+      changed_when: false

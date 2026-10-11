@@ -1,0 +1,37 @@
+[Unit]
+Description=Passive Desk DNS backend activity for the node panel
+Wants=network-online.target
+After=network-online.target desk-adguard.service
+
+[Service]
+Type=simple
+User=root
+Slice=desk-dns.slice
+RuntimeDirectory=desk-dns
+RuntimeDirectoryMode=0700
+ExecStart=/usr/bin/python3 /usr/local/libexec/desk-dns/dns_activity.py --node {{ inventory_hostname }}
+Restart=on-failure
+RestartSec=3
+CPUWeight=1
+CPUQuota=5%
+MemoryMax=32M
+TasksMax=8
+LimitNOFILE=32
+UMask=0077
+CapabilityBoundingSet=CAP_NET_RAW
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+LockPersonality=true
+RestrictRealtime=true
+RestrictAddressFamilies=AF_UNIX AF_PACKET
+ReadWritePaths=/run/desk-dns
+TimeoutStopSec=3
+
+[Install]
+WantedBy=multi-user.target

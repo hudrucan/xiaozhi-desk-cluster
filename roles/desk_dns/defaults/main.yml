@@ -1,0 +1,17 @@
+---
+# Dedicated opt-in DNS stack. No resolver, DHCP or Xiaozhi settings are changed.
+desk_dns_vip: 192.168.1.250
+desk_dns_vrid: 52
+desk_dns_backend_port: 5354
+desk_dns_test_port: 5353
+desk_dns_web_port: 3001
+desk_dns_upstreams: [1.1.1.1, 9.9.9.9]
+desk_dns_adguard_version: v0.107.79
+desk_dns_adguard_sha256: 3f7893c18e8aaadc456d0452839190561c306ca95175a2254958be80a769c1ae
+desk_dns_admin_user: admin
+# Supply a bcrypt hash through an ignored secret file or Ansible Vault.
+desk_dns_admin_password_hash: ''
+desk_dns_filter_url: https://adguardteam.github.io/AdGuardSDNSFilter/Filters/filter.txt
+desk_dns_user_rules: []
+# UI writes are local. Reconcile managed policy explicitly on a later rollout.
+desk_dns_reconcile_policy: false

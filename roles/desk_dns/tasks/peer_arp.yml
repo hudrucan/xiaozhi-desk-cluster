@@ -1,0 +1,43 @@
+---
+- name: Assemble DNS owner-only peer ARP metadata
+  ansible.builtin.set_fact:
+    desk_dns_peers: "{{ desk_dns_peers | default([]) + [{'ip': hostvars[item].ansible_host, 'mac': hostvars[item].desk_dns_snapshot.topology.mac}] }}"
+  loop: "{{ groups['desk_dns'] | sort | difference([inventory_hostname]) }}"
+
+- name: Install DNS-specific ARP metadata
+  ansible.builtin.copy:
+    content: "{{ {'interface': desk_dns_snapshot.topology.interface, 'local_ip': ansible_host, 'peers': desk_dns_peers} | to_nice_json }}\n"
+    dest: /etc/desk-dns/peer-arp.json
+    mode: '0644'
+
+- name: Install DNS-only peer announcement service
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/desk-dns-peer-arp.service
+    mode: '0644'
+    content: |
+      [Unit]
+      Description=Owner-only Desk DNS VIP peer ARP refresh
+      After=network-online.target
+      [Service]
+      Type=oneshot
+      Slice=desk-dns.slice
+      ExecStart=/usr/bin/python3 /usr/local/libexec/desk-dns/peer_arp.py --config /etc/desk-dns/peer-arp.json --snapshot /etc/desk-dns/vip.json
+      TimeoutStartSec=3
+      NoNewPrivileges=true
+      CapabilityBoundingSet=CAP_NET_RAW
+      ProtectSystem=strict
+      ProtectHome=true
+
+- name: Install DNS-only peer announcement timer
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/desk-dns-peer-arp.timer
+    mode: '0644'
+    content: |
+      [Unit]
+      Description=Periodic Desk DNS owner-only peer announcements
+      [Timer]
+      OnBootSec=10
+      OnUnitActiveSec=5
+      AccuracySec=1
+      [Install]
+      WantedBy=timers.target

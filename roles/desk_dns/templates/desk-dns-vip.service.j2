@@ -1,0 +1,30 @@
+[Unit]
+Description=Desk DNS independent unicast VRRP
+Wants=network-online.target desk-dnsdist.service
+After=network-online.target desk-dnsdist.service
+
+[Service]
+Type=simple
+Slice=desk-dns.slice
+RuntimeDirectory=desk-dns-vip
+RuntimeDirectoryMode=0700
+ExecStartPre=/usr/sbin/keepalived --config-test --use-file=/etc/desk-dns/keepalived.conf
+ExecStart=/usr/sbin/keepalived --dont-fork --log-console --vrrp --use-file=/etc/desk-dns/keepalived.conf --pid=/run/desk-dns-vip/parent.pid --vrrp_pid=/run/desk-dns-vip/vrrp.pid
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=10
+MemoryMax=64M
+TasksMax=32
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_SETUID CAP_SETGID
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_NETLINK
+ReadWritePaths=/run/desk-dns-vip
+
+[Install]
+WantedBy=multi-user.target

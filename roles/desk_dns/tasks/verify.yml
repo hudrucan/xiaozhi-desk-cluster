@@ -1,0 +1,82 @@
+---
+- ansible.builtin.include_tasks: guard.yml
+- ansible.builtin.include_tasks: check_backends.yml
+
+- name: Require dedicated services to be active without restarting anything
+  ansible.builtin.command:
+    argv: [systemctl, is-active, desk-adguard, desk-dnsdist, desk-dns-vip, desk-dns-peer-arp.timer]
+  changed_when: false
+  check_mode: false
+
+- name: Wait briefly for the floating DNS listener to converge
+  ansible.builtin.wait_for:
+    host: "{{ desk_dns_vip }}"
+    port: 53
+    timeout: 30
+    connect_timeout: 2
+  delegate_to: localhost
+  become: false
+  run_once: true
+  check_mode: false
+
+- name: Verify three-node load distribution on every frontend
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/python3
+      - -c
+      - "{{ lookup('ansible.builtin.file', role_path + '/files/dns_probe.py') }}"
+      - balanced
+      - --config
+      - '-'
+      - --host
+      - "{{ ansible_host }}"
+      - --port
+      - "{{ desk_dns_test_port | string }}"
+    stdin: "{{ desk_dns_config | to_json }}"
+  check_mode: false
+  changed_when: false
+
+- name: Read DNS VIP ownership without touching either VRRP service
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/python3
+      - -c
+      - "{{ lookup('ansible.builtin.file', role_path + '/files/dns_probe.py') }}"
+      - owners
+      - --config
+      - '-'
+    stdin: "{{ desk_dns_config | to_json }}"
+  register: desk_dns_owner
+  until: not ((desk_dns_owner.stdout | from_json).owner and (desk_dns_owner.stdout | from_json).xiaozhi_owner)
+  retries: 5
+  delay: 2
+  check_mode: false
+  changed_when: false
+
+- name: Require exactly one floating DNS VIP owner
+  ansible.builtin.assert:
+    that:
+      - groups['desk_dns'] | map('extract', hostvars, 'desk_dns_owner') | map(attribute='stdout') | map('from_json') | selectattr('owner') | list | length == 1
+      - groups['desk_dns'] | map('extract', hostvars, 'desk_dns_owner') | map(attribute='stdout') | map('from_json') | selectattr('owner') | selectattr('xiaozhi_owner') | list | length == 0
+    fail_msg: DNS VIP must have exactly one owner. Do not change router DNS until this passes.
+  run_once: true
+
+- name: Verify filtering and three backends through DNS VIP from management LAN
+  ansible.builtin.command:
+    argv:
+      - "{{ ansible_playbook_python }}"
+      - -c
+      - "{{ lookup('ansible.builtin.file', role_path + '/files/dns_probe.py') }}"
+      - balanced
+      - --config
+      - '-'
+      - --host
+      - "{{ desk_dns_vip }}"
+      - --port
+      - '53'
+    stdin: "{{ desk_dns_config | to_json }}"
+  delegate_to: localhost
+  become: false
+  run_once: true
+  check_mode: false
+  changed_when: false

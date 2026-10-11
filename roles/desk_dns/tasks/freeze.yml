@@ -1,0 +1,34 @@
+---
+- name: Require one shared Xiaozhi deployment VIP and dnsdist package version
+  ansible.builtin.assert:
+    that:
+      - groups['desk_dns'] | map('extract', hostvars, 'desk_dns_snapshot') | map(attribute='topology.xiaozhi_vip') | unique | list | length == 1
+      - groups['desk_dns'] | map('extract', hostvars, 'desk_dns_snapshot') | map(attribute='topology.dnsdist_version') | unique | list | length == 1
+      - groups['desk_dns'] | map('extract', hostvars, 'desk_dns_config') | unique | list | length == 1
+    fail_msg: All nodes must agree on the frozen DNS topology, Xiaozhi VIP and dnsdist version.
+  run_once: true
+
+- name: Reuse agreeing persisted election or draw all three initial ranks equally
+  ansible.builtin.command:
+    argv:
+      - "{{ ansible_playbook_python }}"
+      - -c
+      - |
+        import json, sys
+        scope = {'__name__': 'desk_dns_fixture'}
+        exec(sys.argv[1], scope)
+        print(json.dumps(scope['election'](json.loads(sys.argv[2]), json.loads(sys.argv[3]))))
+      - "{{ lookup('ansible.builtin.file', role_path + '/files/dns_probe.py') }}"
+      - "{{ groups['desk_dns'] | map('extract', hostvars, 'desk_dns_snapshot') | map(attribute='topology.election') | list | to_json }}"
+      - "{{ groups['desk_dns'] | sort | to_json }}"
+  delegate_to: localhost
+  become: false
+  run_once: true
+  register: desk_dns_election_draw
+  check_mode: false
+  changed_when: false
+
+- name: Retain the common election and package snapshot on every node
+  ansible.builtin.set_fact:
+    desk_dns_election: "{{ desk_dns_election_draw.stdout | from_json }}"
+    desk_dns_package_version: "{{ desk_dns_snapshot.topology.dnsdist_version }}"

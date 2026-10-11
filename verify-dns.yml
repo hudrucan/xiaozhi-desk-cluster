@@ -1,0 +1,17 @@
+---
+# Read-only. Does not stop VIP owners or change services/router configuration.
+- name: Verify the three-node DNS foundation
+  hosts: desk_dns
+  become: true
+  gather_facts: true
+  any_errors_fatal: true
+  vars:
+    desk_dns_verify_only: true
+  tasks:
+    - ansible.builtin.include_role:
+        name: desk_dns
+        tasks_from: preflight
+        public: true
+    - ansible.builtin.include_role:
+        name: desk_dns
+        tasks_from: verify

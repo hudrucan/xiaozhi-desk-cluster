@@ -510,13 +510,14 @@ and [Linux nonlocal binding](https://kernel.org/doc/html/latest/networking/ip-sy
 ## Front panel: node identity and VIP ownership
 
 The four-digit FD6551 panel uses two status cells on the left and a stable
-two-digit node number on the right. The colon stays off:
+two-digit node number on the right. Role labels are independent of activity icons:
 
 | Local role | Status cells |
 | --- | --- |
 | Authenticated MQTT connection, including idle | `nt` |
 | Established core transport session | `Co` |
-| Actual local VIP ownership | `iP` |
+| Actual local Xiaozhi VIP ownership | `iP` |
+| Actual local DNS VIP ownership, when configured | `dn` |
 | No active roles | `--` |
 
 For example, node 2 with MQTT and core alternates `nt 02` and `Co 02`.
@@ -539,7 +540,8 @@ stays illuminated while no local provider task is running, including on nodes
 showing `nt`, `Co` or `iP`. The activity renderer selects Clock for local ASR,
 blinking Play for LLM/VLM and steady Play for TTS; it never shows Pause during a
 running job's dark blink phase. Concurrent ASR and other compute may light both
-Clock and Play. The colon remains off.
+Clock and Play. Fresh DNS backend activity may pulse the colon independently;
+missing or stale DNS metadata leaves it off.
 
 Worker activity telemetry is not wired yet, so the live panel currently uses
 compute-idle defaults: Pause on, Clock/Play off. The planned LLM/VLM blink rate
@@ -821,8 +823,8 @@ VIP/config changes; a failed core requires a fresh session, with no replication.
 Panel includes an established local core session as **`Co NN`**. MQTT uses
 `nt NN`; actual VIP ownership uses `iP NN`. Multiple local roles rotate in the
 order `nt` → `Co` → `iP`, omitting absent roles, approximately every 1.5 seconds.
-Idle shows `-- NN`. The colon remains off. Local bounded status
-polls verify protocol, identity, readiness and a positive integer session count
+Idle shows `-- NN`. The colon is reserved for fresh DNS backend activity.
+Local bounded status polls verify protocol, identity, readiness and a positive integer session count
 before showing `Co`. This indicates transport-session ownership, not running
 providers or worker compute activity.
 
@@ -1221,3 +1223,13 @@ not overwrite it; abort discards stale response chunks. An explicit false
 
 See server `docs/cluster-emotion.md` for compatibility and the user-owned face,
 interrupt and device-tool verification checks.
+
+## Optional three-node DNS
+
+AdGuard Home + dnsdist with a separate DNS VIP (`192.168.1.250`) is available
+through `dns.yml`; it is excluded from default `site.yml` convergence. See
+[Desk DNS foundation](docs/DESK_DNS.md) for isolation, fair backend selection,
+Xiaozhi VIP avoidance, per-node monitoring UI and deployment prerequisites.
+Router DNS and deployed panel services are unchanged by these source edits.
+The optional panel reader supports `dn` ownership and bounded DNS activity metadata;
+see the DNS document for telemetry readiness and a separate panel rollout.

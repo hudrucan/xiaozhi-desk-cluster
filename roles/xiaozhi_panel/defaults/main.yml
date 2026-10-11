@@ -4,3 +4,6 @@ xiaozhi_panel_driver_sha256: fc98793c00ff26d97cd5a4ab4dae67603dd158cc43efd2b8bd5
 
 # Enable only after the combined worker publishes a fresh local snapshot.
 xiaozhi_panel_worker_activity_enabled: false
+
+# Optional DNS metadata; missing/stale files never claim ownership or traffic.
+xiaozhi_panel_dns_enabled: true
