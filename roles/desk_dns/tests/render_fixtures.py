@@ -33,6 +33,7 @@ for node, address in nodes.items():
             assert agh['querylog']['file_enabled'] is False
             assert len(agh['dns']['allowed_clients'])==4
             assert agh['schema_version']==34
+            assert all(item['enabled'] is True for item in agh['filtering']['rewrites'])
         if path.name=='keepalived.conf.j2':
             assert 'virtual_router_id 52' in rendered
             assert 'weight -50' in rendered and 'nopreempt' not in rendered

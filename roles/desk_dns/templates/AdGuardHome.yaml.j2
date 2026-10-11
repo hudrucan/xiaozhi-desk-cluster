@@ -36,8 +36,8 @@ filtering:
   blocking_mode: null_ip
   rewrites_enabled: true
   rewrites:
-    - {domain: health.desk-dns.test, answer: 127.0.0.1}
-    - {domain: who.desk-dns.test, answer: {{ cluster_ip | to_json }}}
+    - {domain: health.desk-dns.test, answer: 127.0.0.1, enabled: true}
+    - {domain: who.desk-dns.test, answer: {{ cluster_ip | to_json }}, enabled: true}
 filters:
   - enabled: true
     url: {{ desk_dns_filter_url | to_json }}
