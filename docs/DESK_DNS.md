@@ -180,10 +180,16 @@ indicator. It is not a DNS accounting or successful-response metric. The
 collector starts after backend verification and restarts only on its script/unit
 changes; check mode skips it. The panel reads local files without DNS requests.
 
-No service has been deployed or restarted during offline development. After the
-separate DNS rollout, use `ansible-playbook -i inventory.ini panel.yml` to enable
-the display on all three nodes and verify the physical panel. DNS role rollout
-does not restart the existing Xiaozhi panel or other Xiaozhi services.
+After the separate DNS rollout, enable the display with the opt-in panel role.
+On the existing combined voice cluster, preserve its worker activity reader:
+
+```bash
+ansible-playbook -i inventory.ini panel.yml -e '{"xiaozhi_panel_worker_activity_enabled": true}'
+```
+
+This adds `dn`/colon without removing ASR/LLM/TTS icons. Verify the physical
+panel separately. DNS role rollout does not restart the existing Xiaozhi panel
+or other Xiaozhi services; `panel.yml` restarts only the single panel writer.
 
 ## Offline validation
 

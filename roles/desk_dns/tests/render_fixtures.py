@@ -45,6 +45,8 @@ for node, address in nodes.items():
             assert 'roundrobin' in rendered
             assert '192.168.1.186' not in rendered
             assert 'webserver(' not in rendered
+        if path.name=='desk-dns-vip.service.j2':
+            assert 'RestrictAddressFamilies=AF_UNIX AF_INET AF_NETLINK AF_PACKET' in rendered
         if path.name=='desk-dns-activity.service.j2':
             assert 'CapabilityBoundingSet=CAP_NET_RAW' in rendered
             assert 'CPUQuota=5%' in rendered and 'MemoryMax=32M' in rendered
