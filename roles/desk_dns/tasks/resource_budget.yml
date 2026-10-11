@@ -1,4 +1,14 @@
 ---
+- name: Require ordered bounded filter memory budgets
+  ansible.builtin.assert:
+    that:
+      - 0 < (desk_dns_adguard_go_memory | int) < (desk_dns_adguard_memory_high | int)
+      - (desk_dns_adguard_memory_high | int) < (desk_dns_adguard_memory_max | int)
+      - (desk_dns_adguard_memory_max | int) <= (desk_dns_memory_high | int)
+      - (desk_dns_memory_high | int) < (desk_dns_memory_max | int)
+      - (desk_dns_memory_max | int) <= 1024
+    fail_msg: Keep Go, AdGuard and total DNS memory budgets ordered and below one GiB.
+
 - name: Install bounded DNS resource slice with room for native filter rebuilds
   ansible.builtin.template:
     src: desk-dns.slice.j2
@@ -22,3 +32,31 @@
     argv: [systemctl, set-property, --runtime, desk-dns.slice, 'CPUQuota=100%']
   when: desk_dns_live_cpu_ceiling.stdout != '1s'
   changed_when: true
+
+- name: Read the live DNS memory ceiling and pressure threshold
+  ansible.builtin.command:
+    argv: [systemctl, show, desk-dns.slice, '--property=MemoryHigh,MemoryMax']
+  register: desk_dns_live_memory_budget
+  changed_when: false
+
+- name: Apply DNS memory headroom without restarting services
+  ansible.builtin.command:
+    argv:
+      - systemctl
+      - set-property
+      - --runtime
+      - desk-dns.slice
+      - "MemoryHigh={{ desk_dns_memory_high }}M"
+      - "MemoryMax={{ desk_dns_memory_max }}M"
+  when: >-
+    ('MemoryHigh=' ~ (((desk_dns_memory_high | int) * 1048576) | string)) not in desk_dns_live_memory_budget.stdout_lines
+    or ('MemoryMax=' ~ (((desk_dns_memory_max | int) * 1048576) | string)) not in desk_dns_live_memory_budget.stdout_lines
+  changed_when: true
+
+- name: Install separate frontend and VIP slice outside AdGuard's quota
+  ansible.builtin.template:
+    src: desk-dnsfront.slice.j2
+    dest: /etc/systemd/system/desk-dnsfront.slice
+    owner: root
+    group: root
+    mode: '0644'

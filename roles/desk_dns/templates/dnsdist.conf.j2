@@ -7,6 +7,8 @@ setACL({"192.168.1.0/24", "10.10.10.0/24", "127.0.0.0/8", "fe80::/10", "::1/128"
 {% else %}
 setACL({"192.168.1.0/24", "10.10.10.0/24", "127.0.0.0/8"})
 {% endif %}
+-- Frontend liveness stays available during backend rebuilds and emergency DNS.
+addAction(QNameRule("frontend.desk-dns.test."), SpoofAction("127.0.0.1"))
 setServerPolicy(roundrobin)
 setRoundRobinFailOnNoServer(true)
 setServFailWhenNoServer(true)
@@ -21,6 +23,13 @@ setRingBuffersSize(1000)
 newServer({address="{{ addresses.private }}:5443", tls="openssl", caStore="/etc/desk-dns/backend/peer.crt", subjectName="dns-backend.desk.cluster", dohPath="/dns-query", addXForwardedHeaders=true,
 {% else %}
 newServer({address="{{ addresses.private }}:{{ desk_dns_backend_port }}",
-{% endif %} name="{{ node }}", source="{{ cluster_ip }}", weight=1, checkName="health.desk-dns.test.", checkType="A", mustResolve=true, checkInterval=2, checkTimeout=1000, maxCheckFailures=2})
+{% endif %} name="{{ node }}", source="{{ cluster_ip }}", weight=1, checkName="health.desk-dns.test.", checkType="A", mustResolve=true, checkInterval=2, checkTimeout=1000, maxCheckFailures=2, rise=3})
 {% endfor %}
 -- No frontend packet cache: every eligible query reaches one of the AGH nodes.
+
+{% if desk_dns_emergency_enabled %}
+-- This pool is deliberately outside AdGuard: availability during total failure.
+newServer({address="{{ desk_dns_emergency_resolver }}:53", source="{{ ansible_host }}", name="emergency-cloudflare", pool="emergency", checkName="one.one.one.one.", checkType="A", mustResolve=true, checkInterval=5, checkTimeout=1000, maxCheckFailures=2, rise=2})
+addAction(PoolAvailableRule(""), PoolAction(""))
+addAction(AllRule(), PoolAction("emergency"))
+{% endif %}

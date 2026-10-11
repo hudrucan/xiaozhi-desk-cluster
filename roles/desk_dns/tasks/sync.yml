@@ -74,7 +74,7 @@
 
     - name: Install private boundary configuration without exposing credentials
       ansible.builtin.copy:
-        content: "{{ {'node': inventory_hostname, 'nodes': groups['desk_dns'] | sort, 'management_nodes': desk_dns_nodes.values() | map(attribute='management') | list, 'vip': desk_dns_vip, 'port': desk_dns_sync_port, 'username': 'desk-sync', 'password': desk_dns_sync_password, 'password_hash': desk_dns_sync_password_hash, 'local_auth': desk_dns_ui_auth_enabled, 'adguard': 'http://127.0.0.1:' + (desk_dns_web_port | string), 'certificate': '/etc/desk-dns/sync/tls.crt', 'ca': '/etc/desk-dns/sync/tls.crt', 'key': '/etc/desk-dns/sync/tls.key', 'state': '/var/lib/desk-dns-sync/status.json', 'binary': '/opt/desk-adguard-sync/' + desk_dns_sync_version + '/adguard-home-sync', 'sync_config': '/etc/desk-dns/sync/adguard-home-sync.yaml'} | to_nice_json }}\n"
+        content: "{{ {'node': inventory_hostname, 'nodes': groups['desk_dns'] | sort, 'management_nodes': desk_dns_nodes.values() | map(attribute='management') | list, 'vip': desk_dns_vip, 'port': desk_dns_sync_port, 'username': 'desk-sync', 'password': desk_dns_sync_password, 'password_hash': desk_dns_sync_password_hash, 'local_auth': desk_dns_ui_auth_enabled, 'serialized_updates': desk_dns_serialized_updates, 'adguard': 'http://127.0.0.1:' + (desk_dns_web_port | string), 'certificate': '/etc/desk-dns/sync/tls.crt', 'ca': '/etc/desk-dns/sync/tls.crt', 'key': '/etc/desk-dns/sync/tls.key', 'state': '/var/lib/desk-dns-sync/status.json', 'binary': '/opt/desk-adguard-sync/' + desk_dns_sync_version + '/adguard-home-sync', 'sync_config': '/etc/desk-dns/sync/adguard-home-sync.yaml'} | to_nice_json }}\n"
         dest: /etc/desk-dns/sync-agent.json
         owner: root
         group: desk-dns-sync
@@ -162,7 +162,7 @@
         src: "{{ item }}.j2"
         dest: "/etc/systemd/system/{{ item }}"
         mode: '0644'
-      loop: [desk-dnssync.slice, desk-dns-sync-agent.service, desk-dns-sync.service, desk-dns-sync.timer]
+      loop: [desk-dnssync.slice, desk-dns-sync-agent.service, desk-dns-sync.service, desk-dns-sync.timer, desk-dns-filter-refresh.service, desk-dns-filter-refresh.timer]
       register: desk_dns_sync_units
 
     - name: Start only the policy API boundary

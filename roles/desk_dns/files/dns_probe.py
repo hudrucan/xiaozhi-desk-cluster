@@ -17,6 +17,7 @@ SERVICES = ('nats-server', 'haproxy', 'keepalived', 'xiaozhi-control-plane',
             'xiaozhi-worker', 'xiaozhi-core', 'xiaozhi-mqtt-gateway',
             'xiaozhi-runtime-apply', 'deskbox-front-panel')
 HEALTH = 'health.desk-dns.test'
+FRONTEND = 'frontend.desk-dns.test'
 IDENTITY = 'who.desk-dns.test'
 BLOCKED = 'blocked.desk-dns.test'
 
@@ -294,6 +295,13 @@ def main():
         vip = str(ipaddress.IPv4Address(json.loads(Path('/etc/xiaozhi-ingress.json').read_text())['vip']))
         addresses = json.loads(run('ip', '-j', '-4', 'addr', 'show'))
         raise SystemExit(1 if owns(addresses, vip) else 0)
+    elif args.action == 'ready':
+        # VIP belongs to the working DNS frontend, including emergency mode.
+        # Native backend/filter readiness remains strict in deployment probes.
+        for tcp in (False, True):
+            if query(args.host, args.port, FRONTEND, tcp) != ['127.0.0.1']:
+                raise ValueError('DNS frontend unavailable')
+        print('DNS UDP/TCP frontend: PASS')
     elif args.action == 'owners':
         addresses = json.loads(run('ip', '-j', '-4', 'addr', 'show'))
         xiaozhi_vip = str(ipaddress.IPv4Address(json.loads(Path('/etc/xiaozhi-ingress.json').read_text())['vip']))

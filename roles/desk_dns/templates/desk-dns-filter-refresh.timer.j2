@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily shared DNS filter refresh with short retry after busy maintenance
+[Timer]
+OnBootSec=5min
+OnUnitInactiveSec=5min
+RandomizedDelaySec=30s
+AccuracySec=10s
+Unit=desk-dns-filter-refresh.service
+[Install]
+WantedBy=timers.target

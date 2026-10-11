@@ -94,7 +94,7 @@ def project(route, value):
     return value
 
 
-def validate_write(route, value):
+def validate_write(route, value, serialized=False):
     if route in ('querylog/config/update', 'querylog_config', 'stats/config/update', 'stats_config'):
         allowed = {'enabled', 'interval', 'ignored', 'ignored_enabled', 'anonymize_client_ip'}
         if not isinstance(value, dict) or set(value) - allowed: raise ValueError('Only shared observation settings allowed')
@@ -106,6 +106,8 @@ def validate_write(route, value):
             raise ValueError('Reserved rewrite')
         if route == 'rewrite/settings/update' and value != {'enabled': True}:
             raise ValueError('Internal rewrites must remain enabled')
+    if route == 'filtering/config' and serialized:
+        value['interval'] = 0  # All refreshes use the serialized cluster job.
     if route == 'filtering/set_rules':
         value['rules'] = [RULE] + [r for r in value['rules'] if r != RULE]
     if route == 'profile/update':
@@ -114,7 +116,7 @@ def validate_write(route, value):
     return value
 
 
-def fetch(url, config, method='GET', value=None, context=None):
+def fetch(url, config, method='GET', value=None, context=None, return_mutation=False, timeout=25):
     # No redirects, credential forwarding to arbitrary URLs, or environment proxies.
     class NoRedirect(urllib.request.HTTPRedirectHandler):
         def redirect_request(self, *args, **kwargs):
@@ -151,11 +153,11 @@ def fetch(url, config, method='GET', value=None, context=None):
         request = urllib.request.Request(url, data=None if value is None else encoded(value),
                                          method=method, headers=headers)
         try:
-            with opener.open(request, timeout=25) as response:
+            with opener.open(request, timeout=timeout) as response:
                 data = response.read(LIMIT + 1)
                 if len(data) > LIMIT:
                     raise ValueError('Response exceeds policy boundary')
-                if not data.strip() or method != 'GET':
+                if not data.strip() or (method != 'GET' and not return_mutation):
                     return None
                 return json.loads(data)
         except urllib.error.HTTPError as error:
@@ -169,13 +171,177 @@ def fetch(url, config, method='GET', value=None, context=None):
             raise
 
 
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+
+class MaintenanceBusy(Exception):
+    pass
+
+
+class Maintenance:
+    """One cluster maintenance lease, held by the stable frontend VIP owner.
+
+    A new owner waits longer than any previous lease before accepting work.
+    Leases expire after killed clients; a failed/uncertain mutation never releases
+    early. No database or continuous disk writes are used.
+    """
+    ttl = 180
+
+    def __init__(self, config, clock=time.monotonic, warmup=180):
+        self.config, self.clock, self.warmup = config, clock, warmup
+        self.lock = threading.Lock()
+        self.owner = False
+        self.not_before = 0
+        self.active = None
+        self.local_token = None
+
+    def observe(self, owner):
+        with self.lock:
+            if owner and not self.owner:
+                self.not_before = self.clock() + self.warmup
+            self.owner = owner
+
+    def acquire(self, node):
+        import secrets
+        with self.lock:
+            now = self.clock()
+            if (not self.owner or now < self.not_before
+                    or (self.active and self.active['expires'] > now)):
+                raise MaintenanceBusy('Another filter update or VIP transition is in progress')
+            if node not in self.config['nodes']:
+                raise ValueError('Unknown maintenance node')
+            if not other_backend_ready(node):
+                raise MaintenanceBusy('Keep at least one other healthy AdGuard during maintenance')
+            token = secrets.token_hex(24)
+            self.active = {'node': node, 'token': token, 'expires': now + self.ttl}
+            return {'token': token, 'ttl': self.ttl}
+
+    def release(self, node, token):
+        with self.lock:
+            if (self.active and self.active['node'] == node
+                    and hmac.compare_digest(self.active['token'], token)):
+                self.active = None
+                return True
+            return False
+
+
+def backend_probe():
+    import importlib.util
+    path = Path(__file__).with_name('dns-probe.py')
+    if not path.exists(): path = Path(__file__).with_name('dns_probe.py')
+    spec = importlib.util.spec_from_file_location('maintenance_dns_probe', path)
+    module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+    return module
+
+
+def native_ready(node):
+    try:
+        public = json.loads(Path('/etc/desk-dns/public.json').read_bytes())
+        probe = backend_probe()
+        import secrets
+        payload = probe.request(probe.HEALTH, secrets.randbelow(65536))
+        context = ssl.create_default_context(cafile='/etc/desk-dns/sync/backend.crt')
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect(), urllib.request.HTTPSHandler(context=context))
+        request = urllib.request.Request('https://' + public['nodes'][node]['private'] + ':5443/dns-query',
+            data=payload, method='POST', headers={'Content-Type':'application/dns-message',
+            'X-Forwarded-For':public['nodes'][node]['management']})
+        with opener.open(request, timeout=2) as response:
+            data = response.read(4097)
+        return probe.answers(data, payload) == ['127.0.0.1']
+    except Exception:
+        return False
+
+
+def other_backend_ready(node):
+    public = json.loads(Path('/etc/desk-dns/public.json').read_bytes())
+    return any(native_ready(peer) for peer in public['nodes'] if peer != node)
+
+
+def coordinator(config):
+    return 'https://' + config['vip'] + ':' + str(config['port'])
+
+
+def lease_request(config, value):
+    local = owns(config['vip'])
+    context = None if local else ssl.create_default_context(cafile=config['ca'])
+    base = 'http://127.0.0.1:' + str(config['port']) if local else coordinator(config)
+    return fetch(base + '/desk-sync/lease', config, 'POST', value,
+                 context=context, return_mutation=True)
+
+
+def acquire_maintenance(config):
+    return lease_request(config, {'action': 'acquire', 'node': config['node']})['token']
+
+
+def release_maintenance(config, token):
+    try:
+        lease_request(config, {'action': 'release', 'node': config['node'], 'token': token})
+    except Exception:
+        # Lost owner/transport is safe: lease expires, next owner has a cooldown.
+        pass
+
+
+def filter_write(config, route, value):
+    if route not in WRITES or not route.startswith('filtering/'):
+        raise ValueError('Only filter mutations allowed')
+    value = validate_write(route, value, serialized=True)
+    token = acquire_maintenance(config)
+    try:
+        result = fetch(config['adguard'] + '/control/' + route, config, WRITES[route],
+                       value, return_mutation=True, timeout=120)
+        # Do not release if the update left its native DNS backend unresponsive.
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            if native_ready(config['node']):
+                release_maintenance(config, token)
+                break
+            time.sleep(1)
+        return result
+    except urllib.error.HTTPError as error:
+        if 400 <= error.code < 500: release_maintenance(config, token)
+        raise
+    except Exception:
+        # Timeout may mean AdGuard is still compiling after the caller gave up.
+        # Leave the lease in place, instead of starting another backend's update.
+        raise
+
+
+def refresh_filters(config):
+    if not owns(config['vip']): return 0
+    path = Path(config['state']).with_name('refresh.json')
+    previous = json.loads(path.read_bytes()) if path.exists() else {}
+    if time.time() - previous.get('completed_at', 0) < 86400: return 0
+    try:
+        public = json.loads(Path('/etc/desk-dns/public.json').read_bytes())
+        context = ssl.create_default_context(cafile='/etc/desk-dns/sync/backend.crt')
+        for node, addresses in sorted(public['nodes'].items()):
+            if not owns(config['vip']): raise MaintenanceBusy('DNS owner changed')
+            for whitelist in (False, True):
+                if node == config['node']:
+                    filter_write(config, 'filtering/refresh', {'whitelist': whitelist, 'force': True})
+                else:
+                    fetch('https://' + addresses['private'] + ':5443/desk-observe/control/filtering/refresh',
+                          config, 'POST', {'whitelist': whitelist, 'force': True}, context=context, timeout=150)
+        temporary = path.with_suffix('.tmp')
+        temporary.write_bytes(encoded({'completed_at': time.time()})); temporary.chmod(0o600)
+        temporary.replace(path)
+        print('DNS filters refreshed serially on 3 nodes', flush=True)
+        return 0
+    except Exception:
+        print('DNS filter refresh deferred; kept current filters; next timer retries', flush=True)
+        return 1
+
+
 class Server(http.server.ThreadingHTTPServer):
     daemon_threads = True
     request_queue_size = 8
 
-    def __init__(self, address, config, source=False):
+    def __init__(self, address, config, source=False, maintenance=None):
         self.config = config
         self.source = source
+        self.maintenance = maintenance or Maintenance(config)
         self.tls = None
         self.slots = threading.BoundedSemaphore(8)
         super().__init__(address, Handler)
@@ -231,6 +397,35 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if not hmac.compare_digest(self.headers.get('Authorization', ''), basic(config)):
                 return self.answer(401, {'error': 'authentication_required'})
             owner = owns(config['vip'])
+            if self.path == '/desk-sync/lease' and self.command == 'POST':
+                if not owner: return self.answer(409, {'error': 'source_unavailable'})
+                self.server.maintenance.observe(owner)
+                length = int(self.headers.get('Content-Length', '0'))
+                if self.headers.get('Transfer-Encoding') or not 0 < length <= 1024:
+                    return self.answer(400, {'error': 'invalid_body'})
+                value = json.loads(self.rfile.read(length))
+                if value.get('action') == 'acquire':
+                    return self.answer(200, self.server.maintenance.acquire(value['node']))
+                if value.get('action') == 'release':
+                    return self.answer(200, {'released': self.server.maintenance.release(value['node'], value['token'])})
+                return self.answer(400, {'error': 'invalid_lease_action'})
+            if self.path == '/desk-sync/register' and self.command == 'POST' and not self.server.source:
+                length = int(self.headers.get('Content-Length', '0'))
+                if self.headers.get('Transfer-Encoding') or not 0 < length <= 1024:
+                    return self.answer(400, {'error': 'invalid_body'})
+                value = json.loads(self.rfile.read(length))
+                token = value.get('token')
+                if token is not None and (not isinstance(token, str) or len(token) != 48):
+                    raise ValueError('Invalid token')
+                self.server.maintenance.local_token = (token, time.monotonic() + Maintenance.ttl) if token else None
+                return self.answer(200, None)
+            if self.path.startswith('/desk-sync/filter/') and self.command == 'POST' and not self.server.source:
+                length = int(self.headers.get('Content-Length', '0'))
+                if self.headers.get('Transfer-Encoding') or not 0 <= length <= LIMIT:
+                    return self.answer(400, {'error': 'invalid_body'})
+                route = 'filtering/' + self.path.removeprefix('/desk-sync/filter/')
+                result = filter_write(config, route, json.loads(self.rfile.read(length) or b'{}'))
+                return self.answer(200, result)
             if self.server.source and (not owner or self.command != 'GET'):
                 return self.answer(409, {'error': 'source_unavailable'})
             if self.path == '/desk-sync/owner' and self.command == 'GET':
@@ -266,10 +461,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if len(body) != length:
                 raise ValueError('Incomplete request')
             value = json.loads(body) if body.strip() else {}
-            validate_write(route, value)
+            validate_write(route, value, serialized=config.get('serialized_updates', False))
+            if route.startswith('filtering/') and config.get('serialized_updates'):
+                lease = self.server.maintenance.local_token
+                if not lease or lease[1] <= time.monotonic():
+                    raise MaintenanceBusy('Replica maintenance lease required')
             result = fetch(config['adguard'] + '/control/' + route, config,
                            self.command, value)
             return self.answer(200, result)
+        except MaintenanceBusy:
+            self.answer(409, {'error': 'filter_maintenance_busy'})
         except (ValueError, KeyError, TypeError):
             self.answer(400, {'error': 'invalid_policy'})
         except Exception:
@@ -318,6 +519,8 @@ def atomic_status(config, value):
 
 def pull(config):
     state = {'protocol': 'desk-dns-sync-v1', 'node': config['node'], 'checked_at': time.time()}
+    token = None
+    complete = False
     try:
         if owns(config['vip']):
             state['state'] = 'origin'
@@ -332,6 +535,11 @@ def pull(config):
         before = snapshot(origin, config, context)
         # Avoid an upstream process/filter refresh when policy already agrees.
         if before != snapshot(local, config):
+            if config.get('serialized_updates'):
+                token = acquire_maintenance(config)
+                fetch(local + '/desk-sync/register', config, 'POST', {'token': token})
+                if before != snapshot(origin, config, context):
+                    raise MaintenanceBusy('Source policy changed before maintenance')
             result = subprocess.run([config['binary'], 'run', '--config', config['sync_config']],
                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                                     timeout=90, env={**os.environ, 'LOG_LEVEL': 'error',
@@ -344,6 +552,7 @@ def pull(config):
             raise ValueError('Source changed during synchronization')
         if after != snapshot(local, config):
             raise ValueError('Policy does not yet agree')
+        complete = True
         state.update(state='synced', origin=identity['node'], policy_sha256=after,
                      last_success_at=time.time())
         atomic_status(config, state)
@@ -354,18 +563,32 @@ def pull(config):
         atomic_status(config, state)
         print('DNS policy sync unavailable; retained local policy; next timer retries', flush=True)
         return 1
+    finally:
+        if token:
+            try: fetch(local + '/desk-sync/register', config, 'POST', {'token': None})
+            except Exception: pass
+            if complete and native_ready(config['node']): release_maintenance(config, token)
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('action', choices=['serve', 'pull'])
+    parser.add_argument('action', choices=['serve', 'pull', 'refresh'])
     parser.add_argument('--config', default='/etc/desk-dns/sync-agent.json')
     args = parser.parse_args()
     config = json.loads(Path(args.config).read_bytes())
+    if args.action == 'refresh':
+        raise SystemExit(refresh_filters(config))
     if args.action == 'pull':
         raise SystemExit(pull(config))
-    local = Server(('127.0.0.1', config['port']), config)
-    source = Server((config['vip'], config['port']), config, source=True)
+    maintenance = Maintenance(config)
+    def watch_owner():
+        while True:
+            try: maintenance.observe(owns(config['vip']))
+            except Exception: maintenance.observe(False)
+            time.sleep(2)
+    threading.Thread(target=watch_owner, daemon=True).start()
+    local = Server(('127.0.0.1', config['port']), config, maintenance=maintenance)
+    source = Server((config['vip'], config['port']), config, source=True, maintenance=maintenance)
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     context.minimum_version = ssl.TLSVersion.TLSv1_2
     context.load_cert_chain(config['certificate'], config['key'])

@@ -1,0 +1,170 @@
+---
+- ansible.builtin.include_tasks: resources.yml
+
+- name: Require existing private policy sync and original client forwarding
+  ansible.builtin.assert:
+    that:
+      - desk_dns_client_identity_enabled | bool
+      - desk_dns_emergency_enabled | bool
+      - desk_dns_serialized_updates | bool
+      - desk_dns_emergency_resolver == '1.1.1.1'
+      - not ansible_check_mode
+    fail_msg: Resilience rollout requires the existing three-node DNS stack; use syntax-check for a read-only preview.
+
+- name: Back up the DNS frontend and install a validated emergency pool
+  ansible.builtin.template:
+    src: dnsdist.conf.j2
+    dest: /etc/desk-dns/dnsdist.conf
+    mode: '0644'
+    backup: true
+    validate: /usr/bin/dnsdist --check-config -C %s
+  register: desk_dns_resilient_frontend
+
+- name: Install independent resource units for DNS ingress and VIP
+  ansible.builtin.template:
+    src: "{{ item }}.j2"
+    dest: "/etc/systemd/system/{{ item }}"
+    mode: '0644'
+  loop: [desk-dnsdist.service, desk-dns-vip.service]
+  register: desk_dns_resilient_units
+
+- name: Move only the changed DNS frontend to its independent quota
+  ansible.builtin.systemd_service:
+    name: desk-dnsdist
+    state: "{{ 'restarted' if desk_dns_resilient_frontend.changed or desk_dns_resilient_units.changed else 'started' }}"
+    daemon_reload: true
+
+- name: Verify native filtering and every backend before the next phase
+  ansible.builtin.command:
+    argv: [/usr/bin/python3, /usr/local/libexec/desk-dns/dns-probe.py, balanced, --config, /etc/desk-dns/public.json, --host, "{{ ansible_host }}", --port, "{{ desk_dns_test_port | string }}"]
+  register: desk_dns_resilient_native_ready
+  until: desk_dns_resilient_native_ready.rc == 0
+  retries: 15
+  delay: 2
+  changed_when: false
+
+- name: Install frontend liveness probe only after the matching DNS rule is active
+  ansible.builtin.copy:
+    src: dns_probe.py
+    dest: /usr/local/libexec/desk-dns/dns-probe.py
+    mode: '0755'
+
+- name: Move the DNS VIP process to its independent quota
+  ansible.builtin.systemd_service:
+    name: desk-dns-vip
+    state: "{{ 'restarted' if desk_dns_resilient_units.changed else 'started' }}"
+    daemon_reload: true
+
+- name: Install filter maintenance boundary and unified UI routing
+  ansible.builtin.copy:
+    src: "{{ item }}"
+    dest: "/usr/local/libexec/desk-dns/{{ item | replace('_', '-') }}"
+    mode: '0755'
+  loop: [desk_dns_sync.py, cluster_ui.py]
+  register: desk_dns_resilient_scripts
+
+- name: Enable serialized policy pulls without reading credentials into output
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/python3
+      - -c
+      - |
+        import json, pathlib
+        p=pathlib.Path('/etc/desk-dns/sync-agent.json'); c=json.loads(p.read_bytes())
+        if c.get('serialized_updates') is not True:
+            c['serialized_updates']=True
+            tmp=p.with_suffix('.tmp'); tmp.write_text(json.dumps(c)+'\n'); tmp.chmod(0o640)
+            import os
+            os.chown(tmp,p.stat().st_uid,p.stat().st_gid); tmp.replace(p); print('changed')
+  register: desk_dns_resilient_sync_config
+  changed_when: desk_dns_resilient_sync_config.stdout == 'changed'
+  no_log: true
+
+- name: Supply the existing pinned backend trust to the refresh worker
+  ansible.builtin.copy:
+    src: /etc/desk-dns/backend/peer.crt
+    dest: /etc/desk-dns/sync/backend.crt
+    remote_src: true
+    owner: root
+    group: desk-dns-sync
+    mode: '0644'
+
+- name: Install bounded filter maintenance units
+  ansible.builtin.template:
+    src: "{{ item }}.j2"
+    dest: "/etc/systemd/system/{{ item }}"
+    mode: '0644'
+  loop: [desk-dns-sync-agent.service, desk-dns-filter-refresh.service, desk-dns-filter-refresh.timer]
+  register: desk_dns_resilient_maintenance_units
+
+- name: Restart only the changed DNS API boundaries
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    state: "{{ 'restarted' if desk_dns_resilient_scripts.changed or desk_dns_resilient_sync_config.changed or desk_dns_resilient_maintenance_units.changed else 'started' }}"
+    daemon_reload: true
+  loop: [desk-dns-sync-agent, desk-dns-cluster-ui]
+
+- name: Disable overlapping native schedules while preserving current filters and protection
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/python3
+      - -c
+      - |
+        import json, urllib.request
+        u='http://127.0.0.1:3001/control/filtering/'
+        o=urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        c=json.load(o.open(u+'status',timeout=5))
+        if c['interval'] != 0:
+            q=urllib.request.Request(u+'config',data=json.dumps({'enabled':c['enabled'],'interval':0}).encode(),headers={'Content-Type':'application/json'},method='POST')
+            o.open(q,timeout=25).close(); print('changed')
+  register: desk_dns_resilient_schedule
+  changed_when: desk_dns_resilient_schedule.stdout == 'changed'
+
+- name: Record matching base fingerprint without resetting UI policy
+  ansible.builtin.copy:
+    content: "{{ lookup('ansible.builtin.template', 'adguard-home.yaml.j2') | hash('sha256') }}\n"
+    dest: /etc/desk-dns/policy.sha256
+    owner: root
+    group: root
+    mode: '0600'
+  no_log: true
+  diff: false
+
+- name: Validate maintenance routing while retaining the existing UI boundary
+  ansible.builtin.template:
+    src: ui-haproxy.cfg.j2
+    dest: /etc/desk-dns/ui-haproxy.cfg
+    mode: '0644'
+    backup: true
+    validate: /usr/sbin/haproxy -c -f %s
+  register: desk_dns_resilient_ui
+
+- name: Restart only the changed dedicated DNS UI proxy
+  ansible.builtin.systemd_service:
+    name: desk-dns-ui
+    state: restarted
+  when: desk_dns_resilient_ui.changed
+
+- name: Validate longer maintenance requests on the private API backend
+  ansible.builtin.template:
+    src: backend-haproxy.cfg.j2
+    dest: /etc/desk-dns/backend-haproxy.cfg
+    mode: '0644'
+    backup: true
+    validate: /usr/sbin/haproxy -c -f %s
+  register: desk_dns_resilient_backend_api
+
+- name: Restart only the changed private DNS proxy
+  ansible.builtin.systemd_service:
+    name: desk-dns-backend
+    state: restarted
+  when: desk_dns_resilient_backend_api.changed
+
+- name: Activate shared scheduled refresh only after maintenance endpoints are installed
+  ansible.builtin.systemd_service:
+    name: desk-dns-filter-refresh.timer
+    enabled: true
+    state: started
+    daemon_reload: true
+
+- ansible.builtin.include_tasks: guard.yml

@@ -13,6 +13,8 @@ import threading
 import urllib.parse
 import urllib.request
 
+FILTER_WRITES = {'filtering/config', 'filtering/add_url', 'filtering/remove_url',
+                 'filtering/set_url', 'filtering/set_rules', 'filtering/refresh'}
 LIMIT = 4 * 1024 * 1024
 READS = {'stats', 'querylog', 'clients', 'clients/find', 'status'}
 CONFIG_WRITES = {('PUT', 'querylog/config/update'), ('PUT', 'stats/config/update'), ('POST', 'querylog_config'), ('POST', 'stats_config')}
@@ -197,7 +199,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if body is not None and len(body) != length: raise ValueError('Incomplete body')
             if route == 'cluster.js' and not peer and self.command == 'GET':
                 return self.answer(200, b'', content_type='application/javascript')
-            if not ((self.command == 'GET' and route in READS) or operation in OPERATIONS or (route == 'desk_cluster' and self.command == 'GET')):
+            if self.command == 'POST' and route in FILTER_WRITES:
+                if peer and not hmac.compare_digest(self.headers.get('Authorization', ''), self.server.config['authorization']):
+                    return self.answer(401, {'error': 'authentication_required'})
+                request = urllib.request.Request('http://127.0.0.1:3002/desk-sync/filter/' + route.removeprefix('filtering/'),
+                    data=body, method='POST', headers={'Authorization': self.server.config['authorization'], 'Content-Type': 'application/json'})
+                opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
+                with opener.open(request, timeout=150) as response:
+                    data = response.read(LIMIT + 1)
+                if len(data) > LIMIT: raise ValueError('Response too large')
+                return self.answer(200, data)
+            if not ((self.command == 'GET'  and route in READS) or operation in OPERATIONS or (route == 'desk_cluster' and self.command == 'GET')):
                 return self.answer(404, {'error': 'route_not_allowed'})
             if peer:
                 if not hmac.compare_digest(self.headers.get('Authorization', ''), self.server.config['authorization']):

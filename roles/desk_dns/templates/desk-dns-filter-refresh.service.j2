@@ -1,0 +1,22 @@
+[Unit]
+Description=Refresh shared AdGuard filters sequentially from the DNS VIP owner
+After=desk-dns-sync-agent.service
+Wants=desk-dns-sync-agent.service
+[Service]
+Type=oneshot
+User=desk-dns-sync
+Group=desk-dns-sync
+Slice=desk-dnssync.slice
+ExecStart=/usr/bin/python3 /usr/local/libexec/desk-dns/desk-dns-sync.py refresh
+TimeoutStartSec=900
+StateDirectory=desk-dns-sync
+StateDirectoryMode=0700
+CPUWeight=5
+MemoryMax=48M
+TasksMax=16
+CapabilityBoundingSet=
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_NETLINK

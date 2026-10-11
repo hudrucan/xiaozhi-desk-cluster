@@ -1,0 +1,34 @@
+---
+- name: Require the existing unified UI before changing only its DNS backend
+  ansible.builtin.assert:
+    that:
+      - not ansible_check_mode
+      - desk_dns_client_identity_enabled | bool
+      - desk_dns_ui_vip_proxy_only | bool
+
+- name: Validate frontend-only DNS UI health and maintenance timeouts
+  ansible.builtin.template:
+    src: ui-haproxy.cfg.j2
+    dest: /etc/desk-dns/ui-haproxy.cfg
+    mode: '0644'
+    backup: true
+    validate: /usr/sbin/haproxy -c -f %s
+  register: desk_dns_resilient_ui_health
+
+- name: Restart only the changed dedicated DNS UI proxy
+  ansible.builtin.systemd_service:
+    name: desk-dns-ui
+    state: restarted
+  when: desk_dns_resilient_ui_health.changed
+
+- name: Install only the unified DNS UI backend fragment
+  ansible.builtin.template:
+    src: "{{ role_path }}/../desk_ui/templates/backend.cfg.j2"
+    dest: /etc/desk-ui/backend.cfg
+    mode: '0644'
+
+- name: Validate HTTP and MQTT together then gracefully reload HAProxy
+  ansible.builtin.command:
+    argv: [/usr/bin/python3, /usr/local/libexec/desk-monitoring/install-proxy.py, --backend, /etc/desk-monitoring/backend.cfg, --dns-backend, /etc/desk-ui/backend.cfg]
+  register: desk_dns_resilient_outer_proxy
+  changed_when: desk_dns_resilient_outer_proxy.stdout == 'changed'

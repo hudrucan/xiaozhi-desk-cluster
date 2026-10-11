@@ -1,0 +1,49 @@
+---
+- ansible.builtin.include_tasks: guard.yml
+- ansible.builtin.include_tasks: resource_budget.yml
+
+- name: Install filter memory headroom without touching mutable AdGuard policy
+  ansible.builtin.template:
+    src: desk-adguard.service.j2
+    dest: /etc/systemd/system/desk-adguard.service
+    owner: root
+    group: root
+    mode: '0644'
+  register: desk_dns_filter_budget_unit
+
+- name: Remove the incident recovery Go override now persisted in the unit
+  ansible.builtin.file:
+    path: /run/systemd/system/desk-adguard.service.d/90-filter-memory.conf
+    state: absent
+  register: desk_dns_filter_budget_override
+
+- name: Read the live AdGuard memory ceiling and pressure threshold
+  ansible.builtin.command:
+    argv: [systemctl, show, desk-adguard.service, '--property=MemoryHigh,MemoryMax']
+  register: desk_dns_live_adguard_memory
+  changed_when: false
+
+- name: Apply the bounded live AdGuard memory budget
+  ansible.builtin.command:
+    argv: [systemctl, set-property, --runtime, desk-adguard.service, "MemoryHigh={{ desk_dns_adguard_memory_high }}M", "MemoryMax={{ desk_dns_adguard_memory_max }}M"]
+  when: >-
+    ('MemoryHigh=' ~ (((desk_dns_adguard_memory_high | int) * 1048576) | string)) not in desk_dns_live_adguard_memory.stdout_lines
+    or ('MemoryMax=' ~ (((desk_dns_adguard_memory_max | int) * 1048576) | string)) not in desk_dns_live_adguard_memory.stdout_lines
+  changed_when: true
+
+- name: Restart only changed AdGuard units one node at a time
+  ansible.builtin.systemd_service:
+    name: desk-adguard
+    state: "{{ 'restarted' if desk_dns_filter_budget_unit.changed or desk_dns_filter_budget_override.changed else 'started' }}"
+    daemon_reload: true
+
+- name: Wait for native filters and UDP and TCP backend health before the next node
+  ansible.builtin.command:
+    argv: [/usr/bin/python3, /usr/local/libexec/desk-dns/dns-probe.py, backend, --config, /etc/desk-dns/public.json, --host, "{{ cluster_ip }}", --port, "{{ desk_dns_backend_port | string }}"]
+  register: desk_dns_filter_budget_ready
+  until: desk_dns_filter_budget_ready.rc == 0
+  retries: 30
+  delay: 2
+  changed_when: false
+
+- ansible.builtin.include_tasks: guard.yml

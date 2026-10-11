@@ -5,7 +5,7 @@ After=network-online.target desk-dnsdist.service
 
 [Service]
 Type=simple
-Slice=desk-dns.slice
+Slice=desk-dnsfront.slice
 RuntimeDirectory=desk-dns-vip
 RuntimeDirectoryMode=0700
 ExecStartPre=/usr/sbin/keepalived --config-test --use-file=/etc/desk-dns/keepalived.conf

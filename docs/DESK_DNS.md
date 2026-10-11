@@ -57,13 +57,69 @@ is rejected in preflight; the unused vendor unit is disabled for subsequent boot
 `desk-adguard`, `desk-dnsdist`, `desk-dns-vip`, `desk-dns-activity`, `desk-dns-ui`
 and `desk-dns-peer-arp.timer` are
 separate from every Xiaozhi service. DNS has a dedicated slice with total CPU
-quota 100% of one CPU (one of the four CPUs), low CPU/IO weights, 256 MiB memory pressure threshold and
-320 MiB hard limit; individual services also have limits. This bounds resource
+quota 100% of one CPU (one of the four CPUs), low CPU/IO weights, 512 MiB memory pressure threshold and
+768 MiB hard limit. AdGuard has a 320 MiB Go memory target, 384 MiB pressure
+threshold and 512 MiB hard limit; individual services also have limits. This bounds resource
 use but cannot prove zero voice-latency impact without a simultaneous load test.
 The earlier half-CPU ceiling caused DNS/VRRP health timeouts during native
-filter rebuilds. The one-CPU ceiling permits those short bursts without lifting
-memory limits or weights. Updating this CPU property does not restart any service.
-Larger filter lists still need measured tuning.
+filter rebuilds. Large OISD lists also exceeded the old 160 MiB Go target and
+memory pressure thresholds, causing continuous GC/reclaim, HTTP timeouts and
+all DNS VIP candidates entering FAULT. The larger bounded memory budgets give
+these rebuilds headroom while preserving the one-CPU ceiling and low weights.
+`ansible-playbook -i inventory.ini dns-resources.yml` updates only resource units,
+retains mutable UI policy, restarts AdGuard serially and waits for backend health
+before advancing. Larger filter lists still need measured tuning.
+
+`dns-resilience.yml` additionally moves only `desk-dnsdist` and `desk-dns-vip`
+to the sibling `desk-dnsfront.slice` (50% CPU, 128 MiB pressure threshold,
+192 MiB hard limit). AdGuard rebuilds cannot consume that slice's CPU or RAM.
+The total DNS serving ceilings are 1.5 CPU cores and 960 MiB; policy sync has its
+own existing 20% CPU / 128 MiB slice. These are ceilings, not reservations.
+VIP readiness queries `frontend.desk-dns.test` over UDP and TCP, answered by
+dnsdist itself. Deployment verification still requires native filtering and all
+three AdGuard identities; frontend liveness does not claim that filtering is up.
+
+The unified DNS UI uses a frontend-only health probe and a 180-second DNS
+backend timeout; a local filter compilation no longer marks the entire UI
+proxy unavailable. The last rollout phase validates the combined HTTP/MQTT
+HAProxy configuration and gracefully reloads only its DNS UI backend route.
+
+The deployed emergency pool is `1.1.1.1`. Native AdGuard servers stay in the
+default round-robin pool; the emergency pool is selected only when dnsdist has
+marked every native backend down. With 2-second health checks and two failures,
+detection takes about 2–4 seconds, plus request/transport timing. Three successful
+native checks are required before returning to filtered DNS. Emergency queries
+bypass filtering and do not appear in AdGuard statistics. Both IPv4 and IPv6 LAN
+clients use this same rule. A live frontend keeps its DNS VIP throughout backend
+failure. If all three boxes lose power, no cluster frontend remains to provide
+fallback; this does not configure a modem or an external always-on resolver.
+
+Filter writes through the unified UI and non-converged policy pulls acquire a
+single maintenance lease from the current DNS VIP owner. At least one other
+native TLS DoH backend must respond before a lease is granted. Successful work
+releases the lease after native DNS health; uncertain timeouts retain it until
+its 180-second expiry. A new VIP owner waits 180 seconds before granting work,
+so in-flight operations from a previous owner can finish. During this cooldown,
+filter edits return HTTP 409 and can be retried; other UI reads remain available.
+Native background refresh is disabled (its interval displays zero in AdGuard).
+A shared owner-only timer checks every five minutes and refreshes all enabled
+block/allow lists serially once per day, retaining current filters and retrying
+later if maintenance is busy. This serialization applies to the managed UI and
+sync paths; direct changes to AdGuard outside them bypass the guard.
+
+Apply to the already-installed three-node stack:
+
+```bash
+ansible-playbook -i inventory.ini dns-resilience.yml
+```
+
+The playbook preserves mutable policy, updates one node at a time, validates
+native filtering after each frontend change, and checks frozen Xiaozhi processes
+and configuration. The isolated test `roles/desk_dns/tests/integration_dns_fallback.py`
+starts a temporary loopback-only dnsdist process: native filtering, all native
+servers down, one native server recovered, and both pools down. It does not stop
+or modify production services.
+
 
 Preflight is read-only across all three nodes. It checks ARM64/systemd, reserved
 port collisions, management interface, separate VIP/VRID, existing nonlocal bind,

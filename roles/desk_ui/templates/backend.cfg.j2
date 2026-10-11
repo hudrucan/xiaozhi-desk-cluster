@@ -1,7 +1,7 @@
 backend desk_adguard_ui
-    timeout server 60s
+    timeout server 180s
     option httpchk
-    http-check send meth GET uri /control/status ver HTTP/1.1 hdr Host localhost
+    http-check send meth GET uri /control/desk_health ver HTTP/1.1 hdr Host localhost
     http-check expect status 200
     http-request replace-path ^/dns/(.*)$ /\1
     http-response replace-header Location ^/(.*)$ /dns/\1

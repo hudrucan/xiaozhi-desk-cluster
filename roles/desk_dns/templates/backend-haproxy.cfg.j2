@@ -28,6 +28,7 @@ backend adguard_doh
     server local 127.0.0.1:3001
 
 backend observe_api
+    timeout server 180s
     server local 127.0.0.1:3003
 
 # Separate read-only native statistics; same local AdGuard destination.

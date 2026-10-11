@@ -9,14 +9,14 @@ User=desk-adguard
 Group=desk-adguard
 Slice=desk-dns.slice
 Environment=GOMAXPROCS=1
-Environment=GOMEMLIMIT=160MiB
+Environment=GOMEMLIMIT={{ desk_dns_adguard_go_memory }}MiB
 ExecStart=/opt/desk-adguard/{{ desk_dns_adguard_version }}/adguard-home --no-check-update -w /var/lib/desk-adguard -c /var/lib/desk-adguard/adguard-home.yaml
 Restart=on-failure
 RestartSec=3
 TimeoutStopSec=15
 CPUWeight=10
-MemoryHigh=160M
-MemoryMax=224M
+MemoryHigh={{ desk_dns_adguard_memory_high }}M
+MemoryMax={{ desk_dns_adguard_memory_max }}M
 TasksMax=64
 LimitNOFILE=4096
 UMask=0077

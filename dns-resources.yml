@@ -1,0 +1,34 @@
+---
+- name: Freeze existing DNS topology and protected Xiaozhi state
+  hosts: desk_dns
+  become: true
+  gather_facts: true
+  any_errors_fatal: true
+  vars:
+    desk_dns_verify_only: true
+  tasks:
+    - ansible.builtin.include_role:
+        name: desk_dns
+        tasks_from: preflight
+        public: true
+
+- name: Update DNS filter budgets while preserving all UI policy changes
+  hosts: desk_dns
+  become: true
+  gather_facts: false
+  serial: 1
+  any_errors_fatal: true
+  tasks:
+    - ansible.builtin.include_role:
+        name: desk_dns
+        tasks_from: resources
+
+- name: Verify DNS serving and unchanged Xiaozhi processes
+  hosts: desk_dns
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  tasks:
+    - ansible.builtin.include_role:
+        name: desk_dns
+        tasks_from: verify

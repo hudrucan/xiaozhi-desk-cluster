@@ -8,7 +8,7 @@ from jinja2 import Environment, StrictUndefined
 root=Path(__file__).resolve().parents[3]
 role=root/'roles/desk_dns'
 defaults=yaml.safe_load((role/'defaults/main.yml').read_text())
-yamls=[root/'dns.yml', root/'verify-dns.yml', root/'dns-sync.yml', root/'dns-cluster.yml', root/'dns-ipv6.yml', *role.rglob('*.yml')]
+yamls=[root/'dns.yml', root/'verify-dns.yml', root/'dns-sync.yml', root/'dns-cluster.yml', root/'dns-ipv6.yml', root/'dns-resources.yml', root/'dns-resilience.yml', *role.rglob('*.yml')]
 for path in yamls:
     yaml.safe_load(path.read_text())
 pyfiles=list(role.rglob('*.py'))
@@ -77,18 +77,20 @@ for node, address in nodes.items():
             assert sync['origin']['insecureSkipVerify'] is False
         if path.name=='desk-dns.slice.j2':
             assert 'CPUQuota=100%' in rendered and 'CPUWeight=10' in rendered
-            assert 'MemoryHigh=256M' in rendered and 'MemoryMax=320M' in rendered
+            assert 'MemoryHigh=512M' in rendered and 'MemoryMax=768M' in rendered
         if path.name=='desk-dnssync.slice.j2':
             assert 'CPUQuota=20%' in rendered and 'MemoryMax=128M' in rendered
         if path.name=='desk-adguard.service.j2':
             assert f'ExecStart=/opt/desk-adguard/{defaults["desk_dns_adguard_version"]}/adguard-home ' in rendered
             assert 'AdGuardHome/AdGuardHome' not in rendered
+            assert 'Environment=GOMEMLIMIT=320MiB' in rendered
+            assert 'MemoryHigh=384M' in rendered and 'MemoryMax=512M' in rendered
         if path.name.endswith('.service.j2'):
             for command in rendered.splitlines():
                 if command.startswith('ExecStart='):
                     assert all('_' not in name for name in re.findall(r'/usr/local/libexec/desk-dns/([^ ]+)', command))
 
-            assert ('Slice=desk-dnssync.slice' if path.name.startswith('desk-dns-sync') else 'Slice=desk-dns.slice') in rendered
+            assert ('Slice=desk-dnssync.slice' if path.name.startswith(('desk-dns-sync', 'desk-dns-filter-refresh')) else 'Slice=desk-dnsfront.slice' if path.name in ('desk-dnsdist.service.j2', 'desk-dns-vip.service.j2') else 'Slice=desk-dns.slice') in rendered
             assert '[Service]' in rendered and 'ExecStart=' in rendered
 # IPv6 uses the existing election and preserves a separate scoped DNS endpoint.
 for node, address in nodes.items():
@@ -127,3 +129,15 @@ assert 'desk_dns_activity_script.changed or desk_dns_activity_unit.changed' in b
 assert all('desk-dns-activity' not in (role/'templates'/name).read_text() for name in ('desk-adguard.service.j2','desk-dnsdist.service.j2','desk-dns-vip.service.j2'))
 
 print(f'PASS: {len(yamls)} YAML files, {len(pyfiles)} Python ASTs, {3 * len(list(role.joinpath('templates').glob('*.j2'))) + 9} rendered templates, check-mode/rollout isolation fixtures')
+
+for node, address in nodes.items():
+    values={**defaults, 'desk_dns_nodes':nodes,'inventory_hostname':node,
+            'cluster_ip':address['private'],'ansible_host':address['management'],
+            'desk_dns_ipv6_vip_enabled':True,'desk_dns_emergency_enabled':True,
+            'desk_dns_client_identity_enabled':True}
+    config=env.from_string((role/'templates/dnsdist.conf.j2').read_text()).render(**values)
+    assert 'addAction(PoolAvailableRule(""), PoolAction(""))' in config
+    assert config.index('PoolAvailableRule') < config.index('AllRule(), PoolAction("emergency")')
+    assert 'address="1.1.1.1:53"' in config and 'rise=3' in config
+    assert 'frontend.desk-dns.test.' in config and '[::]:53' in config
+print('PASS: emergency pool and native-first fallback rules rendered for all 3 nodes')

@@ -39,7 +39,7 @@ tls:
 filtering:
   protection_enabled: true
   filtering_enabled: true
-  filters_update_interval: 24
+  filters_update_interval: {{ 0 if desk_dns_serialized_updates else 24 }}
   blocking_mode: null_ip
   rewrites_enabled: true
   rewrites:

@@ -33,6 +33,12 @@ def response(query, ip='127.0.0.1'):
 
 
 class ProbeTests(unittest.TestCase):
+    def test_runtime_vip_health_checks_frontend_even_when_native_backends_are_down(self):
+        with patch.object(probe, 'query', return_value=['127.0.0.1']) as query, patch.object(probe.sys, 'argv', ['probe','ready','--config','-','--host','192.168.1.101','--port','5353']), patch.object(probe.sys, 'stdin', io.StringIO(json.dumps(config()))), contextlib.redirect_stdout(io.StringIO()):
+            probe.main()
+        self.assertEqual(query.call_count,2)
+        self.assertEqual({call.args[2] for call in query.call_args_list},{probe.FRONTEND})
+
     def test_reserved_vip_and_complete_membership(self):
         self.assertEqual(probe.validate(config())['vip'], '192.168.1.250')
         for bad in ('192.168.1.101', '192.168.1.1', '192.168.1.255', '10.10.10.250'):

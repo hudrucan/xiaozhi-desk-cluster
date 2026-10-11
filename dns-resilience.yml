@@ -1,0 +1,63 @@
+---
+- name: Freeze DNS topology and protected Xiaozhi state
+  hosts: desk_dns
+  become: true
+  gather_facts: true
+  any_errors_fatal: true
+  vars:
+    desk_dns_verify_only: true
+  tasks:
+    - ansible.builtin.include_role:
+        name: desk_dns
+        tasks_from: preflight
+        public: true
+
+- name: Protect DNS serving and serialize filter updates one node at a time
+  hosts: desk_dns
+  become: true
+  gather_facts: false
+  serial: 1
+  any_errors_fatal: true
+  tasks:
+    - ansible.builtin.include_role:
+        name: desk_dns
+        tasks_from: resilience
+
+- name: Verify native filtering, load distribution, VIP ownership and Xiaozhi isolation
+  hosts: desk_dns
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  tasks:
+    - ansible.builtin.include_role:
+        name: desk_dns
+        tasks_from: verify
+
+- name: Protect only the DNS UI route from native rebuild timeouts
+  hosts: desk_dns
+  become: true
+  gather_facts: false
+  serial: 1
+  any_errors_fatal: true
+  tasks:
+    - ansible.builtin.include_role:
+        name: desk_dns
+        tasks_from: resilience-ui
+
+- name: Verify unified DNS UI only after all frontend probes have been updated
+  hosts: desk_dns
+  gather_facts: false
+  tasks:
+    - name: Require frontend health through the Settings VIP
+      ansible.builtin.uri:
+        url: http://192.168.1.186/dns/control/desk_health
+        use_proxy: false
+        timeout: 4
+      delegate_to: localhost
+      become: false
+      run_once: true
+      register: desk_dns_resilient_public_health
+      until: desk_dns_resilient_public_health.status == 200
+      retries: 15
+      delay: 2
+      changed_when: false

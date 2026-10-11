@@ -29,3 +29,16 @@ desk_dns_client_identity_enabled: false
 # Opt-in LAN link-local IPv6 DNS attached to the existing DNS election.
 desk_dns_ipv6_vip_enabled: false
 desk_dns_ipv6_vip: fe80::250
+
+# Filter rebuild headroom; bounded separately from Xiaozhi and policy sync.
+# The previous 160 MiB Go target caused continuous GC with large OISD lists.
+desk_dns_memory_high: 512
+desk_dns_memory_max: 768
+desk_dns_adguard_go_memory: 320
+desk_dns_adguard_memory_high: 384
+desk_dns_adguard_memory_max: 512
+
+# Emergency DNS is opt-in and never selected while an AdGuard backend is up.
+desk_dns_emergency_enabled: false
+desk_dns_emergency_resolver: 1.1.1.1
+desk_dns_serialized_updates: false
