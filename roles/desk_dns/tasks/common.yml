@@ -27,16 +27,16 @@
 - name: Install standard-library DNS and ownership probes
   ansible.builtin.copy:
     src: "{{ item }}"
-    dest: "/usr/local/libexec/desk-dns/{{ item }}"
+    dest: "/usr/local/libexec/desk-dns/{{ item | replace('_', '-') }}"
     owner: root
     group: root
     mode: '0755'
-  loop: [dns_probe.py, peer_arp.py]
+  loop: [dns_probe.py, peer_arp.py, dns_sync_account.py]
 
 - name: Install passive DNS panel telemetry collector
   ansible.builtin.copy:
     src: dns_activity.py
-    dest: /usr/local/libexec/desk-dns/dns_activity.py
+    dest: /usr/local/libexec/desk-dns/dns-activity.py
     owner: root
     group: root
     mode: '0755'
@@ -54,19 +54,4 @@
     - {name: election, value: "{{ desk_dns_election }}"}
     - {name: vip, value: "{{ {'vip': desk_dns_vip} }}"}
 
-- name: Install bounded DNS resource slice
-  ansible.builtin.copy:
-    dest: /etc/systemd/system/desk-dns.slice
-    owner: root
-    group: root
-    mode: '0644'
-    content: |
-      [Unit]
-      Description=Desk DNS resource budget
-      [Slice]
-      CPUWeight=10
-      IOWeight=10
-      CPUQuota=50%
-      MemoryHigh=256M
-      MemoryMax=320M
-      TasksMax=128
+- ansible.builtin.include_tasks: resource_budget.yml

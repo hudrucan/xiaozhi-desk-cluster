@@ -1,0 +1,24 @@
+---
+- name: Install bounded DNS resource slice with room for native filter rebuilds
+  ansible.builtin.template:
+    src: desk-dns.slice.j2
+    dest: /etc/systemd/system/desk-dns.slice
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Load only updated systemd unit definitions without restarting services
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+
+- name: Read the existing live DNS CPU ceiling
+  ansible.builtin.command:
+    argv: [systemctl, show, desk-dns.slice, '--property=CPUQuotaPerSecUSec', --value]
+  register: desk_dns_live_cpu_ceiling
+  changed_when: false
+
+- name: Apply only the DNS CPU ceiling without restarting services
+  ansible.builtin.command:
+    argv: [systemctl, set-property, --runtime, desk-dns.slice, 'CPUQuota=100%']
+  when: desk_dns_live_cpu_ceiling.stdout != '1s'
+  changed_when: true

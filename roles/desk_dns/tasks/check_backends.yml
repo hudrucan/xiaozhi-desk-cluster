@@ -1,7 +1,7 @@
 ---
 - name: Verify all three private AdGuard backends before exposing DNS ingress
   ansible.builtin.command:
-    argv: [/usr/bin/python3, /usr/local/libexec/desk-dns/dns_probe.py, backend, --config, /etc/desk-dns/public.json, --host, "{{ desk_dns_nodes[item].private }}", --port, "{{ desk_dns_backend_port | string }}"]
+    argv: [/usr/bin/python3, /usr/local/libexec/desk-dns/dns-probe.py, backend, --config, /etc/desk-dns/public.json, --host, "{{ desk_dns_nodes[item].private }}", --port, "{{ desk_dns_backend_port | string }}"]
   loop: "{{ groups['desk_dns'] | sort }}"
   changed_when: false
   check_mode: false

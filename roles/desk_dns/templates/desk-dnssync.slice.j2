@@ -1,0 +1,11 @@
+# Sibling of desk-dns.slice: metadata cannot consume DNS/VRRP's CPU quota.
+[Unit]
+Description=Bounded Desk DNS configuration synchronization
+
+[Slice]
+CPUWeight=5
+IOWeight=5
+CPUQuota=20%
+MemoryAccounting=true
+MemoryMax=128M
+TasksMax=48

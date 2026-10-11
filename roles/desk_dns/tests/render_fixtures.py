@@ -1,5 +1,6 @@
 import ast
 import json
+import re
 from pathlib import Path
 import yaml
 from jinja2 import Environment, StrictUndefined
@@ -7,7 +8,7 @@ from jinja2 import Environment, StrictUndefined
 root=Path(__file__).resolve().parents[3]
 role=root/'roles/desk_dns'
 defaults=yaml.safe_load((role/'defaults/main.yml').read_text())
-yamls=[root/'dns.yml', root/'verify-dns.yml', *role.rglob('*.yml')]
+yamls=[root/'dns.yml', root/'verify-dns.yml', root/'dns-sync.yml', *role.rglob('*.yml')]
 for path in yamls:
     yaml.safe_load(path.read_text())
 pyfiles=list(role.rglob('*.py'))
@@ -21,7 +22,8 @@ for node, address in nodes.items():
             'cluster_ip':address['private'],'ansible_host':address['management'],
             'desk_dns_snapshot':{'topology':{'interface':'wlan0','prefix':24}},
             'desk_dns_election':{'deskb1x':100,'deskb2x':120,'deskb3x':110},
-            'desk_dns_admin_password_hash':'$2b$12$'+'A'*53}
+            'desk_dns_admin_password_hash':'$2b$12$'+'A'*53,
+            'desk_dns_sync_password': 'offline-fixture-password-only'}
     for path in role.joinpath('templates').glob('*.j2'):
         rendered=env.from_string(path.read_text()).render(**values)
         assert '{{' not in rendered and '{%' not in rendered, path
@@ -37,6 +39,7 @@ for node, address in nodes.items():
         if path.name=='keepalived.conf.j2':
             assert 'virtual_router_id 52' in rendered
             assert 'weight -50' in rendered and 'nopreempt' not in rendered
+            assert rendered.count('interval 5') == 2 and rendered.count('timeout 4') == 2
             assert '192.168.1.186' not in rendered
             assert rendered.count('192.168.1.250')==1
         if path.name=='dnsdist.conf.j2':
@@ -57,8 +60,29 @@ for node, address in nodes.items():
             assert 'RestrictAddressFamilies=AF_UNIX AF_PACKET' in rendered
             assert 'Requires=' not in rendered and 'PartOf=' not in rendered
             assert f'--node {node}' in rendered
+        if path.name=='adguard-home-sync.yaml.j2':
+            sync=yaml.safe_load(rendered)
+            assert sync['origin']['url']=='https://192.168.1.250:3002'
+            assert sync['replica']['url']=='http://127.0.0.1:3002'
+            assert sync['api']['port']==0
+            assert sync['features']['dhcp']=={'serverConfig': False, 'staticLeases': False}
+            assert sync['features']['dns']['accessLists'] is False
+            assert not sync['features']['tlsConfig'] and not sync['features']['statsConfig']
+            assert sync['origin']['insecureSkipVerify'] is False
+        if path.name=='desk-dns.slice.j2':
+            assert 'CPUQuota=100%' in rendered and 'CPUWeight=10' in rendered
+            assert 'MemoryHigh=256M' in rendered and 'MemoryMax=320M' in rendered
+        if path.name=='desk-dnssync.slice.j2':
+            assert 'CPUQuota=20%' in rendered and 'MemoryMax=128M' in rendered
+        if path.name=='desk-adguard.service.j2':
+            assert f'ExecStart=/opt/desk-adguard/{defaults["desk_dns_adguard_version"]}/adguard-home ' in rendered
+            assert 'AdGuardHome/AdGuardHome' not in rendered
         if path.name.endswith('.service.j2'):
-            assert 'Slice=desk-dns.slice' in rendered
+            for command in rendered.splitlines():
+                if command.startswith('ExecStart='):
+                    assert all('_' not in name for name in re.findall(r'/usr/local/libexec/desk-dns/([^ ]+)', command))
+
+            assert ('Slice=desk-dnssync.slice' if path.name.startswith('desk-dns-sync') else 'Slice=desk-dns.slice') in rendered
             assert '[Service]' in rendered and 'ExecStart=' in rendered
 # Production mutations must remain within explicit non-check-mode blocks.
 for filename in ('backend.yml','frontend.yml','vip.yml'):
@@ -79,4 +103,4 @@ assert backend[-1]['ansible.builtin.systemd_service']['name']=='desk-dns-activit
 assert 'desk_dns_activity_script.changed or desk_dns_activity_unit.changed' in backend[-1]['ansible.builtin.systemd_service']['state']
 assert all('desk-dns-activity' not in (role/'templates'/name).read_text() for name in ('desk-adguard.service.j2','desk-dnsdist.service.j2','desk-dns-vip.service.j2'))
 
-print(f'PASS: {len(yamls)} YAML files, {len(pyfiles)} Python ASTs, 27 rendered templates, check-mode/rollout isolation fixtures')
+print(f'PASS: {len(yamls)} YAML files, {len(pyfiles)} Python ASTs, {3 * len(list(role.joinpath('templates').glob('*.j2')))} rendered templates, check-mode/rollout isolation fixtures')

@@ -1,0 +1,28 @@
+# One-way policy pull: current VIP owner -> this node only.
+runOnStart: true
+continueOnError: false
+httpClientTimeout: 25s
+api: {port: 0}
+origin:
+  url: "https://{{ desk_dns_vip }}:{{ desk_dns_sync_port }}"
+  username: desk-sync
+  password: {{ desk_dns_sync_password | to_json }}
+  insecureSkipVerify: false
+  autoSetup: false
+replica:
+  url: "http://127.0.0.1:{{ desk_dns_sync_port }}"
+  username: desk-sync
+  password: {{ desk_dns_sync_password | to_json }}
+  autoSetup: false
+features:
+  dns: {accessLists: false, serverConfig: true, rewrites: true}
+  dhcp: {serverConfig: false, staticLeases: false}
+  generalSettings: true
+  protectionStatus: true
+  filters: {blacklist: true, whitelist: true, userRules: true}
+  clientSettings: true
+  services: true
+  queryLogConfig: false
+  statsConfig: false
+  theme: false
+  tlsConfig: false

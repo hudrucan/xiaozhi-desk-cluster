@@ -1,0 +1,59 @@
+---
+- name: Freeze DNS topology and protected Xiaozhi state before policy synchronization
+  hosts: desk_dns
+  become: true
+  gather_facts: true
+  any_errors_fatal: true
+  vars:
+    desk_dns_verify_only: true
+  tasks:
+    - ansible.builtin.include_role:
+        name: desk_dns
+        tasks_from: preflight
+        public: true
+
+- name: Prepare symmetric policy pull agents without replacing current admin policy
+  hosts: desk_dns
+  become: true
+  gather_facts: false
+  serial: 1
+  any_errors_fatal: true
+  tasks:
+    - ansible.builtin.include_role:
+        name: desk_dns
+        tasks_from: sync
+
+- name: Reconcile only after every policy boundary is available
+  hosts: desk_dns
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  tasks:
+    - ansible.builtin.include_role:
+        name: desk_dns
+        tasks_from: guard
+    - name: Run a guarded initial policy pull on each node
+      ansible.builtin.systemd_service:
+        name: desk-dns-sync
+        state: started
+        daemon_reload: true
+      register: desk_dns_initial_pull
+      until: desk_dns_initial_pull is succeeded
+      retries: 3
+      delay: 3
+      when: not ansible_check_mode
+    - name: Enable periodic pull with automatic VIP source selection
+      ansible.builtin.systemd_service:
+        name: desk-dns-sync.timer
+        state: started
+        enabled: true
+      when: not ansible_check_mode
+    - name: Read safe policy synchronization status
+      ansible.builtin.command:
+        argv: [/usr/bin/python3, '-c', "import json; s=json.load(open('/var/lib/desk-dns-sync/status.json')); assert s['state'] in ('origin','synced'); print(json.dumps(s))"]
+      changed_when: false
+      when: not ansible_check_mode
+    - ansible.builtin.include_role:
+        name: desk_dns
+        tasks_from: verify
+      when: not ansible_check_mode

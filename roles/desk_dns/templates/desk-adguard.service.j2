@@ -10,7 +10,7 @@ Group=desk-adguard
 Slice=desk-dns.slice
 Environment=GOMAXPROCS=1
 Environment=GOMEMLIMIT=160MiB
-ExecStart=/opt/desk-adguard/{{ desk_dns_adguard_version }}/AdGuardHome/AdGuardHome --no-check-update -w /var/lib/desk-adguard -c /var/lib/desk-adguard/adguard-home.yaml
+ExecStart=/opt/desk-adguard/{{ desk_dns_adguard_version }}/adguard-home --no-check-update -w /var/lib/desk-adguard -c /var/lib/desk-adguard/adguard-home.yaml
 Restart=on-failure
 RestartSec=3
 TimeoutStopSec=15

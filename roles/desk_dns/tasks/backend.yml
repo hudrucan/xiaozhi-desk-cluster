@@ -26,27 +26,7 @@
         that: not (desk_dns_legacy_config.stat.exists and desk_dns_named_config.stat.exists)
         fail_msg: Both runtime names exist. Preserve the live policy and resolve the duplicate before migration.
 
-    - name: Download checksum-pinned official ARM64 archive
-      ansible.builtin.get_url:
-        url: "https://github.com/AdguardTeam/AdGuardHome/releases/download/{{ desk_dns_adguard_version }}/AdGuardHome_linux_arm64.tar.gz"
-        dest: "/var/cache/desk-dns/AdGuardHome-{{ desk_dns_adguard_version }}.tar.gz"
-        checksum: "sha256:{{ desk_dns_adguard_sha256 }}"
-        owner: root
-        group: root
-        mode: '0644'
-
-    - name: Create versioned installation directory
-      ansible.builtin.file:
-        path: "/opt/desk-adguard/{{ desk_dns_adguard_version }}"
-        state: directory
-        mode: '0755'
-
-    - name: Extract binary without running the vendor installer
-      ansible.builtin.unarchive:
-        src: "/var/cache/desk-dns/AdGuardHome-{{ desk_dns_adguard_version }}.tar.gz"
-        dest: "/opt/desk-adguard/{{ desk_dns_adguard_version }}"
-        remote_src: true
-        creates: "/opt/desk-adguard/{{ desk_dns_adguard_version }}/AdGuardHome/AdGuardHome"
+    - ansible.builtin.include_tasks: adguard-binary.yml
 
     - name: Render authenticated AdGuard candidate
       ansible.builtin.template:
@@ -55,9 +35,27 @@
         owner: desk-adguard
         group: desk-adguard
         mode: '0600'
-        validate: "/opt/desk-adguard/{{ desk_dns_adguard_version }}/AdGuardHome/AdGuardHome --check-config --no-check-update -w /var/lib/desk-adguard -c %s"
+        validate: "/opt/desk-adguard/{{ desk_dns_adguard_version }}/adguard-home --check-config --no-check-update -w /var/lib/desk-adguard -c %s"
       no_log: true
       diff: false
+
+    - name: Inspect an already configured policy sync account
+      ansible.builtin.stat:
+        path: /etc/desk-dns/sync-agent.json
+      register: desk_dns_existing_sync
+
+    - name: Preserve the automation account in a newly rendered base candidate
+      ansible.builtin.command:
+        argv: [/usr/bin/python3, /usr/local/libexec/desk-dns/dns-sync-account.py, inject, --path, /var/lib/desk-adguard/candidate.yaml]
+      when: desk_dns_existing_sync.stat.exists
+      no_log: true
+
+    - name: Validate the base candidate with its preserved automation account
+      ansible.builtin.command:
+        argv: ["/opt/desk-adguard/{{ desk_dns_adguard_version }}/adguard-home", --check-config, --no-check-update, -w, /var/lib/desk-adguard, -c, /var/lib/desk-adguard/candidate.yaml]
+      when: desk_dns_existing_sync.stat.exists
+      changed_when: false
+      no_log: true
 
     - name: Compute managed policy fingerprint without exposing the password hash
       ansible.builtin.set_fact:
@@ -77,7 +75,7 @@
       block:
         - name: Validate the retained policy before interrupting AdGuard
           ansible.builtin.command:
-            argv: ["/opt/desk-adguard/{{ desk_dns_adguard_version }}/AdGuardHome/AdGuardHome", --check-config, --no-check-update, -w, /var/lib/desk-adguard, -c, /var/lib/desk-adguard/AdGuardHome.yaml]
+            argv: ["/opt/desk-adguard/{{ desk_dns_adguard_version }}/adguard-home", --check-config, --no-check-update, -w, /var/lib/desk-adguard, -c, /var/lib/desk-adguard/AdGuardHome.yaml]
           changed_when: false
           no_log: true
         - name: Stop only AdGuard before preserving its latest mutable configuration
@@ -132,7 +130,7 @@
     - name: Validate installed DNS policy if retaining local UI changes
       ansible.builtin.command:
         argv:
-          - "/opt/desk-adguard/{{ desk_dns_adguard_version }}/AdGuardHome/AdGuardHome"
+          - "/opt/desk-adguard/{{ desk_dns_adguard_version }}/adguard-home"
           - --check-config
           - --no-check-update
           - -w
@@ -187,7 +185,7 @@
 
     - name: Require the local AdGuard identity, filtering and UDP/TCP answers
       ansible.builtin.command:
-        argv: [/usr/bin/python3, /usr/local/libexec/desk-dns/dns_probe.py, backend, --config, /etc/desk-dns/public.json, --host, "{{ cluster_ip }}", --port, "{{ desk_dns_backend_port | string }}"]
+        argv: [/usr/bin/python3, /usr/local/libexec/desk-dns/dns-probe.py, backend, --config, /etc/desk-dns/public.json, --host, "{{ cluster_ip }}", --port, "{{ desk_dns_backend_port | string }}"]
       register: desk_dns_backend_ready
       until: desk_dns_backend_ready.rc == 0
       retries: 5

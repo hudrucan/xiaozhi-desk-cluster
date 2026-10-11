@@ -1,0 +1,29 @@
+---
+- name: Download the checksum-pinned official ARM64 sync release
+  ansible.builtin.get_url:
+    url: "https://github.com/bakito/adguardhome-sync/releases/download/v{{ desk_dns_sync_version }}/adguardhome-sync_{{ desk_dns_sync_version }}_linux_arm64.tar.gz"
+    dest: "/var/cache/desk-dns/adguard-home-sync-{{ desk_dns_sync_version }}.tar.gz"
+    checksum: 'sha256:cb1909ad9f4516cf16e3a06e195f4094c29aa97a1a9418a8edfae352d869098c'
+    mode: '0644'
+
+- name: Create pinned sync release directory
+  ansible.builtin.file:
+    path: "/opt/desk-adguard-sync/{{ desk_dns_sync_version }}"
+    state: directory
+    mode: '0755'
+
+- name: Extract official sync binary without running it
+  ansible.builtin.unarchive:
+    src: "/var/cache/desk-dns/adguard-home-sync-{{ desk_dns_sync_version }}.tar.gz"
+    dest: "/opt/desk-adguard-sync/{{ desk_dns_sync_version }}"
+    remote_src: true
+    creates: "/opt/desk-adguard-sync/{{ desk_dns_sync_version }}/adguardhome-sync"
+
+- name: Install byte-identical sync executable under its managed runtime name
+  ansible.builtin.copy:
+    src: "/opt/desk-adguard-sync/{{ desk_dns_sync_version }}/adguardhome-sync"
+    dest: "/opt/desk-adguard-sync/{{ desk_dns_sync_version }}/adguard-home-sync"
+    remote_src: true
+    owner: root
+    group: root
+    mode: '0755'

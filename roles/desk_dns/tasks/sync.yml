@@ -1,0 +1,173 @@
+---
+- ansible.builtin.include_tasks: guard.yml
+
+- name: Report check-mode synchronization scope
+  ansible.builtin.debug:
+    msg: Policy sync credentials, downloads, account provisioning and service activation are skipped in check mode.
+  when: ansible_check_mode
+
+- name: Install isolated DNS policy synchronization
+  when: not ansible_check_mode
+  block:
+    - name: Require pinned sync version and private automation credentials
+      ansible.builtin.assert:
+        that:
+          - desk_dns_sync_version == '0.9.3'
+          - desk_dns_sync_port == 3002
+          - desk_dns_sync_interval | int >= 30
+          - desk_dns_sync_password | default('') | length >= 32
+          - desk_dns_sync_password_hash | default('') is match('^\$2[aby]\$[0-9]{2}\$[./A-Za-z0-9]{53}$')
+      no_log: true
+
+    - ansible.builtin.include_tasks: resource_budget.yml
+
+    - name: Check installed YAML support without installing shared packages
+      ansible.builtin.command:
+        argv: [/usr/bin/python3, '-c', 'import yaml']
+      changed_when: false
+
+    - name: Reject a sync port owned by any other service
+      ansible.builtin.command:
+        argv: [/usr/bin/python3, '-c', "import re, subprocess; p=subprocess.run(['systemctl','show','desk-dns-sync-agent','--property=MainPID','--value'],capture_output=True,text=True).stdout.strip(); rows=subprocess.check_output(['ss','-H','-ltnp','sport = :3002'],text=True); assert not rows.strip() or (p != '0' and all(p in re.findall(r'pid=(\\d+)',r) for r in rows.splitlines()))"]
+      changed_when: false
+
+    - name: Create the isolated automation service user
+      ansible.builtin.user:
+        name: desk-dns-sync
+        system: true
+        create_home: false
+        shell: /usr/sbin/nologin
+
+    - name: Create private synchronization configuration directory
+      ansible.builtin.file:
+        path: /etc/desk-dns/sync
+        state: directory
+        owner: root
+        group: desk-dns-sync
+        mode: '0750'
+
+    - ansible.builtin.include_tasks: adguard-binary.yml
+
+    - ansible.builtin.include_tasks: sync-binary.yml
+
+    - name: Install small policy boundary and account preservation helpers
+      ansible.builtin.copy:
+        src: "{{ item }}"
+        dest: "/usr/local/libexec/desk-dns/{{ item | replace('_', '-') }}"
+        owner: root
+        group: root
+        mode: '0755'
+      loop: [desk_dns_sync.py, dns_sync_account.py, dns_probe.py]
+      register: desk_dns_sync_scripts
+
+    - name: Install the pinned VIP trust certificate and private key
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/secret/desk-dns-sync.{{ item }}"
+        dest: "/etc/desk-dns/sync/tls.{{ item }}"
+        owner: root
+        group: desk-dns-sync
+        mode: "{{ '0640' if item == 'key' else '0644' }}"
+      loop: [crt, key]
+      no_log: true
+      diff: false
+      register: desk_dns_sync_tls
+
+    - name: Install private boundary configuration without exposing credentials
+      ansible.builtin.copy:
+        content: "{{ {'node': inventory_hostname, 'nodes': groups['desk_dns'] | sort, 'management_nodes': desk_dns_nodes.values() | map(attribute='management') | list, 'vip': desk_dns_vip, 'port': desk_dns_sync_port, 'username': 'desk-sync', 'password': desk_dns_sync_password, 'password_hash': desk_dns_sync_password_hash, 'adguard': 'http://127.0.0.1:' + (desk_dns_web_port | string), 'certificate': '/etc/desk-dns/sync/tls.crt', 'ca': '/etc/desk-dns/sync/tls.crt', 'key': '/etc/desk-dns/sync/tls.key', 'state': '/var/lib/desk-dns-sync/status.json', 'binary': '/opt/desk-adguard-sync/' + desk_dns_sync_version + '/adguard-home-sync', 'sync_config': '/etc/desk-dns/sync/adguard-home-sync.yaml'} | to_nice_json }}\n"
+        dest: /etc/desk-dns/sync-agent.json
+        owner: root
+        group: desk-dns-sync
+        mode: '0640'
+      no_log: true
+      diff: false
+      register: desk_dns_sync_agent_config
+
+    - name: Install narrowly scoped upstream synchronization configuration
+      ansible.builtin.template:
+        src: adguard-home-sync.yaml.j2
+        dest: /etc/desk-dns/sync/adguard-home-sync.yaml
+        owner: root
+        group: desk-dns-sync
+        mode: '0640'
+      no_log: true
+      diff: false
+
+    - name: Check whether the dedicated AdGuard automation account already exists
+      ansible.builtin.command:
+        argv: [/usr/bin/python3, /usr/local/libexec/desk-dns/dns-sync-account.py, inspect]
+      register: desk_dns_sync_account
+      changed_when: false
+      no_log: true
+
+    - name: Provision only the automation account while preserving existing UI policy
+      when: desk_dns_sync_account.stdout == 'missing'
+      block:
+        - name: Stop only this node's AdGuard to retain its final UI writes
+          ansible.builtin.systemd_service:
+            name: desk-adguard
+            state: stopped
+        - name: Preserve private rollback configuration
+          ansible.builtin.copy:
+            src: /var/lib/desk-adguard/adguard-home.yaml
+            dest: /var/lib/desk-adguard/sync-account-rollback.yaml
+            remote_src: true
+            owner: desk-adguard
+            group: desk-adguard
+            mode: '0600'
+          no_log: true
+          diff: false
+        - name: Add the automation account without replacing other users or policy
+          ansible.builtin.command:
+            argv: [/usr/bin/python3, /usr/local/libexec/desk-dns/dns-sync-account.py, install]
+          no_log: true
+        - name: Validate the retained policy plus automation account
+          ansible.builtin.command:
+            argv: ["/opt/desk-adguard/{{ desk_dns_adguard_version }}/adguard-home", --check-config, --no-check-update, -w, /var/lib/desk-adguard, -c, /var/lib/desk-adguard/adguard-home.yaml]
+          changed_when: false
+          no_log: true
+        - name: Resume only the current AdGuard backend
+          ansible.builtin.systemd_service:
+            name: desk-adguard
+            state: started
+      rescue:
+        - name: Restore the private pre-provisioning policy
+          ansible.builtin.copy:
+            src: /var/lib/desk-adguard/sync-account-rollback.yaml
+            dest: /var/lib/desk-adguard/adguard-home.yaml
+            remote_src: true
+            owner: desk-adguard
+            group: desk-adguard
+            mode: '0600'
+          no_log: true
+          diff: false
+        - name: Resume the unchanged AdGuard policy after failed provisioning
+          ansible.builtin.systemd_service:
+            name: desk-adguard
+            state: started
+        - ansible.builtin.fail:
+            msg: Automation account provisioning failed; previous policy restored.
+
+    - name: Require the existing backend identity and filtering after provisioning
+      ansible.builtin.command:
+        argv: [/usr/bin/python3, /usr/local/libexec/desk-dns/dns-probe.py, backend, --config, /etc/desk-dns/public.json, --host, "{{ cluster_ip }}", --port, "{{ desk_dns_backend_port | string }}"]
+      changed_when: false
+      register: desk_dns_sync_backend_ready
+      until: desk_dns_sync_backend_ready.rc == 0
+      retries: 5
+      delay: 2
+
+    - name: Install isolated sync units without activating reconciliation yet
+      ansible.builtin.template:
+        src: "{{ item }}.j2"
+        dest: "/etc/systemd/system/{{ item }}"
+        mode: '0644'
+      loop: [desk-dnssync.slice, desk-dns-sync-agent.service, desk-dns-sync.service, desk-dns-sync.timer]
+      register: desk_dns_sync_units
+
+    - name: Start only the policy API boundary
+      ansible.builtin.systemd_service:
+        name: desk-dns-sync-agent
+        enabled: true
+        state: "{{ 'restarted' if desk_dns_sync_scripts.changed or desk_dns_sync_units.changed or desk_dns_sync_tls.changed or desk_dns_sync_agent_config.changed else 'started' }}"
+        daemon_reload: true

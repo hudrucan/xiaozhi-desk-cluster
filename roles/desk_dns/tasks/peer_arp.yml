@@ -21,7 +21,7 @@
       [Service]
       Type=oneshot
       Slice=desk-dns.slice
-      ExecStart=/usr/bin/python3 /usr/local/libexec/desk-dns/peer_arp.py --config /etc/desk-dns/peer-arp.json --snapshot /etc/desk-dns/vip.json
+      ExecStart=/usr/bin/python3 /usr/local/libexec/desk-dns/peer-arp.py --config /etc/desk-dns/peer-arp.json --snapshot /etc/desk-dns/vip.json
       TimeoutStartSec=3
       NoNewPrivileges=true
       CapabilityBoundingSet=CAP_NET_RAW

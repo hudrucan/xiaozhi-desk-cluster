@@ -1,0 +1,26 @@
+[Unit]
+Description=Desk DNS protected AdGuard policy API boundary
+Wants=network-online.target desk-adguard.service
+After=network-online.target desk-adguard.service
+
+[Service]
+User=desk-dns-sync
+Group=desk-dns-sync
+Slice=desk-dnssync.slice
+ExecStart=/usr/bin/python3 /usr/local/libexec/desk-dns/desk-dns-sync.py serve
+Restart=on-failure
+RestartSec=3
+CPUWeight=5
+MemoryMax=48M
+TasksMax=16
+LimitNOFILE=128
+CapabilityBoundingSet=
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_NETLINK
+TimeoutStopSec=5
+
+[Install]
+WantedBy=multi-user.target

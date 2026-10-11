@@ -6,8 +6,8 @@ global_defs {
 }
 
 vrrp_script dns_ready {
-    script "/usr/bin/python3 /usr/local/libexec/desk-dns/dns_probe.py ready --config /etc/desk-dns/public.json --host {{ ansible_host }} --port {{ desk_dns_test_port }}"
-    interval 3
+    script "/usr/bin/python3 /usr/local/libexec/desk-dns/dns-probe.py ready --config /etc/desk-dns/public.json --host {{ ansible_host }} --port {{ desk_dns_test_port }}"
+    interval 5
     timeout 4
     fall 2
     rise 2
@@ -16,9 +16,9 @@ vrrp_script dns_ready {
 }
 
 vrrp_script avoid_xiaozhi_vip {
-    script "/usr/bin/python3 /usr/local/libexec/desk-dns/dns_probe.py prefer --config /etc/desk-dns/public.json"
-    interval 3
-    timeout 2
+    script "/usr/bin/python3 /usr/local/libexec/desk-dns/dns-probe.py prefer --config /etc/desk-dns/public.json"
+    interval 5
+    timeout 4
     fall 2
     rise 2
     weight -50

@@ -8,7 +8,7 @@
 
     - name: Recheck every frontend before changing DNS VIP ownership
       ansible.builtin.command:
-        argv: [/usr/bin/python3, /usr/local/libexec/desk-dns/dns_probe.py, balanced, --config, /etc/desk-dns/public.json, --host, "{{ desk_dns_nodes[item].management }}", --port, "{{ desk_dns_test_port | string }}"]
+        argv: [/usr/bin/python3, /usr/local/libexec/desk-dns/dns-probe.py, balanced, --config, /etc/desk-dns/public.json, --host, "{{ desk_dns_nodes[item].management }}", --port, "{{ desk_dns_test_port | string }}"]
       loop: "{{ groups['desk_dns'] | sort }}"
       changed_when: false
 

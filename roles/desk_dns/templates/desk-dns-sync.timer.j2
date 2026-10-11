@@ -1,0 +1,12 @@
+[Unit]
+Description=Periodic shared DNS policy reconciliation
+
+[Timer]
+OnBootSec=20s
+OnUnitInactiveSec={{ desk_dns_sync_interval }}s
+RandomizedDelaySec=2s
+AccuracySec=1s
+Unit=desk-dns-sync.service
+
+[Install]
+WantedBy=timers.target

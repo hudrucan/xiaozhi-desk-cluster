@@ -1,0 +1,31 @@
+---
+- name: Download checksum-pinned official ARM64 AdGuard archive
+  ansible.builtin.get_url:
+    url: "https://github.com/AdguardTeam/AdGuardHome/releases/download/{{ desk_dns_adguard_version }}/AdGuardHome_linux_arm64.tar.gz"
+    dest: "/var/cache/desk-dns/adguard-home-{{ desk_dns_adguard_version }}.tar.gz"
+    checksum: "sha256:{{ desk_dns_adguard_sha256 }}"
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Create versioned AdGuard installation directory
+  ansible.builtin.file:
+    path: "/opt/desk-adguard/{{ desk_dns_adguard_version }}"
+    state: directory
+    mode: '0755'
+
+- name: Extract official AdGuard payload without running its installer
+  ansible.builtin.unarchive:
+    src: "/var/cache/desk-dns/adguard-home-{{ desk_dns_adguard_version }}.tar.gz"
+    dest: "/opt/desk-adguard/{{ desk_dns_adguard_version }}"
+    remote_src: true
+    creates: "/opt/desk-adguard/{{ desk_dns_adguard_version }}/AdGuardHome/AdGuardHome"
+
+- name: Install byte-identical AdGuard executable under its managed runtime name
+  ansible.builtin.copy:
+    src: "/opt/desk-adguard/{{ desk_dns_adguard_version }}/AdGuardHome/AdGuardHome"
+    dest: "/opt/desk-adguard/{{ desk_dns_adguard_version }}/adguard-home"
+    remote_src: true
+    owner: root
+    group: root
+    mode: '0755'
