@@ -1,0 +1,48 @@
+---
+- ansible.builtin.include_tasks: guard.yml
+- name: Update only the dedicated DNS VIP unit and configuration with rollback
+  when: not ansible_check_mode
+  block:
+    - name: Preserve existing DNS VIP configuration and unit
+      ansible.builtin.copy:
+        src: "{{ item.src }}"
+        dest: "{{ item.dest }}"
+        remote_src: true
+        mode: '0644'
+      loop:
+        - {src: /etc/desk-dns/keepalived.conf, dest: /etc/desk-dns/pre-ipv6-keepalived.conf}
+        - {src: /etc/systemd/system/desk-dns-vip.service, dest: /etc/desk-dns/pre-ipv6-vip.service}
+    - name: Validate IPv6 attached to the existing IPv4 VRRP election
+      ansible.builtin.template:
+        src: keepalived.conf.j2
+        dest: /etc/desk-dns/keepalived.conf
+        mode: '0644'
+        validate: /usr/sbin/keepalived --config-test --use-file=%s
+      register: desk_dns_ipv6_vrrp
+    - name: Permit IPv6 sockets in the dedicated DNS VIP unit
+      ansible.builtin.template:
+        src: desk-dns-vip.service.j2
+        dest: /etc/systemd/system/desk-dns-vip.service
+        mode: '0644'
+      register: desk_dns_ipv6_unit
+    - name: Retain inactive VIP instances and restart only changed active instances
+      ansible.builtin.systemd_service:
+        name: desk-dns-vip
+        daemon_reload: true
+        state: "{{ 'stopped' if desk_dns_ipv6_snapshot.state == 'inactive' else ('restarted' if desk_dns_ipv6_vrrp.changed or desk_dns_ipv6_unit.changed else 'started') }}"
+  rescue:
+    - ansible.builtin.copy:
+        src: "{{ item.src }}"
+        dest: "{{ item.dest }}"
+        remote_src: true
+        mode: '0644'
+      loop:
+        - {src: /etc/desk-dns/pre-ipv6-keepalived.conf, dest: /etc/desk-dns/keepalived.conf}
+        - {src: /etc/desk-dns/pre-ipv6-vip.service, dest: /etc/systemd/system/desk-dns-vip.service}
+    - ansible.builtin.systemd_service:
+        name: desk-dns-vip
+        daemon_reload: true
+        state: "{{ 'restarted' if desk_dns_ipv6_snapshot.state == 'active' else 'stopped' }}"
+    - ansible.builtin.fail:
+        msg: DNS VIP update failed; its previous configuration and service state were restored.
+- ansible.builtin.include_tasks: guard.yml

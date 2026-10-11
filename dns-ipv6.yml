@@ -1,0 +1,75 @@
+---
+- name: Freeze the existing DNS election and protect Xiaozhi
+  hosts: desk_dns
+  become: true
+  gather_facts: true
+  any_errors_fatal: true
+  vars:
+    desk_dns_verify_only: true
+  tasks:
+    - ansible.builtin.include_role:
+        name: desk_dns
+        tasks_from: preflight
+        public: true
+    - ansible.builtin.include_role:
+        name: desk_dns
+        tasks_from: freeze
+        public: true
+    - name: Inspect IPv6 prerequisites and retain the existing VIP service state
+      ansible.builtin.include_role:
+        name: desk_dns
+        tasks_from: ipv6-preflight
+
+- name: Prepare all AdGuard IPv6 backends before changing any DNS frontend
+  hosts: desk_dns
+  become: true
+  gather_facts: false
+  serial: 1
+  any_errors_fatal: true
+  tasks:
+    - ansible.builtin.include_role:
+        name: desk_dns
+        tasks_from: ipv6-access
+
+- name: Include IPv6 clients in the existing DNS panel activity counter
+  hosts: desk_dns
+  become: true
+  gather_facts: false
+  serial: 1
+  any_errors_fatal: true
+  tasks:
+    - ansible.builtin.include_role:
+        name: desk_dns
+        tasks_from: ipv6-counter
+
+- name: Enable IPv6 DNS frontends before attaching the IPv6 VIP
+  hosts: desk_dns
+  become: true
+  gather_facts: false
+  serial: 1
+  any_errors_fatal: true
+  tasks:
+    - ansible.builtin.include_role:
+        name: desk_dns
+        tasks_from: ipv6-frontend
+
+- name: Attach IPv6 to the existing DNS election without starting inactive instances
+  hosts: desk_dns
+  become: true
+  gather_facts: false
+  serial: 1
+  any_errors_fatal: true
+  tasks:
+    - ansible.builtin.include_role:
+        name: desk_dns
+        tasks_from: ipv6-vip
+
+- name: Verify paired ownership and IPv4 and IPv6 cluster DNS
+  hosts: desk_dns
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  tasks:
+    - ansible.builtin.include_role:
+        name: desk_dns
+        tasks_from: ipv6-verify

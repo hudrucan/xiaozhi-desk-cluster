@@ -1,0 +1,35 @@
+---
+- ansible.builtin.include_tasks: guard.yml
+- name: Enable only forwarded LAN IPv6 addresses on every backend before any frontend changes
+  when: not ansible_check_mode
+  block:
+    - name: Add IPv6 without changing existing AdGuard access settings
+      ansible.builtin.uri:
+        url: http://127.0.0.1:3001/control/access/set
+        method: POST
+        body_format: json
+        body: "{{ desk_dns_ipv6_access.json | combine({'allowed_clients': desk_dns_ipv6_access.json.allowed_clients + ['fe80::/10']}) }}"
+        use_proxy: false
+      when: "'fe80::/10' not in desk_dns_ipv6_access.json.allowed_clients"
+      changed_when: true
+    - name: Verify the backend accepts IPv6 clients and preserves other access settings
+      ansible.builtin.uri:
+        url: http://127.0.0.1:3001/control/access/list
+        use_proxy: false
+      register: desk_dns_ipv6_access_ready
+      failed_when: >-
+        desk_dns_ipv6_access_ready.status != 200 or
+        (desk_dns_ipv6_access_ready.json.allowed_clients | difference(desk_dns_ipv6_access.json.allowed_clients + ['fe80::/10']) | length) != 0 or
+        ((desk_dns_ipv6_access.json.allowed_clients + ['fe80::/10']) | difference(desk_dns_ipv6_access_ready.json.allowed_clients) | length) != 0 or
+        (desk_dns_ipv6_access_ready.json | combine({'allowed_clients':desk_dns_ipv6_access.json.allowed_clients})) != desk_dns_ipv6_access.json
+  rescue:
+    - name: Restore original access settings after a failed update
+      ansible.builtin.uri:
+        url: http://127.0.0.1:3001/control/access/set
+        method: POST
+        body_format: json
+        body: "{{ desk_dns_ipv6_access.json }}"
+        use_proxy: false
+    - ansible.builtin.fail:
+        msg: AdGuard IPv6 access update failed; original settings were restored.
+- ansible.builtin.include_tasks: guard.yml

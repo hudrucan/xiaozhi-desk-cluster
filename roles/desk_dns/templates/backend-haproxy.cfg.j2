@@ -1,6 +1,6 @@
 global
     maxconn 256
-    stats socket /run/desk-dns-backend/admin.sock mode 600 level user
+    stats socket /run/desk-dns-backend/admin.sock mode 660 level user
 
 defaults
     mode http
@@ -18,10 +18,9 @@ frontend private_dns_backend
     http-request del-header True-Client-IP
     http-request del-header X-Real-IP
     acl real_client req.hdr_ip(X-Forwarded-For) -m ip 192.168.1.0/24 fe80::/10
+    acl real_client req.hdr(X-Forwarded-For),lower -m sub fe80:
     acl node_probe req.hdr_ip(X-Forwarded-For) -m ip 192.168.1.101 192.168.1.102 192.168.1.103
-    stick-table type integer size 1 store gpc0
-    http-request track-sc0 int(1) if dns_query real_client !node_probe
-    http-request sc-inc-gpc0(0) if dns_query real_client !node_probe
+    use_backend adguard_clients if dns_query real_client !node_probe
     use_backend observe_api if peer_api
     default_backend adguard_doh
 
@@ -30,3 +29,7 @@ backend adguard_doh
 
 backend observe_api
     server local 127.0.0.1:3003
+
+# Separate read-only native statistics; same local AdGuard destination.
+backend adguard_clients
+    server local 127.0.0.1:3001

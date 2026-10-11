@@ -8,7 +8,7 @@ from jinja2 import Environment, StrictUndefined
 root=Path(__file__).resolve().parents[3]
 role=root/'roles/desk_dns'
 defaults=yaml.safe_load((role/'defaults/main.yml').read_text())
-yamls=[root/'dns.yml', root/'verify-dns.yml', root/'dns-sync.yml', *role.rglob('*.yml')]
+yamls=[root/'dns.yml', root/'verify-dns.yml', root/'dns-sync.yml', root/'dns-cluster.yml', root/'dns-ipv6.yml', *role.rglob('*.yml')]
 for path in yamls:
     yaml.safe_load(path.read_text())
 pyfiles=list(role.rglob('*.py'))
@@ -54,7 +54,13 @@ for node, address in nodes.items():
             assert '192.168.1.186' not in rendered
         if path.name=='desk-dns-vip.service.j2':
             assert 'RestrictAddressFamilies=AF_UNIX AF_INET AF_NETLINK AF_PACKET' in rendered
+        if path.name=='backend-haproxy.cfg.j2':
+            assert 'mode 660 level user' in rendered
+            assert 'backend adguard_clients' in rendered
+        if path.name=='desk-dns-backend.service.j2':
+            assert 'RuntimeDirectoryMode=0710' in rendered
         if path.name=='desk-dns-activity.service.j2':
+            assert 'SupplementaryGroups=desk-dnsdist' in rendered
             assert 'CapabilityBoundingSet=CAP_NET_RAW' in rendered
             assert 'CPUQuota=5%' in rendered and 'MemoryMax=32M' in rendered
             assert 'RestrictAddressFamilies=AF_UNIX AF_PACKET' in rendered
@@ -84,8 +90,25 @@ for node, address in nodes.items():
 
             assert ('Slice=desk-dnssync.slice' if path.name.startswith('desk-dns-sync') else 'Slice=desk-dns.slice') in rendered
             assert '[Service]' in rendered and 'ExecStart=' in rendered
+# IPv6 uses the existing election and preserves a separate scoped DNS endpoint.
+for node, address in nodes.items():
+    values={**defaults, 'desk_dns_nodes':nodes, 'inventory_hostname':node,
+            'cluster_ip':address['private'], 'ansible_host':address['management'],
+            'desk_dns_snapshot':{'topology':{'interface':'wlan0','prefix':24}},
+            'desk_dns_election':{'deskb1x':100,'deskb2x':120,'deskb3x':110},
+            'desk_dns_ipv6_vip_enabled':True, 'desk_dns_client_identity_enabled':True}
+    rendered={name:env.from_string((role/'templates'/name).read_text()).render(**values)
+              for name in ('keepalived.conf.j2','dnsdist.conf.j2','desk-dns-vip.service.j2')}
+    assert 'virtual_ipaddress_excluded' in rendered['keepalived.conf.j2']
+    assert 'fe80::250/128 dev wlan0' in rendered['keepalived.conf.j2']
+    assert rendered['keepalived.conf.j2'].count('virtual_router_id') == 1
+    assert 'addLocal("[::]:53")' in rendered['dnsdist.conf.j2']
+    assert '"fe80::/10"' in rendered['dnsdist.conf.j2']
+    assert 'addXForwardedHeaders=true' in rendered['dnsdist.conf.j2']
+    assert 'RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK AF_PACKET' in rendered['desk-dns-vip.service.j2']
+    assert 'CAP_NET_ADMIN' in rendered['desk-dns-vip.service.j2']
 # Production mutations must remain within explicit non-check-mode blocks.
-for filename in ('backend.yml','frontend.yml','vip.yml'):
+for filename in ('backend.yml','frontend.yml','vip.yml','ipv6-access.yml','ipv6-counter.yml','ipv6-frontend.yml','ipv6-vip.yml'):
     tasks=yaml.safe_load((role/'tasks'/filename).read_text())
     blocks=[t for t in tasks if 'block' in t]
     assert len(blocks)==1 and blocks[0]['when']=='not ansible_check_mode'
@@ -103,4 +126,4 @@ assert backend[-1]['ansible.builtin.systemd_service']['name']=='desk-dns-activit
 assert 'desk_dns_activity_script.changed or desk_dns_activity_unit.changed' in backend[-1]['ansible.builtin.systemd_service']['state']
 assert all('desk-dns-activity' not in (role/'templates'/name).read_text() for name in ('desk-adguard.service.j2','desk-dnsdist.service.j2','desk-dns-vip.service.j2'))
 
-print(f'PASS: {len(yamls)} YAML files, {len(pyfiles)} Python ASTs, {3 * len(list(role.joinpath('templates').glob('*.j2')))} rendered templates, check-mode/rollout isolation fixtures')
+print(f'PASS: {len(yamls)} YAML files, {len(pyfiles)} Python ASTs, {3 * len(list(role.joinpath('templates').glob('*.j2'))) + 9} rendered templates, check-mode/rollout isolation fixtures')

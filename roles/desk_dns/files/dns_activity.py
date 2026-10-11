@@ -3,6 +3,8 @@
 import argparse
 import ctypes
 import ipaddress
+import csv
+import io
 import json
 import os
 from pathlib import Path
@@ -168,6 +170,16 @@ def publish(path, node_id, instance, boot_id, count, last_query, now):
     os.replace(temporary, path)
 
 
+def http_client_count(raw):
+    for row in csv.DictReader(io.StringIO(raw.decode('ascii').lstrip('# '))):
+        if row.get('pxname') == 'adguard_clients' and row.get('svname') == 'BACKEND':
+            count = int(row['stot'])
+            if count < 0:
+                raise ValueError('Invalid DNS request count')
+            return count
+    return 0
+
+
 def observe_http_counter(node):
     # HAProxy counts only real LAN-client DoH requests, excluding health probes.
     output = Path('/run/desk-dns/activity.json')
@@ -183,21 +195,20 @@ def observe_http_counter(node):
             with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as stats:
                 stats.settimeout(.2)
                 stats.connect('/run/desk-dns-backend/admin.sock')
-                stats.sendall(b'show table private_dns_backend\n')
+                stats.sendall(b'show stat\n')
                 stats.shutdown(socket.SHUT_WR)
                 raw = b''
-                while len(raw) < 4096:
-                    part = stats.recv(4096 - len(raw))
+                while len(raw) < 16384:
+                    part = stats.recv(16384 - len(raw))
                     if not part: break
                     raw += part
-            matched = re.search(rb'gpc0=(\d+)', raw)
-            current = int(matched[1]) if matched else 0
+            current = http_client_count(raw)
             delta = max(0, current - previous) if previous is not None else 0
             if delta:
                 count += delta
                 last_query = now
             previous = current
-        except OSError:
+        except (OSError, ValueError, UnicodeError):
             previous = None
         publish(output, node, instance, boot_id, count, last_query, now)
         stopping.wait(PUBLISH_INTERVAL)

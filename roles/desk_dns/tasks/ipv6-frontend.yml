@@ -1,0 +1,50 @@
+---
+- ansible.builtin.include_tasks: guard.yml
+- name: Activate and verify one DNS IPv6 frontend with rollback
+  when: not ansible_check_mode
+  block:
+    - name: Back up the current DNS frontend
+      ansible.builtin.copy:
+        src: /etc/desk-dns/dnsdist.conf
+        dest: /etc/desk-dns/pre-ipv6-dnsdist.conf
+        remote_src: true
+        mode: '0644'
+    - name: Install the probe supporting scoped IPv6 DNS queries
+      ansible.builtin.copy:
+        src: dns_probe.py
+        dest: /usr/local/libexec/desk-dns/dns-probe.py
+        mode: '0755'
+    - name: Validate and install the dual-stack DNS frontend
+      ansible.builtin.template:
+        src: dnsdist.conf.j2
+        dest: /etc/desk-dns/dnsdist.conf
+        mode: '0644'
+        validate: /usr/bin/dnsdist --check-config -C %s
+      register: desk_dns_ipv6_frontend
+    - name: Restart only the changed DNS frontend
+      ansible.builtin.systemd_service:
+        name: desk-dnsdist
+        state: "{{ 'restarted' if desk_dns_ipv6_frontend.changed else 'started' }}"
+    - name: Require UDP and TCP to reach all three nodes over each IP family
+      ansible.builtin.command:
+        argv: [/usr/bin/python3, /usr/local/libexec/desk-dns/dns-probe.py, balanced, --config, /etc/desk-dns/public.json, --host, "{{ item.host }}", --port, "{{ item.port | string }}"]
+      loop:
+        - {host: "{{ ansible_host }}", port: "{{ desk_dns_test_port }}"}
+        - {host: "{{ desk_dns_ipv6_snapshot.local }}", port: 53}
+      register: desk_dns_ipv6_frontend_ready
+      until: desk_dns_ipv6_frontend_ready.rc == 0
+      retries: 5
+      delay: 2
+      changed_when: false
+  rescue:
+    - ansible.builtin.copy:
+        src: /etc/desk-dns/pre-ipv6-dnsdist.conf
+        dest: /etc/desk-dns/dnsdist.conf
+        remote_src: true
+        mode: '0644'
+    - ansible.builtin.systemd_service:
+        name: desk-dnsdist
+        state: restarted
+    - ansible.builtin.fail:
+        msg: IPv6 DNS frontend failed verification; its previous configuration was restored.
+- ansible.builtin.include_tasks: guard.yml

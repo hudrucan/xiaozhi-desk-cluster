@@ -14,3 +14,6 @@ desk_dns_ui_auth_enabled: false
 desk_dns_ui_vip_proxy_only: true
 desk_monitoring_auto_login_email: admin@desk.cluster
 desk_dns_client_identity_enabled: true
+
+# IPv6 resolver shares the DNS VIP election; router DNS is configured manually.
+desk_dns_ipv6_vip_enabled: true

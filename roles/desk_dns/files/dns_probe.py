@@ -110,11 +110,19 @@ def answers(data, query):
 
 
 def query(host, port, name, tcp=False):
-    ipaddress.IPv4Address(host)
+    address, separator, interface = host.partition('%')
+    ip = ipaddress.ip_address(address)
+    if separator and (ip.version != 6 or not interface):
+        raise ValueError('Interface scope requires an IPv6 address')
+    if ip.version == 6 and ip.is_link_local and not separator:
+        raise ValueError('Link-local DNS requires an interface scope')
+    family = socket.AF_INET6 if ip.version == 6 else socket.AF_INET
+    scope = socket.if_nametoindex(interface) if separator else 0
+    endpoint = (str(ip), port, 0, scope) if ip.version == 6 else (str(ip), port)
     payload = request(name, secrets.randbelow(65536))
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM if tcp else socket.SOCK_DGRAM) as sock:
+    with socket.socket(family, socket.SOCK_STREAM if tcp else socket.SOCK_DGRAM) as sock:
         sock.settimeout(2)
-        sock.connect((host, port))
+        sock.connect(endpoint)
         if tcp:
             sock.sendall(struct.pack('!H', len(payload)) + payload)
             def receive(size):

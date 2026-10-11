@@ -213,6 +213,22 @@ class ProbeTests(unittest.TestCase):
             self.assertEqual(probe.query('192.168.1.250', 53, probe.HEALTH, True), ['127.0.0.1'])
             sock.sendall.assert_called_once_with(struct.pack('!H', len(query)) + query)
 
+    def test_ipv6_query_uses_interface_scope_and_preserves_dns_contract(self):
+        query = probe.request(probe.HEALTH, 123)
+        with patch.object(probe.socket, 'socket') as factory, \
+             patch.object(probe.socket, 'if_nametoindex', return_value=7), \
+             patch.object(probe.secrets, 'randbelow', return_value=123):
+            sock = factory.return_value.__enter__.return_value
+            sock.recv.return_value = response(query)
+            self.assertEqual(probe.query('fe80::250%wlan0', 53, probe.HEALTH), ['127.0.0.1'])
+            factory.assert_called_once_with(socket.AF_INET6, socket.SOCK_DGRAM)
+            sock.connect.assert_called_once_with(('fe80::250', 53, 0, 7))
+
+    def test_link_local_without_scope_and_scoped_ipv4_are_rejected(self):
+        for address in ('fe80::250', 'fe80::250%', '192.168.1.250%wlan0'):
+            with self.subTest(address=address), self.assertRaises(ValueError):
+                probe.query(address, 53, probe.HEALTH)
+
     def test_tcp_query_rejects_oversize_and_incomplete_reply(self):
         for reads in ([struct.pack('!H', 4097)], [b'']):
             with patch.object(probe.socket, 'socket') as factory:

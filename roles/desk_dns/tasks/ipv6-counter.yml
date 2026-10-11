@@ -1,0 +1,78 @@
+---
+- ansible.builtin.include_tasks: guard.yml
+- name: Update the backend panel counter to include IPv6 clients
+  when: not ansible_check_mode
+  block:
+    - name: Install the observer reading native backend statistics without elevated CLI privileges
+      ansible.builtin.copy:
+        src: dns_activity.py
+        dest: /usr/local/libexec/desk-dns/dns-activity.py
+        mode: '0755'
+      register: desk_dns_ipv6_observer
+    - name: Give the observer group access to the read-only DNS statistics socket
+      ansible.builtin.template:
+        src: desk-dns-activity.service.j2
+        dest: /etc/systemd/system/desk-dns-activity.service
+        mode: '0644'
+      register: desk_dns_ipv6_observer_unit
+    - name: Restart only the changed DNS activity observer
+      ansible.builtin.systemd_service:
+        name: desk-dns-activity
+        daemon_reload: true
+        state: "{{ 'restarted' if desk_dns_ipv6_observer.changed or desk_dns_ipv6_observer_unit.changed else 'started' }}"
+    - name: Back up the current private DNS backend
+      ansible.builtin.copy:
+        src: /etc/desk-dns/backend-haproxy.cfg
+        dest: /etc/desk-dns/pre-ipv6-backend-haproxy.cfg
+        remote_src: true
+        mode: '0644'
+    - name: Back up the current private DNS backend unit
+      ansible.builtin.copy:
+        src: /etc/systemd/system/desk-dns-backend.service
+        dest: /etc/desk-dns/pre-ipv6-backend.service
+        remote_src: true
+        mode: '0644'
+    - name: Allow the observer group to traverse the read-only statistics socket directory
+      ansible.builtin.template:
+        src: desk-dns-backend.service.j2
+        dest: /etc/systemd/system/desk-dns-backend.service
+        mode: '0644'
+      register: desk_dns_ipv6_backend_unit
+    - name: Validate the existing backend with LAN IPv6 request counting
+      ansible.builtin.template:
+        src: backend-haproxy.cfg.j2
+        dest: /etc/desk-dns/backend-haproxy.cfg
+        mode: '0644'
+        validate: /usr/sbin/haproxy -c -f %s
+      register: desk_dns_ipv6_counter
+    - name: Restart only a changed private DNS backend
+      ansible.builtin.systemd_service:
+        name: desk-dns-backend
+        daemon_reload: true
+        state: "{{ 'restarted' if desk_dns_ipv6_counter.changed or desk_dns_ipv6_backend_unit.changed else 'started' }}"
+    - name: Require all three backends to return through the existing frontend
+      ansible.builtin.command:
+        argv: [/usr/bin/python3, /usr/local/libexec/desk-dns/dns-probe.py, balanced, --config, /etc/desk-dns/public.json, --host, "{{ ansible_host }}", --port, "{{ desk_dns_test_port | string }}"]
+      register: desk_dns_ipv6_counter_ready
+      until: desk_dns_ipv6_counter_ready.rc == 0
+      retries: 5
+      delay: 2
+      changed_when: false
+  rescue:
+    - ansible.builtin.copy:
+        src: /etc/desk-dns/pre-ipv6-backend-haproxy.cfg
+        dest: /etc/desk-dns/backend-haproxy.cfg
+        remote_src: true
+        mode: '0644'
+    - ansible.builtin.copy:
+        src: /etc/desk-dns/pre-ipv6-backend.service
+        dest: /etc/systemd/system/desk-dns-backend.service
+        remote_src: true
+        mode: '0644'
+    - ansible.builtin.systemd_service:
+        name: desk-dns-backend
+        daemon_reload: true
+        state: restarted
+    - ansible.builtin.fail:
+        msg: IPv6 panel counter update failed; the previous DNS backend was restored.
+- ansible.builtin.include_tasks: guard.yml

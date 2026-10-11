@@ -216,7 +216,7 @@ class ActivityTests(unittest.TestCase):
         connects = [node for node in calls if node.func.attr == 'connect']
         self.assertEqual([node.args[0].value for node in connects], ['/run/desk-dns-backend/admin.sock'])
         sends = [node for node in calls if node.func.attr == 'sendall']
-        self.assertEqual([node.args[0].value for node in sends], [b'show table private_dns_backend\n'])
+        self.assertEqual([node.args[0].value for node in sends], [b'show stat\n'])
         methods = {node.func.attr for node in ast.walk(tree)
                    if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)}
         self.assertIn('recvfrom', methods)
@@ -232,3 +232,15 @@ class ActivityTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class NativeCounterTests(unittest.TestCase):
+    def test_native_stats_counts_only_real_dns_client_backend(self):
+        raw = b'# pxname,svname,stot,\nprivate_dns_backend,FRONTEND,200,\nadguard_doh,BACKEND,100,\nadguard_clients,local,42,\nadguard_clients,BACKEND,42,\n'
+        self.assertEqual(activity.http_client_count(raw), 42)
+        self.assertEqual(activity.http_client_count(b'# pxname,svname,stot,\nadguard_doh,BACKEND,100,\n'), 0)
+
+    def test_invalid_native_counter_is_rejected(self):
+        for value in ('-1', 'invalid'):
+            with self.assertRaises(ValueError):
+                activity.http_client_count(('# pxname,svname,stot,\nadguard_clients,BACKEND,' + value + ',\n').encode())

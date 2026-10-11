@@ -1,0 +1,44 @@
+---
+- name: Require cluster DNS through both VIP families over UDP and TCP
+  ansible.builtin.command:
+    argv: [/usr/bin/python3, /usr/local/libexec/desk-dns/dns-probe.py, balanced, --config, /etc/desk-dns/public.json, --host, "{{ item }}", --port, '53']
+  loop:
+    - "{{ desk_dns_vip }}"
+    - "{{ desk_dns_ipv6_vip }}%{{ desk_dns_snapshot.topology.interface }}"
+  register: desk_dns_ipv6_vip_ready
+  until: desk_dns_ipv6_vip_ready.rc == 0
+  retries: 10
+  delay: 2
+  changed_when: false
+  when: not ansible_check_mode
+
+- name: Read paired DNS ownership and retained service states
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/python3
+      - -c
+      - |
+        import json, subprocess, sys
+        links = json.loads(subprocess.check_output(['ip', '-j', 'addr', 'show', 'dev', sys.argv[1]], text=True))
+        addresses = [a for link in links for a in link.get('addr_info', [])]
+        v4 = any(a['local'] == sys.argv[2] for a in addresses)
+        v6 = [a for a in addresses if a['local'] == sys.argv[3]]
+        assert v4 == bool(v6), 'IPv4 and IPv6 VIP owners differ'
+        assert not any(a.get('tentative') or a.get('dadfailed') for a in v6), 'IPv6 address is not ready'
+        state = subprocess.run(['systemctl', 'is-active', 'desk-dns-vip'], capture_output=True, text=True).stdout.strip()
+        assert state == sys.argv[4], 'DNS VIP instance state changed'
+        print(json.dumps({'owner': v4}))
+      - "{{ desk_dns_snapshot.topology.interface }}"
+      - "{{ desk_dns_vip }}"
+      - "{{ desk_dns_ipv6_vip }}"
+      - "{{ desk_dns_ipv6_snapshot.state }}"
+  register: desk_dns_ipv6_ownership
+  changed_when: false
+  when: not ansible_check_mode
+
+- name: Require exactly one shared owner of the IPv4 and IPv6 DNS VIPs
+  ansible.builtin.assert:
+    that: groups['desk_dns'] | map('extract', hostvars, 'desk_dns_ipv6_ownership') | map(attribute='stdout') | map('from_json') | selectattr('owner') | list | length == 1
+  run_once: true
+  when: not ansible_check_mode
+- ansible.builtin.include_tasks: guard.yml

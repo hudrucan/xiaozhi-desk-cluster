@@ -387,8 +387,11 @@ health/identity/filtering names are excluded from new logging/statistics. Existi
 historical entries remain until a user-authorized Clear/Reset or normal expiry.
 No client IP is hidden to disguise historical relay/probe traffic.
 
-For DoH forwarding, panel activity reads a fixed native HAProxy request counter
-over a local UNIX socket; it stores no domains and is outside DNS forwarding.
+For DoH forwarding, panel activity reads the native `adguard_clients` backend
+request counter through `show stat` on a local UNIX socket with CLI level `user`.
+The observer joins `desk-dnsdist`; socket mode 660 and directory mode 0710 grant
+only group read access and traversal. It stores no domains and is outside DNS
+forwarding.
 The plain-DNS packet observer remains available for the disabled identity mode.
-IPv6 router DNS is a separate opt-in extension; see `DESK_DNS_IPV6.md`. It is not
-yet deployed, and no modem change is made by Ansible.
+IPv6 DNS shares the existing DNS VIP election; see `DESK_DNS_IPV6.md`. It is
+deployed on all three nodes; no modem change is made by Ansible.

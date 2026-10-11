@@ -1,0 +1,56 @@
+---
+- name: Require the approved link-local resolver and real client forwarding
+  ansible.builtin.assert:
+    that:
+      - desk_dns_ipv6_vip_enabled
+      - desk_dns_ipv6_vip == 'fe80::250'
+      - desk_dns_client_identity_enabled
+
+- name: Read IPv6 interface and existing DNS VIP state without changing it
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/python3
+      - -c
+      - |
+        import ipaddress, json, subprocess, sys
+        from pathlib import Path
+        interface, vip, vip4 = sys.argv[1:]
+        assert Path('/proc/sys/net/ipv6/conf/' + interface + '/disable_ipv6').read_text().strip() == '0'
+        links = json.loads(subprocess.check_output(['ip', '-j', '-6', 'addr', 'show', 'dev', interface], text=True))
+        addresses = [a for link in links for a in link.get('addr_info', [])]
+        valid = [a for a in addresses if ipaddress.ip_address(a['local']).is_link_local and a['local'] != vip and not a.get('tentative') and not a.get('dadfailed')]
+        assert valid, 'No usable management IPv6 link-local address'
+        state = subprocess.run(['systemctl', 'is-active', 'desk-dns-vip'], capture_output=True, text=True).stdout.strip()
+        assert state in ('active', 'inactive'), 'DNS VIP is not in a stable state'
+        owned = any(a['local'] == vip for a in addresses)
+        assert not owned or state == 'active', 'IPv6 VIP has an unmanaged owner'
+        neighbors = json.loads(subprocess.check_output(['ip', '-j', '-6', 'neigh', 'show', 'to', vip, 'dev', interface], text=True))
+        mac = json.loads(subprocess.check_output(['ip', '-j', 'link', 'show', 'dev', interface], text=True))[0]['address']
+        ipv4 = json.loads(subprocess.check_output(['ip', '-j', '-4', 'addr', 'show', 'dev', interface], text=True))
+        owns4 = any(a.get('local') == vip4 for link in ipv4 for a in link.get('addr_info', []))
+        assert not owned or owns4, 'Existing IPv6 VIP is not paired with the DNS IPv4 VIP'
+        neighbors = [n['lladdr'] for n in neighbors if n.get('lladdr') and not set(n.get('state', [])) & {'FAILED', 'INCOMPLETE'}]
+        print(json.dumps({'state': state, 'local': valid[0]['local'] + '%' + interface, 'owner': owned, 'mac': mac, 'neighbors': neighbors}))
+      - "{{ desk_dns_snapshot.topology.interface }}"
+      - "{{ desk_dns_ipv6_vip }}"
+      - "{{ desk_dns_vip }}"
+  register: desk_dns_ipv6_inspect
+  changed_when: false
+  check_mode: false
+
+- ansible.builtin.set_fact:
+    desk_dns_ipv6_snapshot: "{{ desk_dns_ipv6_inspect.stdout | from_json }}"
+
+- name: Read existing AdGuard access settings without changing them
+  ansible.builtin.uri:
+    url: http://127.0.0.1:3001/control/access/list
+    use_proxy: false
+  register: desk_dns_ipv6_access
+  failed_when: desk_dns_ipv6_access.status != 200
+
+- name: Reject a conflicting IPv6 neighbor while permitting a managed paired VIP on reruns
+  ansible.builtin.assert:
+    that:
+      - groups['desk_dns'] | map('extract', hostvars, 'desk_dns_ipv6_snapshot') | selectattr('owner') | list | length <= 1
+      - (groups['desk_dns'] | map('extract', hostvars, 'desk_dns_ipv6_snapshot') | map(attribute='neighbors') | flatten | unique | list | difference(groups['desk_dns'] | map('extract', hostvars, 'desk_dns_ipv6_snapshot') | selectattr('owner') | map(attribute='mac') | list)) | length == 0
+  run_once: true
