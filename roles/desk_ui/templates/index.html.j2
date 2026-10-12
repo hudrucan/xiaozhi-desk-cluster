@@ -110,14 +110,57 @@ body{margin:0;background:#100d08;color:#f3ead8;font-family:Inter,ui-sans-serif,s
 
 #desk-cluster .dc-reboot{display:inline-flex;align-items:center;gap:7px;min-height:38px;padding:7px 11px;border:1px solid var(--dc-border);border-radius:8px;background:transparent;color:var(--dc-muted);font:inherit;font-size:12px;cursor:pointer}#desk-cluster .dc-reboot:hover:not(:disabled){border-color:var(--dc-gold);color:var(--dc-text)}#desk-cluster .dc-reboot:disabled{opacity:.45;cursor:not-allowed}#desk-cluster .dc-detail-links{display:flex;align-items:center;gap:15px;flex-wrap:wrap}#desk-cluster .dc-operation{margin:14px 0 0;padding:12px 15px;background:var(--dc-surface);border:1px solid var(--dc-border);border-radius:12px;font-size:12px;color:var(--dc-muted)}#desk-cluster .dc-operation strong{color:var(--dc-text)}#desk-cluster dialog{width:min(440px,calc(100% - 32px));max-height:calc(100% - 32px);overflow:auto;background:var(--dc-surface);color:var(--dc-text);border:1px solid var(--dc-border);border-radius:16px;padding:23px;font:14px/1.5 Inter,ui-sans-serif,system-ui,sans-serif}#desk-cluster dialog::backdrop{background:rgba(0,0,0,.6)}#desk-cluster dialog h2{margin:0 0 10px;font-size:19px}#desk-cluster dialog p{margin:8px 0}#desk-cluster .dc-confirm-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:22px}#desk-cluster .dc-confirm-primary{background:var(--dc-gold);color:var(--dc-bg);border-color:var(--dc-gold)}#desk-cluster .dc-confirm-note{font-size:12px;color:var(--dc-faint)}
 #desk-cluster .dc-dns{margin:18px 0;border:1px solid var(--dc-border);border-radius:17px;background:var(--dc-surface);overflow:hidden}#desk-cluster .dc-dns-head{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:16px 20px;border-bottom:1px solid var(--dc-border)}#desk-cluster .dc-dns-head h2{font-size:15px;margin:0 0 3px}#desk-cluster .dc-dns-head p{font-size:12px;margin:0}#desk-cluster .dc-dns-grid{display:grid;grid-template-columns:1fr 1fr 2fr;gap:20px;padding:16px 20px}#desk-cluster .dc-dns-grid small,#desk-cluster .dc-dns-grid span{display:block;color:var(--dc-faint);font-size:12px}#desk-cluster .dc-dns-grid strong{display:block;font-size:13px;margin:5px 0}#desk-cluster .dc-dns-warning{color:var(--dc-red)}#desk-cluster .dc-detail-links{flex-wrap:wrap}@media(max-width:540px){ #desk-cluster .dc-dns-grid{grid-template-columns:1fr 1fr;gap:14px}#desk-cluster .dc-dns-grid>div:last-child{grid-column:1/-1}#desk-cluster .dc-dns-head{align-items:flex-start;flex-direction:column}}
+#desk-cluster .dc-topology{position:relative}
+#desk-cluster .dc-topology-endpoints{position:relative;z-index:1;display:grid;grid-template-columns:1fr 1fr;gap:18px}
+#desk-cluster .dc-endpoint{display:flex;align-items:flex-start;gap:12px;padding:16px 18px;background:var(--dc-surface);border:1px solid var(--dc-border);border-radius:14px;min-width:0}
+#desk-cluster .dc-endpoint>[data-icon]{color:var(--dc-gold);flex-shrink:0;margin-top:3px}
+#desk-cluster .dc-endpoint[data-service="dns"]>[data-icon]{color:var(--dc-green)}
+#desk-cluster .dc-endpoint h2{font-size:14px;font-weight:600;margin:0 0 3px}
+#desk-cluster .dc-endpoint p{font-size:12px}
+#desk-cluster .dc-endpoint-owner.dc-dns-warning{color:var(--dc-red)}
+#desk-cluster .dc-endpoint-owner{display:block;margin-top:6px;font-size:11px;color:var(--dc-faint);overflow-wrap:anywhere}
+#desk-cluster .dc-topology-wires{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;overflow:visible}
+#desk-cluster .dc-topology-wires path{fill:none;stroke:var(--dc-gold);stroke-width:1.5;stroke-linejoin:round;stroke-linecap:round}
+#desk-cluster .dc-topology-wires .dc-wire-dns{stroke:var(--dc-green)}
+#desk-cluster .dc-topology-wires .dc-wire-pool{stroke-dasharray:4 5;opacity:.65}
+#desk-cluster .dc-topology .dc-nodes{position:relative;z-index:1;margin-top:84px}
+#desk-cluster .dc-node-dns{padding:9px 19px;border-top:1px solid var(--dc-border);font-size:11px;color:var(--dc-faint);display:flex;align-items:center;gap:6px}
+#desk-cluster .dc-node-dns.eligible{color:var(--dc-green)}
+#desk-cluster .dc-node-dns>svg{width:12px;height:12px}
+#desk-cluster .dc-worker-active .dc-task{color:var(--dc-gold)}
+#desk-cluster .dc-worker-active .dc-task>svg{animation:dc-worker-pulse 1.8s ease-in-out infinite}
+#desk-cluster .dc-topology-legend{display:flex;flex-wrap:wrap;gap:10px 20px;margin-top:13px;font-size:11px;color:var(--dc-faint)}
+#desk-cluster .dc-topology-legend span{display:flex;gap:7px;align-items:center}
+#desk-cluster .dc-topology-key{width:19px;height:0;border-top:1.5px solid var(--dc-gold)}
+#desk-cluster .dc-topology-key.pool{border-color:var(--dc-green);border-top-style:dashed}
+#desk-cluster .dc-topology-key.worker{border:0;width:6px;height:6px;border-radius:50%;background:var(--dc-gold)}
+#desk-cluster .dc-dns summary{padding:13px 18px;display:flex;justify-content:space-between;align-items:center;gap:12px;list-style:none;cursor:pointer;font-size:12px}
+#desk-cluster .dc-dns summary::-webkit-details-marker{display:none}
+#desk-cluster .dc-dns summary>span:first-child{display:flex;gap:8px;align-items:center;color:var(--dc-text)}
+#desk-cluster .dc-dns summary svg{width:14px;height:14px;color:var(--dc-gold)}
+#desk-cluster .dc-dns[open] summary{border-bottom:1px solid var(--dc-border)}
+#desk-cluster .dc-dns[open] summary svg{transform:rotate(90deg)}
+#desk-cluster .dc-dns-note{padding:0 20px 15px;font-size:11px;color:var(--dc-faint)}
+@keyframes dc-worker-pulse{50%{opacity:.35}}
+@media(prefers-reduced-motion:reduce){ #desk-cluster .dc-worker-active .dc-task>svg{animation:none}}
+#desk-cluster[data-paused="true"] .dc-worker-active .dc-task>svg{animation-play-state:paused}
+@media(max-width:540px){ #desk-cluster .dc-topology-endpoints{gap:10px}#desk-cluster .dc-endpoint{padding:12px 10px;gap:7px}#desk-cluster .dc-endpoint>[data-icon]{width:14px;height:14px}#desk-cluster .dc-endpoint p{font-size:11px}#desk-cluster .dc-endpoint-owner{font-size:11px}#desk-cluster .dc-topology .dc-nodes{margin-top:38px;padding-left:22px}#desk-cluster .dc-node-dns{padding:9px 13px}#desk-cluster .dc-dns summary{align-items:flex-start;flex-wrap:wrap}#desk-cluster .dc-topology-legend{gap:9px 14px}}
 </style></head><body><main id="desk-cluster" class="dc-app">
 <header class="dc-top"><a class="dc-brand" href="/" aria-label="Desk Cluster home"><span class="dc-mark" data-icon="layers"></span>Desk Cluster</a><span class="dc-address" id="address"></span></header>
 <div class="dc-intro"><div><div class="dc-eyebrow">Cluster overview</div><h1>Three nodes. One home.</h1><p>Ownership, activity and health at a glance.</p></div><span class="dc-online" id="online">Connecting…</span></div>
 <div class="dc-summary" id="summary"></div>
-<section class="dc-dns" id="dns-health" aria-label="DNS health"></section>
+<section id="topology" class="dc-topology" aria-label="Live cluster topology">
+<div class="dc-topology-endpoints">
+<div id="topology-xiaozhi" class="dc-endpoint" data-service="xiaozhi"><span data-icon="bot"></span><div><h2>Xiaozhi</h2><p>Control plane · /xiaozhi/</p><span class="dc-endpoint-owner" id="topology-xiaozhi-owner">Owner unconfirmed</span></div></div>
+<div id="topology-dns" class="dc-endpoint" data-service="dns"><span data-icon="shield"></span><div><h2>DNS</h2><p>Resolver · IPv4 + IPv6</p><span class="dc-endpoint-owner" id="topology-dns-owner">Owner unconfirmed</span></div></div>
+</div>
+<svg id="topology-links" class="dc-topology-wires" role="img" aria-label="Current cluster ownership and DNS eligibility"></svg>
 <div class="dc-nodes" id="nodes"></div>
+</section>
+<div class="dc-topology-legend" aria-label="Topology legend"><span><i class="dc-topology-key"></i>VIP owner</span><span><i class="dc-topology-key pool"></i>DNS eligible</span><span><i class="dc-topology-key worker"></i>Voice worker active</span></div>
 <div id="node-operation" class="dc-operation" role="status" hidden></div>
 <div id="details" hidden></div>
+<details class="dc-dns" id="dns-health" aria-label="DNS health"><summary><span><span data-icon="arrow"></span>DNS health</span><span id="dns-health-summary">Waiting for telemetry…</span></summary><div id="dns-health-content"></div></details>
 <h2 class="dc-services-title">Services</h2><nav class="dc-services" aria-label="Cluster services">
 <a class="dc-service" href="/xiaozhi/"><div class="dc-service-title"><span data-icon="bot"></span>Xiaozhi</div><p>Providers, memory, soundbank and voice logs.</p><div class="dc-service-bottom"><span>/xiaozhi/</span><span data-icon="arrow"></span></div></a>
 <div id="client-service" class="dc-client-service"><button type="button" class="dc-service dc-client-disabled" disabled><div class="dc-service-title">Xiaozhi Client</div><p>Desk Robot · Web Control</p><div class="dc-service-bottom"><span>Checking device…</span></div></button></div>
@@ -157,7 +200,7 @@ function task(n){
 }
 function roles(n){const entries=[];if(n.vip.xiaozhi===true)entries.push(['Xiaozhi VIP',true]);if(n.vip.dns===true)entries.push(['DNS VIP',true]);if(n.mqtt>0)entries.push([`MQTT · ${n.mqtt}`,false]);if(n.core>0)entries.push([`Core · ${n.core}`,false]);if(!entries.length)entries.push([fresh(n)?'Voice worker':'Unavailable',false]);return entries.map(([label,owner])=>`<span class="dc-role ${owner?'owner':''}">${owner?icon('crown'):''}${esc(label)}</span>`).join('');}
 function configSummary(nodes,key){let highest=null;for(const n of nodes){const r=n.configuration[key]?.revision;if(finite(r)&&(highest===null||r>highest))highest=r;}return {ready:nodes.filter(n=>fresh(n)&&highest!==null&&n.configuration[key]?.revision===highest&&n.configuration[key]?.state==='synced').length,revision:highest};}
-function nodeMarkup(n){const [symbol,title,subtitle]=task(n);return `<article class="dc-node ${fresh(n)?'':'dc-offline'}" data-selected="${state.selected===n.id}"><div class="dc-node-head"><div><div class="dc-node-name">${esc(n.id)}</div><div class="dc-ip">${esc(n.ip)}</div></div><i class="dc-dot" aria-label="${fresh(n)?'Online':'Unavailable'}"></i></div><div class="dc-roles">${roles(n)}</div><div class="dc-activity"><div class="dc-label">Current activity</div><div class="dc-task">${icon(symbol)}${esc(title)}</div><div class="dc-task-meta">${esc(subtitle)}</div></div><div class="dc-metrics">${[['CPU',n.cpu,'%'],['Memory',n.memory,'%'],['Temp',n.temperature,'°C']].map(([label,value,unit])=>`<div class="dc-metric"><small>${label}</small><strong>${metric(value,unit)}</strong>${unit==='%'?`<div class="dc-bar"><i style="width:${finite(value)?Math.min(100,Math.max(0,value)):0}%"></i></div>`:''}</div>`).join('')}</div><button type="button" class="dc-node-button" data-node="${esc(n.id)}" aria-expanded="${state.selected===n.id}" aria-controls="details"><span>View node details</span>${icon('arrow')}</button></article>`;}
+function nodeMarkup(n,model){const [symbol,title,subtitle]=task(n);const active=fresh(n)&&['asr','llm','tts'].some(k=>finite(n.activity[k])&&n.activity[k]>0);const [dnsClass,dnsLabel]=dnsEligibility(n,model);return `<article class="dc-node ${fresh(n)?'':'dc-offline'} ${active?'dc-worker-active':''}" data-selected="${state.selected===n.id}"><div class="dc-node-head"><div><div class="dc-node-name">${esc(n.id)}</div><div class="dc-ip">${esc(n.ip)}</div></div><i class="dc-dot" aria-label="${fresh(n)?'Online':'Unavailable'}"></i></div><div class="dc-roles">${roles(n)}</div><div class="dc-activity"><div class="dc-label">Current activity</div><div class="dc-task">${icon(symbol)}${esc(title)}</div><div class="dc-task-meta">${esc(subtitle)}</div></div><div class="dc-metrics">${[['CPU',n.cpu,'%'],['Memory',n.memory,'%'],['Temp',n.temperature,'°C']].map(([label,value,unit])=>`<div class="dc-metric"><small>${label}</small><strong>${metric(value,unit)}</strong>${unit==='%'?`<div class="dc-bar"><i style="width:${finite(value)?Math.min(100,Math.max(0,value)):0}%"></i></div>`:''}</div>`).join('')}</div><div class="dc-node-dns ${dnsClass}">${icon('shield')}${esc(dnsLabel)}</div><button type="button" class="dc-node-button" data-node="${esc(n.id)}" aria-expanded="${state.selected===n.id}" aria-controls="details"><span>View node details</span>${icon('arrow')}</button></article>`;}
 function detailMarkup(n){
  const online=fresh(n);const owners=[['xiaozhi','Xiaozhi VIP','Management UI'],['dns','DNS VIP','IPv4 + IPv6 resolver']].filter(([key])=>n.vip[key]===true);
  const ownerHTML=owners.length?owners.map(([,name,description])=>`<div class="dc-detail-role">${icon('crown')}<div><strong>${name}</strong><small>${description}</small></div></div>`).join(''):`<div class="dc-detail-role">${icon(online?'server':'alert')}<div><strong>${online&&n.vip.xiaozhi===false&&n.vip.dns===false?'No VIP assigned':'Ownership unknown'}</strong><small>${online?'Cluster workloads run independently of VIP ownership':'Waiting for fresh node telemetry'}</small></div></div>`;
@@ -176,7 +219,7 @@ function render(){
  const online=nodes.filter(fresh).length;document.getElementById('online').innerHTML=`<i class="dc-dot"></i>${online} / 3 nodes responding`;
  const sync=configSummary(nodes,'xiaozhi');const dnsReady=nodes.filter(n=>fresh(n)&&n.components.dns==='ready').length;const voice=nodes.reduce((sum,n)=>sum+(finite(n.core)?n.core:0),0);
  document.getElementById('summary').innerHTML=`<span>${icon('shield')}DNS <b>${dnsReady} / 3 responding</b></span><span>${icon('sync')}Config <b>${sync.ready} / 3 applied</b></span><span>${icon('activity')}Voice <b>${voice} conversation${voice===1?'':'s'}</b></span>`;
- document.getElementById('nodes').innerHTML=nodes.map(nodeMarkup).join('');
+ renderTopology(nodes);
  const detail=document.getElementById('details');detail.hidden=!state.selected;if(state.selected){const n=nodes.find(n=>n.id===state.selected);detail.innerHTML=n?detailMarkup(n):'';}
  if(focusedNode)root.querySelector(`[data-node="${focusedNode}"]`)?.focus({preventScroll:true});else if(closeFocused)root.querySelector('.dc-close')?.focus({preventScroll:true});
  renderClient();renderEvents();const stamp=state.snapshot?.observed_at;document.getElementById('updated').textContent=state.unavailable?'Cluster status unavailable':stamp?`Updated ${new Date(stamp).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'})}`:'Connecting to cluster…';
@@ -196,8 +239,56 @@ function renderDNS(){
  const owner=owners.length===1&&dnsCurrent(owners[0])?owners[0]:null;const health=owner?.dns_health;
  const mode={adguard:'AdGuard filtering',fallback:'Fallback · filtering bypassed',unavailable:'No resolver available',unknown:'Status unavailable'}[health?.mode]||'Status unavailable';
  const ready=k=>nodes.filter(n=>dnsCurrent(n)&&n.dns_health[k]?.state==='ready').length;
- document.getElementById('dns-health').innerHTML=`<header class="dc-dns-head"><div><h2>DNS health</h2><p>Probe latency · sampled every 15 seconds</p></div><span class="dc-client-status">${owner?esc(owner.id)+' · DNS VIP':'Owner unavailable'}</span></header><div class="dc-dns-grid"><div><small>IPv4</small><strong>${ready('ipv4')} / 3 reachable</strong><span>${owner?dnsProbe(health.ipv4):'—'}</span></div><div><small>IPv6</small><strong>${ready('ipv6')} / 3 reachable</strong><span>${owner?dnsProbe(health.ipv6):'—'}</span></div><div><small>Routing</small><strong class="${health?.mode==='fallback'?'dc-dns-warning':''}">${esc(mode)}</strong><span>${health?.mode==='fallback'?esc(health.fallback_resolver||''):esc((health?.eligible_backends||[]).join(' · ')||'No confirmed backends')}</span></div></div>`;
+ document.getElementById('dns-health-summary').textContent=mode;
+ document.getElementById('dns-health-summary').classList.toggle('dc-dns-warning',health?.mode==='fallback');
+ document.getElementById('dns-health-content').innerHTML=`<div class="dc-dns-grid"><div><small>IPv4</small><strong>${ready('ipv4')} / 3 reachable</strong><span>${owner?dnsProbe(health.ipv4):'—'}</span></div><div><small>IPv6</small><strong>${ready('ipv6')} / 3 reachable</strong><span>${owner?dnsProbe(health.ipv6):'—'}</span></div><div><small>Routing</small><strong class="${health?.mode==='fallback'?'dc-dns-warning':''}">${esc(mode)}</strong><span>${health?.mode==='fallback'?esc(health.fallback_resolver||''):esc((health?.eligible_backends||[]).join(' · ')||'No confirmed backends')}</span></div></div><p class="dc-dns-note">Probe latency · sampled every 15 seconds</p>`;
 }
+function topologyModel(nodes){
+ const findOwner=key=>{const owners=nodes.filter(n=>fresh(n)&&n.vip[key]===true);return {node:owners.length===1?owners[0]:null,label:owners.length>1?'Conflicting owners':owners.length===1?`Owner · ${owners[0].id}`:'Owner unconfirmed'};};
+ const xiaozhi=findOwner('xiaozhi'),dns=findOwner('dns');
+ const health=dns.node&&dnsCurrent(dns.node)?dns.node.dns_health:null;
+ const eligible=new Set(health?.mode==='adguard'?(health.eligible_backends||[]).filter(id=>nodes.some(n=>n.id===id&&fresh(n))):[]);
+ return {xiaozhi,dns,health,eligible};
+}
+function dnsEligibility(n,model){
+ if(!fresh(n)||!model.health||!['adguard','fallback','unavailable'].includes(model.health.mode))return ['unknown','DNS · Unconfirmed'];
+ return model.eligible.has(n.id)?['eligible','DNS · Eligible']:['withdrawn','DNS · Not eligible'];
+}
+let currentTopology=null;
+function renderTopology(nodes){
+ const model=topologyModel(nodes);currentTopology={nodes,model};
+ document.getElementById('topology-xiaozhi-owner').textContent=model.xiaozhi.label;
+ document.getElementById('topology-dns-owner').classList.toggle('dc-dns-warning',model.health?.mode==='fallback');
+ document.getElementById('topology-dns-owner').textContent=model.dns.label+(model.health?.mode==='fallback'?' · Fallback active':'');
+ document.getElementById('nodes').innerHTML=nodes.map(n=>nodeMarkup(n,model)).join('');
+ drawTopology();
+}
+function drawTopology(){
+ if(!currentTopology)return;
+ const {nodes,model}=currentTopology,board=document.getElementById('topology'),svg=document.getElementById('topology-links');
+ const rect=board.getBoundingClientRect();if(!rect.width||!rect.height)return;
+ const cards=[...document.getElementById('nodes').children];
+ const endpoint=key=>document.getElementById(`topology-${key}`).getBoundingClientRect();
+ const stacked=cards.length>1&&Math.abs(cards[0].getBoundingClientRect().left-cards[1].getBoundingClientRect().left)<1;
+ const paths=[];const descriptions=[];
+ function connect(key,id,kind,lane){
+  const index=nodes.findIndex(n=>n.id===id);if(index<0||!cards[index])return;
+  const from=endpoint(key),to=cards[index].getBoundingClientRect();
+  const x=from.left-rect.left+from.width/2,y=from.bottom-rect.top;
+  const targetX=to.left-rect.left+to.width/2,targetY=to.top-rect.top;
+  const turn=y+lane;
+  const path=stacked?`M ${x} ${y} V ${turn} H ${kind==='pool'?16:key==='dns'?9:2} V ${targetY+30} H ${to.left-rect.left}`:`M ${x} ${y} V ${turn} H ${targetX} V ${targetY}`;
+  paths.push(`<path class="${key==='dns'?'dc-wire-dns ':''}${kind==='pool'?'dc-wire-pool':''}" d="${path}"/>`);
+  descriptions.push(`${key==='dns'?'DNS':'Xiaozhi'} ${kind==='pool'?'eligible backend':'VIP owner'} ${id}`);
+ }
+ if(model.xiaozhi.node)connect('xiaozhi',model.xiaozhi.node.id,'owner',18);
+ if(model.dns.node)connect('dns',model.dns.node.id,'owner',30);
+ model.eligible.forEach(id=>{if(id!==model.dns.node?.id)connect('dns',id,'pool',stacked?24:56);});
+ svg.setAttribute('viewBox',`0 0 ${rect.width} ${rect.height}`);
+ const markup=`<title>Current cluster ownership and DNS eligibility</title><desc>${esc(descriptions.join('. ')||'Routing unconfirmed; waiting for fresh telemetry')}</desc>${paths.join('')}`;
+ if(svg.innerHTML!==markup)svg.innerHTML=markup;
+}
+
 async function resumeMaintenance(node){
  const op=operationState.latest;if(!op||op.node!==node)return;
  if(!window.confirm(`Resume ${node}? New jobs and VIP eligibility will be restored.`))return;
@@ -219,7 +310,7 @@ async function poll(){
  catch{state.unavailable=true;}
  finally{clearTimeout(deadline);activeRequest=null;render();if(!document.hidden)timer=setTimeout(poll,5000);}
 }
-document.addEventListener('visibilitychange',()=>{clearTimeout(timer);if(document.hidden){activeRequest?.abort();}else if(!activeRequest){render();poll();}});
+document.addEventListener('visibilitychange',()=>{clearTimeout(timer);root.dataset.paused=String(document.hidden);if(document.hidden){activeRequest?.abort();}else if(!activeRequest){render();poll();}});
 
 const operationState={busy:false,latest:null,timer:null,loading:false,prompt:null,expiry:null};
 function canReboot(){const nodes=state.snapshot?.nodes||[];return nodeControlEnabled&&!operationState.busy&&nodes.length===3&&nodes.every(n=>fresh(n)&&n.maintenance_supported===true&&['worker','core','mqtt','dns'].every(k=>n.components[k]==='ready')&&['xiaozhi','dns','monitoring'].every(k=>n.configuration[k]?.state==='synced'));}
@@ -234,6 +325,7 @@ root.addEventListener('click',event=>{const button=event.target.closest('[data-r
 document.addEventListener('visibilitychange',()=>{clearTimeout(operationState.timer);if(!document.hidden)pollOperation();});
 if(nodeControlEnabled)pollOperation();
 
+new ResizeObserver(drawTopology).observe(document.getElementById('topology'));
 render();poll();
 {% endraw %}
 </script></body></html>

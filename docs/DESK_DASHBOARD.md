@@ -34,6 +34,28 @@ The current worker activity groups LLM and Vision under one compute counter;
 the dashboard honestly labels it **LLM / VLM**. No segment number, RTF or token
 latency is invented. Those fields need separate telemetry before being shown.
 
+## Live topology
+
+The root page shows two endpoints above the existing node cards. Solid lines
+identify the currently observed Xiaozhi and DNS VIP owners; dashed green lines
+show other eligible DNS backends according to fresh DNS-owner telemetry. Duplicate
+owners are labelled conflicting and their ownership line is withheld. Missing,
+stale or offline nodes lose ownership, eligibility and activity highlights.
+Fallback is labelled explicitly and no AdGuard eligibility is retained.
+
+Active ASR/LLM-VLM/TTS counters highlight the worker card. These counters do not
+correlate requests, so the page does not invent a conversation route between
+workers or infer per-query routing from pool eligibility. Brief jobs between
+five-second samples may not appear. DNS probe details are a native disclosure
+that retains its open state across polling. Node details, confirmation dialogs,
+service links and recent events retain their existing behavior.
+
+The map uses the existing status response and polling interval; no collector,
+probe, daemon, runtime permission or server load is added. Wire positions are
+measured from the actual cards on render/resize, and use a left gutter on mobile.
+Only active worker icons animate, respecting reduced motion and pausing when
+hidden. This is browser rendering, not a change to voice or DNS scheduling.
+
 ## Events
 
 Observed node reachability, reboot, local VIP acquisition/release, service health
@@ -51,6 +73,12 @@ events, with an option to expand the retained history.
 ANSIBLE_LOCAL_TEMP=/private/tmp/desk-ui-ansible ANSIBLE_PIPELINING=1 \
   ansible-playbook -i inventory.ini -u ops desk-dashboard.yml
 ```
+
+For page-only updates after the dashboard is installed, use
+`ansible-playbook -i inventory.ini dashboard-ui.yml`. It uses the installed
+public membership, retains each prior page, validates the existing proxy routes,
+and checks protected runtime/policy before and after each node. It does not
+build or restart the collector, node controller, DNS or voice services.
 
 The dependency-free ARM64 binary is compiled on the controller, not the TV boxes.
 It uses a single Go processor, low CPU weight and a 3% service CPU ceiling, with
@@ -80,6 +108,16 @@ On older Go/Darwin linker combinations, use `go test -ldflags=-linkmode=external
 Check the public overview, each node's details, `/api/cluster/status`, and the
 three unchanged service links. Compare `desk-dashboard` CPUUsageNSec over a
 sample interval and MemoryCurrent on each node before claiming any overhead.
+
+Topology acceptance on 2026-10-12: existing dashboard/UI Python suites passed
+(8 checks), rendered JavaScript passed syntax validation, and isolated browser
+fixtures verified active TTS, failover, fallback, stale metadata and duplicate
+owners. A 390 px viewport had no horizontal overflow; native DNS disclosure
+remained open across polls. Node 3 canary and subsequent nodes 1/2 page-only
+rollouts passed runtime/policy guards. Public root, Xiaozhi, DNS and Monitoring
+returned HTTP 200; live ownership, three eligible DNS backends and node detail
+controls were verified. No real voice workload or physical reboot was triggered
+for this page change.
 
 ## Firmware Web Control link
 
