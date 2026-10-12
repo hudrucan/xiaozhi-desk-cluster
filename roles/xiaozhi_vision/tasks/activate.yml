@@ -1,0 +1,28 @@
+---
+- name: Activate one frozen source revision and verify its readiness
+  when: not ansible_check_mode
+  block:
+    - name: Activate source while retaining existing dependencies and bundles
+      ansible.builtin.command:
+        argv: [/usr/bin/python3, '-', activate, "{{ xiaozhi_vision_revision }}", "{{ vision_unit }}"]
+        stdin: "{{ lookup('ansible.builtin.file', role_path + '/files/source_rollout.py') }}"
+      register: vision_activated
+      changed_when: (vision_activated.stdout | from_json).activated | default(false)
+    - name: Wait for the selected service and frozen Cloud revision
+      ansible.builtin.command:
+        argv: [/usr/bin/python3, '-', ready, "{{ xiaozhi_vision_revision }}", "{{ vision_unit }}"]
+        stdin: "{{ lookup('ansible.builtin.file', role_path + '/files/source_rollout.py') }}"
+      register: vision_ready
+      until: vision_ready.rc == 0 and (vision_ready.stdout | from_json).ready
+      retries: 90
+      delay: 2
+      changed_when: false
+  rescue:
+    - name: Restore the previous unit or control-plane checkout
+      ansible.builtin.command:
+        argv: [/usr/bin/python3, '-', rollback, "{{ xiaozhi_vision_revision }}", "{{ vision_unit }}"]
+        stdin: "{{ lookup('ansible.builtin.file', role_path + '/files/source_rollout.py') }}"
+      changed_when: true
+    - name: Stop source rollout after restoring this node
+      ansible.builtin.fail:
+        msg: Source activation failed; previous source/unit restored. Inspect safe readiness metadata before retrying.
