@@ -18,7 +18,7 @@
 
 - name: Require the Settings page through the floating VIP
   ansible.builtin.uri:
-    url: "http://{{ xiaozhi_ingress_vip }}:{{ xiaozhi_ingress_port }}/settings/"
+    url: "http://{{ xiaozhi_ingress_vip }}:{{ xiaozhi_ingress_port }}/{{ 'xiaozhi' if xiaozhi_ingress_unified_ui_enabled | default(false) else 'settings' }}/"
     status_code: 200
     use_proxy: false
     timeout: "{{ xiaozhi_ingress_settings_timeout }}"

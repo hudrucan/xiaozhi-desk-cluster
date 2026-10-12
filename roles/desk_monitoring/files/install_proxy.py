@@ -14,7 +14,17 @@ ROUTE = '''# BEGIN DESK MONITORING ROUTE
 '''
 
 
-DNS_ROUTE = '# BEGIN DESK DNS UI ROUTE\n    http-request deny unless { src 192.168.1.0/24 127.0.0.1 } or !{ path_beg /dns /monitor } !{ path / }\n    http-request return status 200 content-type text/html file /etc/desk-ui/index.html if { path / }\n    http-request redirect location /dns/ code 302 if { path /dns }\n    http-request redirect location /monitor/ code 302 if { path /monitor }\n    use_backend desk_adguard_ui if { path_beg /dns/ }\n# END DESK DNS UI ROUTE\n'
+DNS_ROUTE = r'''# BEGIN DESK DNS UI ROUTE
+    http-request deny unless { src 192.168.1.0/24 127.0.0.1 } or !{ path_beg /dns /monitor } !{ path / }
+    http-request return status 200 content-type text/html file /etc/desk-ui/index.html if { path / }
+    http-request redirect location /xiaozhi/ code 302 if { path /xiaozhi /settings /settings/ }
+    # Bootstrap /xiaozhi/ota/ keeps its existing public transport path.
+    http-request replace-path ^/xiaozhi/(.*)$ /settings/\1 if { path_beg /xiaozhi/ } !{ path_beg /xiaozhi/ota }
+    http-request redirect location /dns/ code 302 if { path /dns }
+    http-request redirect location /monitor/ code 302 if { path /monitor }
+    use_backend desk_adguard_ui if { path_beg /dns/ }
+# END DESK DNS UI ROUTE
+'''
 
 
 def candidate(current, backend, dns_backend=None):

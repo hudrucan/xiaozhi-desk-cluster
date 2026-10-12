@@ -22,6 +22,9 @@ frontend xiaozhi_settings
 # BEGIN DESK DNS UI ROUTE
     http-request deny unless { src 192.168.1.0/24 127.0.0.1 } or !{ path_beg /dns /monitor } !{ path / }
     http-request return status 200 content-type text/html file /etc/desk-ui/index.html if { path / }
+    http-request redirect location /xiaozhi/ code 302 if { path /xiaozhi /settings /settings/ }
+    # Bootstrap /xiaozhi/ota/ keeps its existing public transport path.
+    http-request replace-path ^/xiaozhi/(.*)$ /settings/\1 if { path_beg /xiaozhi/ } !{ path_beg /xiaozhi/ota }
     http-request redirect location /dns/ code 302 if { path /dns }
 {% if xiaozhi_ingress_monitoring_enabled | default(false) %}
     http-request redirect location /monitor/ code 302 if { path /monitor }

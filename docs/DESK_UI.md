@@ -1,7 +1,8 @@
 # Unified LAN administration
 
 The current Cloud management VIP is `192.168.1.186`. Open its root for links to
-`/settings/` (Xiaozhi), `/dns/` (AdGuard Home) and `/monitor/` (Beszel).
+`/xiaozhi/` (Xiaozhi), `/dns/` (DNS, powered by AdGuard Home) and
+`/monitor/` (Monitoring, powered by Beszel).
 Ansible reads the installed Settings VIP snapshot; it does not pin its address.
 DNS serving remains on its separate VIP, currently `192.168.1.250:53`.
 
@@ -44,3 +45,15 @@ rolling out; do not overwrite live AdGuard policy with the old rollback file.
 
 Router DHCP, IPv6 DNS advertisements, VPNs and Private Relay are unchanged by
 this UI rollout. Clients must actually use the DNS VIP to receive its filtering.
+
+
+The landing page names services consistently with their public paths: Xiaozhi,
+DNS and Monitoring. Product names remain in the DNS/Monitoring descriptions.
+Old Settings page bookmarks redirect to /xiaozhi/; existing static asset/API
+paths stay compatible. HAProxy maps the public UI path to the installed native
+Settings handler, preserving /xiaozhi/ota/ for firmware bootstrap. This change
+requires only a validated graceful HAProxy reload, not a Xiaozhi runtime restart.
+
+ui-routes.yml updates an already unified installation serially, validates the
+combined HTTP/MQTT candidate and verifies protected processes/configuration and
+the native bootstrap response.

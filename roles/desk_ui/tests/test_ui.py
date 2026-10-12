@@ -36,6 +36,10 @@ class UITests(unittest.TestCase):
         # A later monitoring-only run must retain the DNS route and backend.
         self.assertEqual(proxy.candidate(wanted,monitoring),wanted)
         self.assertIn('src 192.168.1.0/24 127.0.0.1',wanted)
+        self.assertIn('redirect location /xiaozhi/ code 302 if { path /xiaozhi /settings /settings/ }',wanted)
+        self.assertIn(r'replace-path ^/xiaozhi/(.*)$ /settings/\1 if { path_beg /xiaozhi/ } !{ path_beg /xiaozhi/ota }',wanted)
+        self.assertNotIn(chr(1),wanted)
+
         frontend=wanted.split('\nbackend xiaozhi_control_planes\n')[0]
         self.assertLess(frontend.rfind('    http-request '),frontend.find('    use_backend '))
 
