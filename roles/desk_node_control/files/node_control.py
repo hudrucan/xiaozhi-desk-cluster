@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Fixed node reboot action, survivor leases and read-only recovery tracking.
+"""Confirmed node maintenance/reboot, survivor leases and recovery tracking.
 
-No shell, arbitrary command, SSH, provider call, database or background reboot.
-Only explicit confirmation schedules systemd's ordinary reboot sequence.
+No shell, arbitrary command, SSH, provider call or database.
+Only explicit confirmation starts drain and, if selected, an ordinary reboot.
 """
 import base64
 from datetime import datetime
@@ -94,7 +94,7 @@ class Control:
         self.nonces = {}
         self.cached_health = (0, None)
         self.opener = build_opener(ProxyHandler({}))
-        self.state = {'lease': None, 'executed': None, 'completed': None}
+        self.state = {'lease': None, 'executed': None, 'completed': None, 'maintenance': None}
         if self.path.exists():
             try:
                 value = json.loads(self.path.read_text())
@@ -142,7 +142,7 @@ class Control:
             age = time.time() - datetime.fromisoformat(value['observed_at'].replace('Z', '+00:00')).timestamp()
             components = value.get('components', {})
             configs = value.get('configuration', {})
-            result['metadata'] = {k: value.get(k) for k in ('ip', 'vip', 'core', 'mqtt', 'activity')}
+            result['metadata'] = {k: value.get(k) for k in ('ip', 'vip', 'core', 'mqtt', 'activity', 'connections', 'admission', 'maintenance_supported')}
             result['revisions'] = {k: configs.get(k, {}).get('revision') for k in ('xiaozhi', 'dns', 'monitoring')}
             valid = value.get('id') == self.node and value.get('boot_id') == result['boot_id'] and 0 <= age <= 15
             valid &= all(components.get(k) == 'ready' for k in ('worker', 'core', 'mqtt', 'dns'))
@@ -206,21 +206,29 @@ class Control:
         return len(views) == 3 and all(v.get('ready') for v in views.values()) and len({encode(v.get('revisions')) for v in views.values()}) == 1
 
     def challenge(self, value):
-        if set(value) != {'node'} or value['node'] not in self.members:
+        if not {'node'} <= set(value) <= {'node','action'} or value['node'] not in self.members or value.get('action','reboot') not in ('maintenance','reboot'):
             raise Failure(400, 'Unknown node')
         views = self.views()
-        if any(v.get('lease') and v['lease']['expires'] > time.time() for v in views.values()):
+        maintained = views.get(value['node'], {}).get('maintenance')
+        maintenance_id = maintained['id'] if (maintained and maintained.get('state') == 'maintenance'
+            and maintained['expires'] > time.time() and value.get('action','reboot') == 'reboot') else None
+        if any(v.get('maintenance') and (n!=value['node'] or maintenance_id is None) for n,v in views.items()):
+            raise Failure(409, 'A node is still in maintenance or recovering')
+        if any(v.get('lease') and v['lease']['expires'] > time.time()
+               and v['lease']['id'] != maintenance_id for v in views.values()):
             # Status resolves successful operations before another preparation.
             raise Failure(409, 'Another reboot is still being tracked')
         if not self.matching_ready(views):
             raise Failure(412, 'All three nodes must be healthy and synced before reboot')
         target = value['node']
+        if views[target].get('metadata', {}).get('maintenance_supported') is not True:
+            raise Failure(412, 'Deploy maintenance support on worker, core and gateway first')
         payload = {'id': secrets.token_hex(16), 'node': target, 'boot_id': views[target]['boot_id'],
-                   'expires': int(time.time()) + CHALLENGE_SECONDS}
+                   'expires': int(time.time()) + CHALLENGE_SECONDS, 'action':value.get('action','reboot'), 'maintenance_id':maintenance_id}
         raw = encode(payload)
         token = base64.urlsafe_b64encode(raw).decode().rstrip('=') + '.' + hmac.new(self.key, raw, hashlib.sha256).hexdigest()
         return {'token': token, 'node': target, 'ip': self.members[target]['management'],
-                'metadata': views[target].get('metadata', {}), 'expires': payload['expires']}
+                'metadata': views[target].get('metadata', {}), 'expires': payload['expires'], 'action':payload['action']}
 
     def validate_token(self, token):
         try:
@@ -228,8 +236,9 @@ class Control:
             raw = base64.urlsafe_b64decode(text + '=' * (-len(text) % 4))
             if not hmac.compare_digest(signature, hmac.new(self.key, raw, hashlib.sha256).hexdigest()): raise ValueError()
             payload = json.loads(raw)
-            if set(payload) != {'id', 'node', 'boot_id', 'expires'} or payload['node'] not in self.members: raise ValueError()
+            if set(payload) != {'id', 'node', 'boot_id', 'expires', 'action', 'maintenance_id'} or payload['action'] not in ('maintenance','reboot') or payload['node'] not in self.members: raise ValueError()
             if type(payload['expires']) is not int or not time.time() < payload['expires'] <= time.time() + CHALLENGE_SECONDS: raise ValueError()
+            if payload['maintenance_id'] is not None and (not isinstance(payload['maintenance_id'],str) or len(payload['maintenance_id'])!=32 or payload['action']!='reboot'): raise ValueError()
             if len(payload['id']) != 32 or not isinstance(payload['boot_id'], str): raise ValueError()
             return payload
         except (ValueError, TypeError, KeyError, AttributeError):
@@ -238,14 +247,20 @@ class Control:
     def confirm(self, token):
         payload = self.validate_token(token)
         target = payload['node']
+        if payload['maintenance_id'] is not None:
+            return self.peer(target, '/peer/reboot-ready', {'token':token})
         if target == self.node:
             # Keep a surviving coordinator when the entrypoint lands on target.
             observer = next(n for n in self.members if n != target)
             return self.peer(observer, '/peer/confirm', {'token': token})
         views = self.views()
-        if not self.matching_ready(views) or views[target]['boot_id'] != payload['boot_id']:
+        executed = views[target].get('executed')
+        if executed and executed.get('id')==payload['id']:
+            return {'accepted':True,'id':payload['id'],'node':target,'uncertain':True}
+        if any(v.get('maintenance') for v in views.values()) or not self.matching_ready(views) or views[target]['boot_id'] != payload['boot_id']:
             raise Failure(412, 'Node readiness or boot changed; prepare again')
-        lease = {**payload, 'expires': int(time.time()) + LEASE_SECONDS, 'started': int(time.time())}
+        lease = {k:v for k,v in payload.items() if k!='maintenance_id'}
+        lease = {**lease, 'expires': int(time.time()) + LEASE_SECONDS, 'started': int(time.time())}
         survivors = [n for n in self.members if n != target]
         acquired = []
         try:
@@ -270,7 +285,40 @@ class Control:
         if path == '/peer/state':
             if value != {}: raise Failure(400, 'Invalid state request')
             with self.lock: lease = self.state['lease']
-            return {**self.health(), 'lease': lease, 'completed': self.state['completed']}
+            return {**self.health(), 'lease': lease, 'completed': self.state['completed'], 'maintenance':self.state['maintenance'], 'executed':self.state['executed']}
+        if path == '/peer/reboot-ready':
+            if set(value) != {'token'}: raise Failure(400, 'Invalid maintained reboot')
+            token = self.validate_token(value['token'])
+            with self.lock:
+                current = self.state['maintenance']
+                executed = self.state['executed']
+                if (not current or current['state'] != 'maintenance' or current['expires'] <= time.time()+90
+                        or token['node'] != self.node or token['boot_id'] != boot_id()
+                        or token['maintenance_id'] != current['id'] or not executed):
+                    raise Failure(409, 'Maintenance changed; prepare again')
+            views = self.views()
+            if not self.matching_ready(views) or any(views[n].get('lease') != executed for n in self.members if n!=self.node):
+                raise Failure(412, 'Survivor readiness or lease changed')
+            meta = views[self.node].get('metadata', {})
+            counts = [meta.get('core'),meta.get('mqtt'),*meta.get('activity',{}).values(),*meta.get('connections',{}).values()]
+            if (len(counts)<7 or not all(type(n) is int and n==0 for n in counts)
+                    or not all(meta.get('admission',{}).get(k) is True for k in ('worker','core','mqtt'))
+                    or not all(meta.get('vip',{}).get(k) is False for k in ('dns','xiaozhi'))):
+                raise Failure(412, 'Node drain is not complete')
+            with self.lock:
+                if self.state['maintenance'] is not current or current['state']!='maintenance':
+                    raise Failure(409, 'Maintenance changed')
+                current['state'],current['action']='rebooting','reboot'
+                current['reboot_started']=int(time.time())
+                self.save()
+            def reboot_ready():
+                try: self.reboot()
+                except (OSError, subprocess.SubprocessError): self.resume(current['id'],recovering=True)
+            timer=threading.Timer(3,reboot_ready);timer.daemon=True;timer.start()
+            return {'accepted':True,'id':current['id'],'node':self.node,'uncertain':False}
+        if path == '/peer/resume':
+            if set(value) != {'id'} or not isinstance(value['id'],str): raise Failure(400, 'Invalid resume')
+            return self.resume(value['id'])
         if path == '/peer/confirm':
             if set(value) != {'token'}: raise Failure(400, 'Invalid confirmation')
             return self.confirm(value['token'])
@@ -299,7 +347,7 @@ class Control:
             return {'released': True}
         if path not in ('/peer/acquire', '/peer/execute'):
             raise Failure(404, 'Unknown operation')
-        if (set(value) != {'id', 'node', 'boot_id', 'expires', 'started'} or value['node'] not in self.members
+        if (set(value) != {'id', 'node', 'boot_id', 'expires', 'started', 'action'} or value.get('action') not in ('maintenance','reboot') or value['node'] not in self.members
                 or not isinstance(value['id'], str) or len(value['id']) != 32
                 or not isinstance(value['boot_id'], str) or type(value['started']) is not int
                 or type(value['expires']) is not int or not time.time() < value['expires'] <= time.time() + LEASE_SECONDS):
@@ -326,14 +374,135 @@ class Control:
             self.state['executed'] = value
             self.save()
         def run():
-            try: self.reboot()
-            except (OSError, subprocess.SubprocessError):
-                # No retries. Survivor UI times out to needs-attention.
-                print('Node reboot command failed; manual review required', flush=True)
+            self.begin_maintenance(value)
         timer = threading.Timer(3, run)
         timer.daemon = True
         timer.start()
-        return {'scheduled': True}
+        return {'scheduled': True, 'action':value['action']}
+
+    def write_admission(self, value):
+        path = Path('/run/desk-node-maintenance/state.json')
+        path.parent.mkdir(parents=True, exist_ok=True, mode=0o755)
+        raw = {'protocol':'desk-node-maintenance-v1', 'node':self.node,
+               'boot_id':value['boot_id'], 'expires':value['expires']}
+        temporary = path.with_suffix('.tmp')
+        with temporary.open('w') as stream:
+            os.chmod(temporary, 0o644)
+            json.dump(raw, stream)
+        os.replace(temporary, path)
+
+    @staticmethod
+    def vip_service(name, action):
+        if name not in ('keepalived', 'desk-dns-vip') or action not in ('start', 'stop'):
+            raise ValueError('Invalid fixed service action')
+        subprocess.run(['/usr/bin/systemctl', action, name], check=True, timeout=15,
+                       stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    def resume(self, operation_id, recovering=False):
+        with self.lock:
+            value = self.state['maintenance']
+            if value is None or value['id'] != operation_id:
+                return {'resumed':True}
+            # Mark recovery before service actions so restart can safely retry.
+            if value['state'] == 'rebooting' and value['boot_id'] == boot_id() and not recovering:
+                raise Failure(409, 'Reboot was already requested; wait for recovery')
+            changed_boot = value['boot_id'] != boot_id() and value.get('action') == 'reboot'
+            value['state'] = 'recovering'
+            self.save()
+        Path('/run/desk-node-maintenance/state.json').unlink(missing_ok=True)
+        for service in value.get('services', []):
+            self.vip_service(service, 'start')
+        with self.lock:
+            self.state['maintenance'] = None
+            if not changed_boot: self.state['executed'] = None
+            self.save()
+            self.cached_health = (0, None)
+        for node in self.members:
+            if node != self.node and not changed_boot:
+                try: self.peer(node, '/peer/release', {'id':operation_id})
+                except Failure: pass
+        return {'resumed':True}
+
+    def begin_maintenance(self, lease):
+        value = {**lease, 'state':'draining', 'services':[]}
+        with self.lock:
+            self.state['maintenance'] = value
+            self.save()
+        self.write_admission(value)
+        deadline = min(lease['expires'], time.time() + 240)
+        try:
+            while time.time() < deadline:
+                with self.lock:
+                    if self.state['maintenance'] is not value or value['state'] != 'draining':
+                        return
+                views = self.views()
+                survivors = [views[n] for n in self.members if n != self.node]
+                if not (all(v.get('ready') and v.get('lease') == lease for v in survivors)
+                        and len({encode(v.get('revisions')) for v in survivors}) == 1):
+                    raise Failure(412, 'Survivor readiness changed during drain')
+                local = views.get(self.node, {})
+                meta = local.get('metadata', {})
+                counts = [meta.get('core'), meta.get('mqtt'), *meta.get('activity', {}).values(),
+                          *meta.get('connections', {}).values()]
+                paused = meta.get('admission', {})
+                if (local.get('ready') and meta.get('maintenance_supported') is True
+                        and all(paused.get(k) is True for k in ('worker', 'core', 'mqtt'))
+                        and len(counts) >= 7 and all(type(n) is int and n == 0 for n in counts)):
+                    break
+                time.sleep(1)
+            else:
+                raise Failure(409, 'Drain timed out; existing sessions were retained')
+            with self.lock:
+                if self.state['maintenance'] is not value or value['state'] != 'draining': return
+                # Preserve exactly which election services were running.
+                for service in ('keepalived', 'desk-dns-vip'):
+                    active = subprocess.run(['/usr/bin/systemctl','is-active',service],
+                                            capture_output=True, text=True, timeout=5)
+                    if active.stdout.strip() == 'active': value['services'].append(service)
+                value['state'] = 'releasing_vips'
+                self.save()
+                for service in value['services']: self.vip_service(service, 'stop')
+            while time.time() < deadline:
+                with self.lock:
+                    if self.state['maintenance'] is not value or value['state'] != 'releasing_vips': return
+                views = self.views()
+                local = views.get(self.node, {}).get('metadata', {}).get('vip', {})
+                # Both VIPs must be present on exactly one healthy survivor.
+                peers = [views[n] for n in self.members if n != self.node]
+                if (all(local.get(k) is False for k in ('dns','xiaozhi'))
+                        and all(v.get('ready') and v.get('lease') == lease for v in peers)
+                        and len({encode(v.get('revisions')) for v in peers}) == 1
+                        and all(sum(v.get('metadata', {}).get('vip', {}).get(k) is True for v in peers) == 1
+                                for k in ('dns','xiaozhi'))):
+                    with self.lock:
+                        if self.state['maintenance'] is not value: return
+                        value['state'] = 'maintenance'
+                        self.save()
+                        if lease.get('action', 'reboot') == 'reboot':
+                            value['state'] = 'rebooting'
+                            self.save()
+                            self.reboot()
+                    return
+                time.sleep(1)
+            raise Failure(409, 'VIP handoff did not complete')
+        except (Failure, OSError, subprocess.SubprocessError):
+            try: self.resume(lease['id'], recovering=True)
+            except (Failure, OSError, subprocess.SubprocessError):
+                print('Maintenance recovery needs attention', flush=True)
+            print('Maintenance cancelled; no forced session termination or reboot', flush=True)
+
+    def monitor_maintenance(self):
+        while True:
+            with self.lock: value = self.state['maintenance']
+            if value and (value['boot_id'] != boot_id() or value['expires'] <= time.time()
+                          or value['state'] == 'recovering'
+                          or (value['state'] in ('draining','releasing_vips') and time.time()-value['started']>=240)):
+                try: self.resume(value['id'], recovering=True)
+                except (Failure, OSError, subprocess.SubprocessError): pass
+            elif value and not Path('/run/desk-node-maintenance/state.json').exists():
+                try: self.write_admission(value)
+                except OSError: pass
+            time.sleep(1)
 
     def status(self):
         views = self.views()
@@ -341,26 +510,27 @@ class Control:
         if not leases:
             completed = [v['completed'] for v in views.values() if v.get('completed')
                          and v['completed']['expires'] > time.time()]
-            if not completed: return {'protocol': PROTOCOL, 'operation': None}
+            if not completed: return {'protocol': PROTOCOL, 'operation': None, 'idle_confirmed':all(v.get('ready') and not v.get('maintenance') for v in views.values())}
             result = max(completed,key=lambda value:value['finished'])
             return {'protocol':PROTOCOL, 'operation':{k:result[k] for k in
                 ('id','node','state','started','expires','finished')}}
         active_leases = [v for v in leases if v['expires'] > time.time()]
         lease = min(active_leases or leases, key=lambda v: v['started'])
         target = views.get(lease['node'], {})
-        state = 'accepted'
+        maintenance = target.get('maintenance')
+        state = maintenance.get('state', 'accepted') if maintenance else 'accepted'
         if not target.get('boot_id'): state = 'offline'
         elif target['boot_id'] != lease['boot_id']:
             state = 'starting'
             if self.matching_ready(views): state = 'rejoined'
-        elif time.time() - lease['started'] > 60: state = 'needs_attention'
-        if time.time() - lease['started'] > 300 and state != 'rejoined': state = 'needs_attention'
+        elif not maintenance and time.time() - lease['started'] > 60: state = 'needs_attention'
+        if time.time() - (maintenance.get('reboot_started',lease['started']) if maintenance else lease['started']) > 300 and state not in ('rejoined','maintenance'): state = 'needs_attention'
         if state == 'rejoined':
             for node in self.members:
                 try: self.peer(node, '/peer/complete', {'id': lease['id']})
                 except Failure: pass
         return {'protocol': PROTOCOL, 'operation': {'id': lease['id'], 'node': lease['node'],
-            'state': state, 'started': lease['started'], 'expires': lease['expires']}}
+            'state': state, 'action':lease.get('action','reboot'), 'started': lease['started'], 'expires': lease['expires']}}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -409,6 +579,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.respond(200, control.challenge(value))
             elif self.path == '/api/cluster/operations/reboot' and set(value) == {'token'}:
                 self.respond(202, control.confirm(value['token']))
+            elif self.path == '/api/cluster/operations/resume' and set(value) == {'node','id'} and value['node'] in control.members:
+                self.respond(200, control.peer(value['node'], '/peer/resume', {'id':value['id']}))
             else: raise Failure(404, 'Unknown operation')
         except Failure as error: self.respond(error.status, {'error': error.message})
         except (OSError, ValueError, TypeError, KeyError): self.respond(503, {'error': 'Node operation is unavailable; no automatic retry'})
@@ -438,6 +610,8 @@ def main():
     server = ThreadingHTTPServer((host, config['port']), Handler)
     server.control = control
     server.daemon_threads = True
+    monitor = threading.Thread(target=control.monitor_maintenance, daemon=True)
+    monitor.start()
     server.serve_forever(poll_interval=1)
 
 

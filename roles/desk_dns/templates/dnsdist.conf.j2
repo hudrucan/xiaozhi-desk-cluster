@@ -30,6 +30,11 @@ newServer({address="{{ addresses.private }}:{{ desk_dns_backend_port }}",
 {% if desk_dns_emergency_enabled %}
 -- This pool is deliberately outside AdGuard: availability during total failure.
 newServer({address="{{ desk_dns_emergency_resolver }}:53", source="{{ ansible_host }}", name="emergency-cloudflare", pool="emergency", checkName="one.one.one.one.", checkType="A", mustResolve=true, checkInterval=5, checkTimeout=1000, maxCheckFailures=2, rise=2})
+{% include 'health-metadata.lua.j2' %}
 addAction(PoolAvailableRule(""), PoolAction(""))
 addAction(AllRule(), PoolAction("emergency"))
+{% endif %}
+
+{% if not desk_dns_emergency_enabled %}
+{% include 'health-metadata.lua.j2' %}
 {% endif %}

@@ -1,0 +1,69 @@
+---
+# Explicit metadata-only DNS frontend rollout; no filter or policy rebuild.
+- name: Add read-only DNS routing metadata one frontend at a time
+  hosts: desk_dns
+  become: true
+  gather_facts: false
+  serial: 1
+  any_errors_fatal: true
+  tasks:
+    - name: Require the fixed WLAN module before touching DNS frontends
+      ansible.builtin.include_role:
+        name: desk_wifi_driver
+        tasks_from: verify
+    - name: Load existing public DNS topology without credentials
+      ansible.builtin.slurp:
+        src: /etc/desk-dns/public.json
+      register: dns_health_public
+    - name: Retain the applied node endpoints
+      ansible.builtin.set_fact:
+        desk_dns_nodes: "{{ (dns_health_public.content | b64decode | from_json).nodes }}"
+    - name: Require the current DNS health contract
+      ansible.builtin.assert:
+        that:
+          - desk_dns_nodes | length == 3
+          - (dns_health_public.content | b64decode | from_json).vip == '192.168.1.250'
+    - name: Preserve the current DNS frontend before adding metadata
+      ansible.builtin.slurp:
+        src: /etc/desk-dns/dnsdist.conf
+      register: dns_health_original
+    - name: Add metadata without rendering or replacing existing forwarding policy
+      when: not ansible_check_mode
+      block:
+        - name: Validate the existing frontend with only the new metadata block
+          ansible.builtin.copy:
+            content: >-
+              {%- set base = dns_health_original.content | b64decode | regex_replace('(?ms)^-- BEGIN DESK DNS HEALTH.*?^-- END DESK DNS HEALTH(?:\\n|$)', '') -%}
+              {%- set metadata = lookup('ansible.builtin.template', 'roles/desk_dns/templates/health-metadata.lua.j2') -%}
+              {%- set anchor = 'addAction(PoolAvailableRule(""), PoolAction(""))' -%}
+              {{ base | replace(anchor, metadata + anchor) if anchor in base else base + metadata }}
+            dest: /etc/desk-dns/dnsdist.conf
+            owner: root
+            group: root
+            mode: '0644'
+            validate: /usr/bin/dnsdist --check-config -C %s
+          register: dns_health_candidate
+        - name: Restart only a changed DNS frontend
+          ansible.builtin.systemd_service:
+            name: desk-dnsdist
+            state: "{{ 'restarted' if dns_health_candidate.changed else 'started' }}"
+        - name: Require unchanged DNS frontend liveness over IPv4
+          ansible.builtin.command:
+            argv: [/usr/local/libexec/desk-healthcheck, dns, --host, "{{ ansible_host }}", --port, '5353']
+          register: dns_health_ready
+          until: dns_health_ready.rc == 0
+          retries: 10
+          delay: 1
+          changed_when: false
+      rescue:
+        - name: Restore the prior frontend after metadata validation failure
+          ansible.builtin.copy:
+            content: "{{ dns_health_original.content | b64decode }}"
+            dest: /etc/desk-dns/dnsdist.conf
+            mode: '0644'
+        - name: Restore the prior DNS process
+          ansible.builtin.systemd_service:
+            name: desk-dnsdist
+            state: restarted
+        - ansible.builtin.fail:
+            msg: DNS health metadata failed; previous forwarding configuration restored.

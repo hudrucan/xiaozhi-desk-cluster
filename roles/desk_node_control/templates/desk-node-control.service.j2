@@ -8,6 +8,9 @@ ExecStart=/usr/bin/python3 /usr/local/libexec/desk-node-control/node-control.py 
 Environment=PYTHONDONTWRITEBYTECODE=1
 Restart=on-failure
 RestartSec=5
+RuntimeDirectory=desk-node-maintenance
+RuntimeDirectoryMode=0755
+RuntimeDirectoryPreserve=restart
 StateDirectory=desk-node-control
 StateDirectoryMode=0700
 UMask=0077

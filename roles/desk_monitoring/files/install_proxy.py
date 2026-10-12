@@ -55,7 +55,7 @@ def candidate(current, backend, dns_backend=None, dashboard_backend=None):
         dns_route = dns_route.replace('    use_backend desk_adguard_ui', '    use_backend desk_dashboard if { path / /api/cluster/status }\n    use_backend desk_adguard_ui')
     if dashboard_backend is not None and 'backend desk_node_control\n' in dashboard_backend:
         dns_route = dns_route.replace('    use_backend desk_dashboard',
-            '    use_backend desk_node_control if { path /api/cluster/operations /api/cluster/operations/prepare /api/cluster/operations/reboot }\n    use_backend desk_dashboard')
+            '    use_backend desk_node_control if { path /api/cluster/operations /api/cluster/operations/prepare /api/cluster/operations/reboot /api/cluster/operations/resume }\n    use_backend desk_dashboard')
     updated = current.replace(anchor, (dns_route if dns_backend is not None else '') + route + anchor) + (
         '# BEGIN DESK MONITORING BACKEND\n' + backend.rstrip() + '\n# END DESK MONITORING BACKEND\n')
     if dns_backend is not None:

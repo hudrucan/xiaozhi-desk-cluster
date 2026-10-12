@@ -3,7 +3,7 @@ import json
 import re
 from pathlib import Path
 import yaml
-from jinja2 import Environment, StrictUndefined
+from jinja2 import Environment, StrictUndefined, FileSystemLoader
 
 root=Path(__file__).resolve().parents[3]
 role=root/'roles/desk_dns'
@@ -14,7 +14,7 @@ for path in yamls:
 pyfiles=list(role.rglob('*.py'))
 for path in pyfiles:
     ast.parse(path.read_text(), filename=str(path))
-env=Environment(undefined=StrictUndefined, keep_trailing_newline=True)
+env=Environment(loader=FileSystemLoader(role / "templates"), undefined=StrictUndefined, keep_trailing_newline=True)
 env.filters['to_json']=json.dumps
 nodes={f'deskb{i}x':{'private':f'10.10.10.{10+i}','management':f'192.168.1.{100+i}'} for i in range(1,4)}
 for node, address in nodes.items():

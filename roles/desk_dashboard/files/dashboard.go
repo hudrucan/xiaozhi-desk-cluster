@@ -2,7 +2,10 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -50,27 +53,188 @@ type SyncStatus struct {
 	CoreRevision   *int   `json:"core_revision,omitempty"`
 }
 type Node struct {
-	Protocol   string                `json:"protocol"`
-	ID         string                `json:"id"`
-	IP         string                `json:"ip"`
-	Boot       string                `json:"boot_id"`
-	At         time.Time             `json:"observed_at"`
-	Online     bool                  `json:"online"`
-	VIP        map[string]*bool      `json:"vip"`
-	MQTT       *int                  `json:"mqtt"`
-	Core       *int                  `json:"core"`
-	Sessions   map[string]int        `json:"sessions"`
-	Activity   map[string]*int       `json:"activity"`
-	CPU        *float64              `json:"cpu"`
-	Memory     *float64              `json:"memory"`
-	Temp       *float64              `json:"temperature"`
-	Uptime     *float64              `json:"uptime_seconds"`
-	DNSRate    *float64              `json:"dns_queries_per_second"`
-	Protection *bool                 `json:"dns_protection"`
-	Components map[string]string     `json:"components"`
-	Config     map[string]SyncStatus `json:"configuration"`
-	Events     []Event               `json:"events,omitempty"`
+	Protocol             string                `json:"protocol"`
+	ID                   string                `json:"id"`
+	IP                   string                `json:"ip"`
+	Boot                 string                `json:"boot_id"`
+	At                   time.Time             `json:"observed_at"`
+	Online               bool                  `json:"online"`
+	VIP                  map[string]*bool      `json:"vip"`
+	MQTT                 *int                  `json:"mqtt"`
+	Core                 *int                  `json:"core"`
+	Sessions             map[string]int        `json:"sessions"`
+	Activity             map[string]*int       `json:"activity"`
+	CPU                  *float64              `json:"cpu"`
+	Memory               *float64              `json:"memory"`
+	Temp                 *float64              `json:"temperature"`
+	Uptime               *float64              `json:"uptime_seconds"`
+	DNSHealth            DNSHealth             `json:"dns_health"`
+	MaintenanceSupported bool                  `json:"maintenance_supported"`
+	Admission            map[string]*bool      `json:"admission"`
+	Connections          map[string]*int       `json:"connections"`
+	DNSRate              *float64              `json:"dns_queries_per_second"`
+	Protection           *bool                 `json:"dns_protection"`
+	Components           map[string]string     `json:"components"`
+	Config               map[string]SyncStatus `json:"configuration"`
+	Events               []Event               `json:"events,omitempty"`
 }
+type DNSProbe struct {
+	State   string    `json:"state"`
+	Latency *float64  `json:"probe_latency_ms,omitempty"`
+	At      time.Time `json:"observed_at"`
+}
+type DNSHealth struct {
+	At       time.Time `json:"observed_at"`
+	Mode     string    `json:"mode"`
+	Backends []string  `json:"eligible_backends"`
+	Resolver string    `json:"fallback_resolver,omitempty"`
+	Local    DNSProbe  `json:"local"`
+	IPv4     DNSProbe  `json:"ipv4"`
+	IPv6     DNSProbe  `json:"ipv6"`
+}
+
+func dnsSkip(data []byte, offset int) (int, error) {
+	for labels := 0; labels < 128; labels++ {
+		if offset >= len(data) {
+			return 0, errors.New("short DNS name")
+		}
+		size := int(data[offset])
+		offset++
+		if size == 0 {
+			return offset, nil
+		}
+		if size&0xc0 == 0xc0 {
+			if offset >= len(data) {
+				break
+			}
+			return offset + 1, nil
+		}
+		if size > 63 || offset+size > len(data) {
+			break
+		}
+		offset += size
+	}
+	return 0, errors.New("invalid DNS name")
+}
+func dnsMetadata(data, query []byte) (int, error) {
+	if len(data) < 12 || len(data) > 4096 || !bytes.Equal(data[:2], query[:2]) {
+		return 0, errors.New("invalid DNS reply")
+	}
+	flags := binary.BigEndian.Uint16(data[2:4])
+	if flags&0x8000 == 0 || flags&0x7a0f != 0 || binary.BigEndian.Uint16(data[4:6]) != 1 {
+		return 0, errors.New("DNS not successful")
+	}
+	pos, e := dnsSkip(data, 12)
+	if e != nil || pos+4 > len(data) || !bytes.Equal(data[12:pos+4], query[12:]) {
+		return 0, errors.New("DNS question mismatch")
+	}
+	pos += 4
+	count := int(binary.BigEndian.Uint16(data[6:8]))
+	if count > 16 {
+		return 0, errors.New("oversize DNS answers")
+	}
+	for i := 0; i < count; i++ {
+		pos, e = dnsSkip(data, pos)
+		if e != nil || pos+10 > len(data) {
+			break
+		}
+		kind, cls, length := binary.BigEndian.Uint16(data[pos:pos+2]), binary.BigEndian.Uint16(data[pos+2:pos+4]), int(binary.BigEndian.Uint16(data[pos+8:pos+10]))
+		pos += 10
+		if pos+length > len(data) {
+			break
+		}
+		if kind == 16 && cls == 1 && length > 0 && int(data[pos]) == length-1 {
+			text := string(data[pos+1 : pos+length])
+			if strings.HasPrefix(text, "desk-dns-v1:") {
+				mask, err := strconv.Atoi(strings.TrimPrefix(text, "desk-dns-v1:"))
+				if err == nil && mask >= 0 && mask <= 15 {
+					return mask, nil
+				}
+			}
+		}
+		pos += length
+	}
+	return 0, errors.New("DNS metadata missing")
+}
+func probeDNS(ctx context.Context, address, network string) (DNSProbe, int) {
+	result := DNSProbe{State: "unavailable", At: time.Now().UTC()}
+	query := make([]byte, 12)
+	if _, e := rand.Read(query[:2]); e != nil {
+		return result, 0
+	}
+	binary.BigEndian.PutUint16(query[2:4], 0x100)
+	binary.BigEndian.PutUint16(query[4:6], 1)
+	for _, label := range strings.Split("status.desk-dns.test", ".") {
+		query = append(query, byte(len(label)))
+		query = append(query, []byte(label)...)
+	}
+	query = append(query, 0, 0, 16, 0, 1)
+	started := time.Now()
+	dialer := net.Dialer{Timeout: 800 * time.Millisecond}
+	conn, e := dialer.DialContext(ctx, network, address)
+	if e != nil {
+		return result, 0
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(800 * time.Millisecond))
+	if _, e = conn.Write(query); e != nil {
+		return result, 0
+	}
+	data := make([]byte, 4096)
+	n, e := conn.Read(data)
+	if e != nil {
+		return result, 0
+	}
+	mask, e := dnsMetadata(data[:n], query)
+	if e != nil {
+		return result, 0
+	}
+	ms := float64(time.Since(started).Microseconds()) / 1000
+	result.State = "ready"
+	result.Latency = &ms
+	return result, mask
+}
+func (d *Dashboard) collectDNS(ctx context.Context, node Node) DNSHealth {
+	if time.Since(d.dnsHealth.At) < 15*time.Second {
+		return d.dnsHealth
+	}
+	value := DNSHealth{At: time.Now().UTC(), Mode: "unknown", Backends: []string{}, IPv4: DNSProbe{State: "standby"}, IPv6: DNSProbe{State: "standby"}}
+	value.Local, _ = probeDNS(ctx, net.JoinHostPort(d.member.Management, "5353"), "udp4")
+	config := readJSON("/etc/desk-dns/vip.json", 65536)
+	vip, _ := config["vip"].(string)
+	if ip := net.ParseIP(vip); ip != nil && ip.To4() != nil && ip.IsPrivate() {
+		var mask int
+		value.IPv4, mask = probeDNS(ctx, net.JoinHostPort(vip, "53"), "udp4")
+		if value.IPv4.State == "ready" {
+			value.Mode = "unavailable"
+			for i, m := range d.config.Members {
+				if mask&(1<<i) != 0 {
+					value.Backends = append(value.Backends, m.ID)
+				}
+			}
+			if len(value.Backends) > 0 {
+				value.Mode = "adguard"
+			} else if mask&8 != 0 {
+				value.Mode = "fallback"
+				value.Resolver = "1.1.1.1"
+			}
+		}
+		if interfaces, e := net.Interfaces(); e == nil {
+			for _, iface := range interfaces {
+				addresses, _ := iface.Addrs()
+				for _, a := range addresses {
+					ip, _, _ := net.ParseCIDR(a.String())
+					if ip != nil && ip.Equal(net.ParseIP(d.member.Management)) {
+						value.IPv6, _ = probeDNS(ctx, net.JoinHostPort("fe80::250%"+iface.Name, "53"), "udp6")
+					}
+				}
+			}
+		}
+	}
+	d.dnsHealth = value
+	return value
+}
+
 type Event struct {
 	ID      string    `json:"id"`
 	At      time.Time `json:"at"`
@@ -96,6 +260,7 @@ type Dashboard struct {
 	local       Node
 	snapshot    Snapshot
 	cpu         cpuSample
+	dnsHealth   DNSHealth
 	dnsInstance string
 	dnsCount    int64
 	dnsAt       float64
@@ -388,6 +553,8 @@ func (d *Dashboard) collect(ctx context.Context) {
 			}
 		}
 		n.Components["worker"] = "ready"
+		n.Admission = map[string]*bool{"worker": boolean(activity["admission_paused"])}
+		n.MaintenanceSupported = activity["maintenance_supported"] == true
 	} else {
 		n.Components["worker"] = "unavailable"
 	}
@@ -414,8 +581,15 @@ func (d *Dashboard) collect(ctx context.Context) {
 	}
 	values := parallelGets(ctx, d, urls)
 	gateway, core, voice, adguard := values[0], values[1], values[2], values[3]
+	if n.Admission == nil {
+		n.Admission = map[string]*bool{}
+	}
+	n.Admission["core"], n.Admission["mqtt"] = boolean(core["admission_paused"]), boolean(gateway["admission_paused"])
+	n.Connections = map[string]*int{"core": number(core["active_connections"]), "mqtt": number(gateway["open_mqtt_connections"])}
+	n.MaintenanceSupported = n.MaintenanceSupported && core["maintenance_supported"] == true && gateway["maintenance_supported"] == true
+	n.DNSHealth = d.collectDNS(ctx, n)
 	n.Components["mqtt"] = "unavailable"
-	if gateway["gateway_id"] == n.ID && gateway["status"] == "ready" {
+	if gateway["gateway_id"] == n.ID && (gateway["status"] == "ready" || (gateway["admission_paused"] == true && gateway["mqtt_listening"] == true && gateway["udp_listening"] == true)) {
 		n.MQTT = number(gateway["active_mqtt_connections"])
 		if n.MQTT != nil {
 			n.Components["mqtt"] = "ready"
@@ -499,6 +673,9 @@ func (d *Dashboard) observe(previous, current Node) {
 	if previous.Boot != "" && current.Boot != "" && previous.Boot != current.Boot {
 		d.event(current, "node", "Node reboot detected")
 	}
+	if previous.DNSHealth.Mode != "" && current.DNSHealth.Mode != previous.DNSHealth.Mode && current.ID == d.config.Node {
+		d.event(current, "service", "DNS routing "+current.DNSHealth.Mode)
+	}
 	// Role, config and service transitions are emitted by the node that owns them.
 	// Cached event rings are shared in /local; no journal or duplicate probe is needed.
 	if current.ID != d.config.Node {
@@ -549,6 +726,40 @@ func validateNode(n Node, m Member, now time.Time) bool {
 	}
 	for _, v := range []*int{n.MQTT, n.Core} {
 		if v != nil && (*v < 0 || *v > 1024) {
+			return false
+		}
+	}
+	if n.DNSHealth.Mode != "" && n.DNSHealth.Mode != "unknown" && n.DNSHealth.Mode != "adguard" && n.DNSHealth.Mode != "fallback" && n.DNSHealth.Mode != "unavailable" {
+		return false
+	}
+	if len(n.DNSHealth.Backends) > 3 {
+		return false
+	}
+	seen := map[string]bool{}
+	for _, id := range n.DNSHealth.Backends {
+		if (id != "deskb1x" && id != "deskb2x" && id != "deskb3x") || seen[id] {
+			return false
+		}
+		seen[id] = true
+	}
+	if n.DNSHealth.Resolver != "" && n.DNSHealth.Resolver != "1.1.1.1" {
+		return false
+	}
+	for _, probe := range []DNSProbe{n.DNSHealth.Local, n.DNSHealth.IPv4, n.DNSHealth.IPv6} {
+		if probe.State != "" && probe.State != "ready" && probe.State != "standby" && probe.State != "unavailable" {
+			return false
+		}
+		if probe.Latency != nil && (math.IsNaN(*probe.Latency) || math.IsInf(*probe.Latency, 0) || *probe.Latency < 0 || *probe.Latency > 10000) {
+			return false
+		}
+	}
+	for key, v := range n.Connections {
+		if (key != "core" && key != "mqtt") || v != nil && (*v < 0 || *v > 1024) {
+			return false
+		}
+	}
+	for key := range n.Admission {
+		if key != "core" && key != "mqtt" && key != "worker" {
 			return false
 		}
 	}

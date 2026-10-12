@@ -38,7 +38,7 @@ class DashboardTests(unittest.TestCase):
         current='frontend xiaozhi_settings\n    http-request deny deny_status 404 if { path_beg /internal/ }\n    default_backend xiaozhi_control_planes\n'
         dashboard='backend desk_dashboard\n    server deskb1x 10.10.10.11:8010 check\nbackend desk_node_control\n    server deskb1x 10.10.10.11:8011 check\n'
         wanted=proxy.candidate(current,'backend desk_monitoring_hubs\n','backend desk_adguard_ui\n',dashboard)
-        self.assertIn('use_backend desk_node_control if { path /api/cluster/operations /api/cluster/operations/prepare /api/cluster/operations/reboot }',wanted)
+        self.assertIn('use_backend desk_node_control if { path /api/cluster/operations /api/cluster/operations/prepare /api/cluster/operations/reboot /api/cluster/operations/resume }',wanted)
         self.assertNotIn('path_beg /peer/',wanted)
         self.assertEqual(proxy.candidate(wanted,'backend desk_monitoring_hubs\n'),wanted)
         self.assertEqual(guard.base(wanted),current)

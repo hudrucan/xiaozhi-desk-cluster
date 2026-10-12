@@ -1,0 +1,28 @@
+-- BEGIN DESK DNS HEALTH
+-- Bounded internal TXT probe reports dnsdist's own backend eligibility.
+-- No webserver, console, credentials or upstream DNS request is added.
+function deskDNSMask()
+  local mask = 0
+  for _, server in pairs(getServers()) do
+    if server:isUp() then
+{% for node, addresses in desk_dns_nodes | dictsort %}
+      if server:getName() == "{{ node }}" then mask = mask + {{ 2 ** loop.index0 }} end
+{% endfor %}
+      if server:getName() == "emergency-cloudflare" then mask = mask + 8 end
+    end
+  end
+  return mask
+end
+local deskHealthSources = newNMG()
+deskHealthSources:addMask("10.10.10.0/24")
+deskHealthSources:addMask("127.0.0.0/8")
+deskHealthSources:addMask("fe80::/10")
+{% for node, addresses in desk_dns_nodes | dictsort %}
+deskHealthSources:addMask("{{ addresses.management }}/32")
+{% endfor %}
+{% for mask in range(16) %}
+{% set text = 'desk-dns-v1:' ~ mask %}
+addAction(AndRule({QNameRule("status.desk-dns.test."), QTypeRule(DNSQType.TXT), NetmaskGroupRule(deskHealthSources), LuaRule(function(dq) return deskDNSMask() == {{ mask }} end)}), SpoofRawAction("\{{ '%03d' | format(text | length) }}{{ text }}", {ttl=0}))
+{% endfor %}
+
+-- END DESK DNS HEALTH

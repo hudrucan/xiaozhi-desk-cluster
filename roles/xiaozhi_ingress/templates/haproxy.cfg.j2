@@ -33,7 +33,7 @@ frontend xiaozhi_settings
 {% endif %}
 {% if desk_dashboard_enabled | default(false) %}
 {% if desk_node_control_enabled | default(false) %}
-    use_backend desk_node_control if { path /api/cluster/operations /api/cluster/operations/prepare /api/cluster/operations/reboot }
+    use_backend desk_node_control if { path /api/cluster/operations /api/cluster/operations/prepare /api/cluster/operations/reboot /api/cluster/operations/resume }
 {% endif %}
     use_backend desk_dashboard if { path / /api/cluster/status }
 {% endif %}

@@ -31,9 +31,17 @@ class ControlTests(unittest.TestCase):
             control = nc.Control(config, Path(self.directory.name)/node/'state.json', reboot=Mock())
             self.controls[node] = control
             self.health[node] = {'node':node,'boot_id':'old-boot','ready':True,
-                                 'revisions':{'xiaozhi':11,'dns':5,'monitoring':4},'metadata':{}}
+                                 'revisions':{'xiaozhi':11,'dns':5,'monitoring':4},'metadata':{
+                                     'maintenance_supported':True,'activity':{'asr':0,'llm':0,'tts':0},
+                                     'core':0,'mqtt':0,'connections':{'core':0,'mqtt':0},
+                                     'admission':{'worker':True,'core':True,'mqtt':True},
+                                     'vip':{'xiaozhi':node=='deskb1x','dns':node=='deskb2x'}}}
+            control.write_admission = Mock()
+            control.vip_service = Mock()
             control.health = lambda node=node: copy.deepcopy(self.health[node])
             control.peer = lambda target,path,body: self.controls[target].peer_action(path,body)
+        self.command_patch = patch.object(nc.subprocess,'run',return_value=Mock(stdout='active\n'))
+        self.command_patch.start(); self.addCleanup(self.command_patch.stop)
         self.boot_patch = patch.object(nc, 'boot_id', return_value='old-boot')
         self.boot_patch.start(); self.addCleanup(self.boot_patch.stop)
         callbacks = self.callbacks
@@ -107,7 +115,7 @@ class ControlTests(unittest.TestCase):
         self.assertFalse(self.callbacks)
 
     def test_direct_execution_without_two_leases_is_rejected(self):
-        value = {'id':'a'*32,'node':'deskb3x','boot_id':'old-boot','started':int(time.time()),'expires':int(time.time())+500}
+        value = {'id':'a'*32,'node':'deskb3x','boot_id':'old-boot','started':int(time.time()),'expires':int(time.time())+500,'action':'reboot'}
         with self.assertRaises(nc.Failure): self.controls['deskb3x'].peer_action('/peer/execute',value)
         self.assertFalse(self.callbacks)
 
@@ -162,6 +170,44 @@ class ControlTests(unittest.TestCase):
         headers={'X-Desk-Time':stamp,'X-Desk-Nonce':nonce,'X-Desk-Signature':c.signature('/peer/acquire',raw,stamp,nonce)}
         with self.assertRaises(nc.Failure): c.authenticate('/peer/acquire',raw,headers)
         self.assertIsNone(c.active())
+
+    def test_unsupported_target_is_rejected_before_any_lease_or_drain(self):
+        self.health['deskb3x']['metadata']['maintenance_supported'] = False
+        with self.assertRaises(nc.Failure): self.challenge()
+        self.assertFalse(self.callbacks)
+        self.assertIsNone(self.controls['deskb1x'].active())
+
+    def test_maintenance_only_releases_vips_without_reboot_and_can_resume(self):
+        one,target=self.controls['deskb1x'],self.controls['deskb3x']
+        token=one.challenge({'node':'deskb3x','action':'maintenance'})['token']
+        one.confirm(token);self.callbacks[0]()
+        self.assertEqual(target.state['maintenance']['state'],'maintenance')
+        target.reboot.assert_not_called()
+        target.vip_service.assert_any_call('keepalived','stop')
+        target.resume(target.state['maintenance']['id'])
+        target.vip_service.assert_any_call('keepalived','start')
+        self.assertIsNone(target.state['maintenance'])
+        self.assertIsNone(one.active())
+
+    def test_survivor_failure_cancels_drain_without_stopping_vips_or_reboot(self):
+        one,target=self.controls['deskb1x'],self.controls['deskb3x']
+        one.confirm(self.challenge())
+        self.health['deskb2x']['ready']=False
+        self.callbacks[0]()
+        target.reboot.assert_not_called()
+        target.vip_service.assert_not_called()
+        self.assertIsNone(target.state['maintenance'])
+
+    def test_ready_maintenance_reboot_requires_new_token_and_cannot_repeat(self):
+        one,target=self.controls['deskb1x'],self.controls['deskb3x']
+        first=one.challenge({'node':'deskb3x','action':'maintenance'})['token']
+        one.confirm(first);self.callbacks[0]()
+        token=one.challenge({'node':'deskb3x','action':'reboot'})['token']
+        one.confirm(token)
+        self.assertEqual(target.state['maintenance']['state'],'rebooting')
+        with self.assertRaises(nc.Failure): one.confirm(token)
+        self.callbacks[-1]()
+        target.reboot.assert_called_once_with()
 
     def test_unknown_actions_cannot_execute_commands(self):
         with self.assertRaises(nc.Failure): self.controls['deskb1x'].peer_action('/peer/shell',{'command':'reboot'})
