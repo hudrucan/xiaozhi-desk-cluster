@@ -1287,3 +1287,21 @@ See [Unified LAN administration](docs/DESK_UI.md) for behavior and rollback.
 See [Cloud OAuth recovery](docs/CLOUD_OAUTH.md) for rejected refresh tokens,
 original-client reauthorization and credential-only serial recovery. Cached
 configuration and ready HTTP services do not imply successful Cloud sync.
+
+## Shared Soundbank authoring
+
+The Xiaozhi control plane exposes Soundbank at `/xiaozhi/#soundbank`. Generate
+uses existing TTS workers, publishes verified draft audio to Cloud and returns
+a polling job; Save synchronizes entries/audio and Apply runtime activates them.
+See server `docs/cluster-soundbank-authoring.md` for lifecycle and retention.
+
+Upgrade an existing three-node deployment without applying voice configuration:
+
+```bash
+ansible-playbook -i inventory.ini -u ops soundbank-authoring.yml
+```
+
+This source-only playbook needs no Vault decryption, preserves installed
+credentials and voice bundles, and restarts only control planes serially. Native
+`ffmpeg` and libopus are already present in the cluster and are included in the
+control-plane role's prerequisites for future deployments.

@@ -7,7 +7,7 @@
   block:
     - name: Install only control-plane deployment prerequisites
       ansible.builtin.apt:
-        name: [git, python3, python3-venv, python3-packaging, ca-certificates, libopus0]
+        name: [git, python3, python3-venv, python3-packaging, ca-certificates, libopus0, ffmpeg]
         state: present
         install_recommends: false
         update_cache: true

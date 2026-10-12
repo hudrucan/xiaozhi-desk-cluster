@@ -1,0 +1,151 @@
+---
+# Existing deployments only: source/API/UI upgrade without voice runtime apply.
+- name: Validate every control plane before the Soundbank source upgrade
+  hosts: xiaozhi_control_planes
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  tasks:
+    - name: Require the existing symmetric three-node deployment
+      ansible.builtin.assert:
+        that: groups['xiaozhi_control_planes'] | length == 3
+
+    - name: Require the installed audio tools without adding a model runtime
+      ansible.builtin.command:
+        argv: [/opt/xiaozhi-control-plane/venv/bin/python, '-c', "import shutil, opuslib_next; assert shutil.which('ffmpeg')"]
+      changed_when: false
+
+    - name: Require operational Cloud sync and authenticated peers
+      ansible.builtin.uri:
+        url: "http://{{ cluster_ip }}:8004/api/cluster"
+        use_proxy: false
+        timeout: 10
+      register: soundbank_before
+      changed_when: false
+      failed_when: >-
+        soundbank_before.json.configuration.sync_status != 'synced' or
+        not soundbank_before.json.capabilities.secret_provisioning
+
+    - name: Reject uncommitted deployed source edits
+      ansible.builtin.command:
+        argv: [git, -C, /opt/xiaozhi-control-plane/repo, status, --porcelain]
+      register: source_worktree
+      changed_when: false
+      failed_when: source_worktree.stdout | length > 0
+
+- name: Upgrade Soundbank control planes one at a time
+  hosts: xiaozhi_control_planes
+  become: true
+  gather_facts: false
+  serial: 1
+  any_errors_fatal: true
+  vars:
+    soundbank_source: 773cdee74463f6b888bff90c6f84e498a3e0fa21
+  tasks:
+    - name: Freeze unrelated service processes, credentials, runtime and DNS policy
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/python3
+          - -c
+          - |
+            {{ lookup('file', 'roles/desk_ui/files/ui_guard.py').split('if __name__')[0] }}
+            value=state()
+            value['units'].pop('xiaozhi-control-plane')
+            print(json.dumps(value,sort_keys=True))
+      register: soundbank_guard
+      changed_when: false
+      no_log: true
+
+    - name: Record the installed source for rollback
+      ansible.builtin.command:
+        argv: [git, -C, /opt/xiaozhi-control-plane/repo, rev-parse, HEAD]
+      register: source_before
+      changed_when: false
+
+    - name: Activate the reviewed source with rollback on failure
+      block:
+        - name: Check out the exact reviewed control-plane release
+          ansible.builtin.git:
+            repo: https://github.com/hudrucan/xiaozhi-desk-robot-server.git
+            dest: /opt/xiaozhi-control-plane/repo
+            version: "{{ soundbank_source }}"
+            recursive: false
+            force: false
+            umask: '0022'
+          environment: {GIT_TERMINAL_PROMPT: '0'}
+          register: soundbank_source_update
+
+        - name: Restart only the control plane when its source changed
+          ansible.builtin.systemd_service:
+            name: xiaozhi-control-plane
+            state: restarted
+          when: soundbank_source_update.changed
+
+        - name: Require new capabilities and healthy Cloud reconciliation
+          ansible.builtin.uri:
+            url: "http://{{ cluster_ip }}:8004/api/cluster"
+            use_proxy: false
+            timeout: 10
+          register: soundbank_ready
+          until: >-
+            soundbank_ready.status | default(0) == 200 and
+            soundbank_ready.json.configuration.sync_status == 'synced' and
+            soundbank_ready.json.reconciliation.state == 'ready' and
+            soundbank_ready.json.capabilities.soundbank_authoring and
+            soundbank_ready.json.capabilities.soundbank_preview
+          retries: 30
+          delay: 2
+          changed_when: false
+      rescue:
+        - name: Restore the previous source without changing credentials or bundles
+          ansible.builtin.command:
+            argv: [git, -C, /opt/xiaozhi-control-plane/repo, checkout, "{{ source_before.stdout }}"]
+        - name: Restart the restored control plane
+          ansible.builtin.systemd_service:
+            name: xiaozhi-control-plane
+            state: restarted
+        - ansible.builtin.fail:
+            msg: Soundbank control-plane upgrade failed; previous source was restored.
+
+    - name: Require all protected services, configuration and DNS policy unchanged
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/python3
+          - -c
+          - |
+            {{ lookup('file', 'roles/desk_ui/files/ui_guard.py').split('if __name__')[0] }}
+            value=state()
+            value['units'].pop('xiaozhi-control-plane')
+            assert json.dumps(value,sort_keys=True) == sys.stdin.read().strip()
+            print('Protected runtime and DNS unchanged')
+        stdin: "{{ soundbank_guard.stdout }}"
+      changed_when: false
+      no_log: true
+
+- name: Verify Soundbank through the shared UI after all nodes are upgraded
+  hosts: xiaozhi_control_planes
+  become: true
+  gather_facts: false
+  run_once: true
+  tasks:
+    - name: Require Soundbank authoring and preview on the management VIP
+      ansible.builtin.uri:
+        url: "http://{{ (soundbank_guard.stdout | from_json).vip }}/api/settings/capabilities"
+        use_proxy: false
+        timeout: 10
+      register: soundbank_public
+      failed_when: >-
+        not soundbank_public.json.capabilities.soundbank_authoring or
+        not soundbank_public.json.capabilities.soundbank_preview
+      changed_when: false
+
+    - name: Require verified Soundbank cache coverage across the three nodes
+      ansible.builtin.uri:
+        url: "http://{{ (soundbank_guard.stdout | from_json).vip }}/api/cluster/soundbank"
+        use_proxy: false
+        timeout: 10
+      register: soundbank_coverage
+      failed_when: >-
+        soundbank_coverage.json.ready_nodes != 3 or
+        soundbank_coverage.json.expected_nodes != 3
+      changed_when: false
