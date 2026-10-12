@@ -7,6 +7,8 @@ import hmac
 import http.cookies
 import http.server
 import json
+import importlib.util
+from contextlib import contextmanager
 import os
 from pathlib import Path
 import ssl
@@ -25,7 +27,7 @@ READS = {'status', 'profile', 'parental/status', 'safesearch/status',
          'querylog/config', 'stats/config', 'querylog_info', 'stats_info', 'access/list', 'dns_info'}
 WRITES = {'querylog/config/update': 'PUT', 'stats/config/update': 'PUT',
           'querylog_config': 'POST', 'stats_config': 'POST',
-          'profile/update': 'PUT', 'dns_config': 'POST',
+          'profile/update': 'PUT', 'dns_config': 'POST', 'protection': 'POST',
           'parental/enable': 'POST', 'parental/disable': 'POST',
           'safebrowsing/enable': 'POST', 'safebrowsing/disable': 'POST',
           'safesearch/settings': 'PUT', 'rewrite/settings/update': 'PUT',
@@ -51,6 +53,8 @@ CLIENT_FIELDS = {'name', 'ids', 'use_global_settings', 'filtering_enabled',
                  'upstreams_cache_enabled', 'upstreams_cache_size'}
 _SESSION_LOCK = threading.Lock()
 _SESSIONS = {}
+_FILTER_JOB = None
+_FILTER_JOB_LOCK = threading.Lock()
 
 
 def encoded(value):
@@ -71,6 +75,8 @@ def basic(config):
 
 def project(route, value):
     """Exclude host-local state and runtime counters from replicated policy."""
+    if route == 'status': return {'protection_enabled':value['protection_enabled']}
+    if route == 'profile': return {k:value[k] for k in ('language','theme') if k in value}
     if route in ('querylog/config', 'stats/config'):
         return {**value, 'ignored': sorted(value.get('ignored') or [])}
     if route == 'rewrite/list':
@@ -111,7 +117,7 @@ def validate_write(route, value, serialized=False):
     if route == 'filtering/set_rules':
         value['rules'] = [RULE] + [r for r in value['rules'] if r != RULE]
     if route == 'profile/update':
-        if set(value) - {'name', 'language', 'theme'} or value.get('name') not in ('desk-sync', ''):
+        if set(value) - {'name', 'language', 'theme'} or value.get('name','') not in ('desk-sync', ''):
             raise ValueError('Account changes are not policy')
     return value
 
@@ -177,7 +183,9 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 
 
 class MaintenanceBusy(Exception):
-    pass
+    def __init__(self, reason="filter_maintenance_busy", retry_after=5):
+        self.reason, self.retry_after = reason, max(1, int(retry_after))
+        super().__init__(reason)
 
 
 class Maintenance:
@@ -209,14 +217,23 @@ class Maintenance:
             now = self.clock()
             if (not self.owner or now < self.not_before
                     or (self.active and self.active['expires'] > now)):
-                raise MaintenanceBusy('Another filter update or VIP transition is in progress')
+                raise MaintenanceBusy('filter_update_or_owner_transition', max(self.not_before-now, (self.active or {}).get('expires',now)-now))
             if node not in self.config['nodes']:
                 raise ValueError('Unknown maintenance node')
+            if other_filter_job(self.config):
+                raise MaintenanceBusy('native_filter_job_still_running')
             if not other_backend_ready(node):
                 raise MaintenanceBusy('Keep at least one other healthy AdGuard during maintenance')
             token = secrets.token_hex(24)
             self.active = {'node': node, 'token': token, 'expires': now + self.ttl}
             return {'token': token, 'ttl': self.ttl}
+
+    def renew(self, node, token):
+        with self.lock:
+            if not self.owner or not self.active or self.active['node'] != node or not hmac.compare_digest(self.active['token'],token):
+                raise MaintenanceBusy('maintenance_lease_lost')
+            self.active['expires'] = self.clock() + self.ttl
+            return {'ttl':self.ttl}
 
     def release(self, node, token):
         with self.lock:
@@ -267,8 +284,18 @@ def lease_request(config, value):
     local = owns(config['vip'])
     context = None if local else ssl.create_default_context(cafile=config['ca'])
     base = 'http://127.0.0.1:' + str(config['port']) if local else coordinator(config)
-    return fetch(base + '/desk-sync/lease', config, 'POST', value,
-                 context=context, return_mutation=True)
+    try:
+        return fetch(base + '/desk-sync/lease', config, 'POST', value,
+                     context=context, return_mutation=True)
+    except urllib.error.HTTPError as error:
+        if error.code != 409: raise
+        try:
+            pending=json.loads(error.read(2048))
+            reason=pending.get('reason','filter_maintenance_busy')
+            retry=pending.get('retry_after',5)
+            if not isinstance(reason,str) or len(reason)>128: reason='filter_maintenance_busy'
+            raise MaintenanceBusy(reason,retry) from None
+        finally: error.close()
 
 
 def acquire_maintenance(config):
@@ -283,29 +310,115 @@ def release_maintenance(config, token):
         pass
 
 
+def native_pid():
+    return subprocess.check_output(['systemctl','show','desk-adguard','--property=MainPID,InvocationID','--value'],text=True,timeout=2).strip()
+
+
+def record_filter_job(config, running):
+    global _FILTER_JOB
+    if not config.get('state'): return
+    path=Path(config['state']).with_name('native-job.json')
+    with _FILTER_JOB_LOCK:
+        if running:
+            _FILTER_JOB={'pid':native_pid()}
+            temporary=path.with_suffix('.pending')
+            fd=os.open(temporary,os.O_WRONLY|os.O_CREAT|os.O_TRUNC,0o600)
+            with os.fdopen(fd,'wb') as stream:
+                stream.write(encoded(_FILTER_JOB));stream.flush();os.fsync(stream.fileno())
+            temporary.replace(path)
+        else:
+            _FILTER_JOB=None
+            path.unlink(missing_ok=True)
+
+
+def pending_filter_job():
+    return _FILTER_JOB is not None
+
+
+def other_filter_job(config):
+    if pending_filter_job(): return True
+    context=ssl.create_default_context(cafile='/etc/desk-dns/sync/backend.crt')
+    for node,addresses in public_nodes().items():
+        if node==config['node']: continue
+        try:
+            result=fetch('https://'+addresses['private']+':5443/desk-observe/policy/jobs',
+                         config,'POST',{},context=context,return_mutation=True,timeout=2)
+            if result.get('busy'): return True
+        except Exception:
+            # An unreachable node cannot be selected as a healthy maintenance backend.
+            # Its native job is excluded from forwarding until health recovers.
+            if native_ready(node): return True
+    return False
+
+
+def recover_maintenance(config,token,uncertain=False):
+    stable=0
+    while stable<3:
+        try: lease_request(config, {'action':'renew','node':config['node'],'token':token})
+        except Exception: return
+        if uncertain and pending_filter_job():
+            try:
+                if native_pid()!=_FILTER_JOB['pid']: record_filter_job(config,False)
+                else:
+                    time.sleep(5);continue
+            except Exception:
+                time.sleep(5);continue
+        stable=stable+1 if native_ready(config['node']) else 0
+        time.sleep(5)
+    release_maintenance(config,token)
+
+
+@contextmanager
+def held_maintenance(config):
+    token = acquire_maintenance(config)
+    stopped, lost = threading.Event(), threading.Event()
+    def renew():
+        while not stopped.wait(20):
+            try: lease_request(config, {'action':'renew', 'node':config['node'], 'token':token})
+            except Exception: lost.set()
+    thread = threading.Thread(target=renew, daemon=True); thread.start()
+    try:
+        yield lost
+    except urllib.error.HTTPError as error:
+        if 400 <= error.code < 500: release_maintenance(config,token)
+        else:
+            # Unknown server failures keep the lease until native health recovers.
+            threading.Thread(target=lambda: recover_maintenance(config,token,uncertain=pending_filter_job()),daemon=True).start()
+        raise
+    except Exception:
+        # An HTTP timeout cannot prove that the native operation stopped.
+        # Keep renewing while DNS is unhealthy. No success is acknowledged here.
+        threading.Thread(target=lambda: recover_maintenance(config,token,uncertain=pending_filter_job()),daemon=True).start()
+        raise
+    else:
+        if lost.is_set(): raise MaintenanceBusy('maintenance_lease_lost')
+        release_maintenance(config, token)
+    finally:
+        stopped.set()
+
+
 def filter_write(config, route, value):
     if route not in WRITES or not route.startswith('filtering/'):
         raise ValueError('Only filter mutations allowed')
     value = validate_write(route, value, serialized=True)
-    token = acquire_maintenance(config)
-    try:
-        result = fetch(config['adguard'] + '/control/' + route, config, WRITES[route],
-                       value, return_mutation=route == 'filtering/refresh', timeout=120)
-        # Do not release if the update left its native DNS backend unresponsive.
-        deadline = time.monotonic() + 10
-        while time.monotonic() < deadline:
-            if native_ready(config['node']):
-                release_maintenance(config, token)
-                break
+    with held_maintenance(config) as lost:
+        record_filter_job(config,True)
+        try:
+            result = fetch(config['adguard'] + '/control/' + route, config, WRITES[route],
+                       value, return_mutation=route == 'filtering/refresh', timeout=900)
+        except urllib.error.HTTPError:
+            # A complete native HTTP error proves its synchronous handler ended.
+            # Quarantine DNS health separately; only transport uncertainty keeps
+            # the durable in-flight marker until the process incarnation changes.
+            record_filter_job(config,False)
+            raise
+        else: record_filter_job(config,False)
+        deadline = time.monotonic() + 30
+        while not native_ready(config['node']):
+            if lost.is_set() or time.monotonic() >= deadline:
+                raise MaintenanceBusy('native_dns_health_pending')
             time.sleep(1)
         return result
-    except urllib.error.HTTPError as error:
-        if 400 <= error.code < 500: release_maintenance(config, token)
-        raise
-    except Exception:
-        # Timeout may mean AdGuard is still compiling after the caller gave up.
-        # Leave the lease in place, instead of starting another backend's update.
-        raise
 
 
 def refresh_filters(config):
@@ -338,8 +451,9 @@ class Server(http.server.ThreadingHTTPServer):
     daemon_threads = True
     request_queue_size = 8
 
-    def __init__(self, address, config, source=False, maintenance=None):
+    def __init__(self, address, config, source=False, maintenance=None, policy=None):
         self.config = config
+        self.policy = policy
         self.source = source
         self.maintenance = maintenance or Maintenance(config)
         self.tls = None
@@ -396,6 +510,22 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return self.answer(403, {'error': 'peer_not_allowed'})
             if not hmac.compare_digest(self.headers.get('Authorization', ''), basic(config)):
                 return self.answer(401, {'error': 'authentication_required'})
+            if self.path.startswith('/desk-sync/policy/') and self.command == 'POST' and not self.server.source:
+                length = int(self.headers.get('Content-Length', '0'))
+                if self.headers.get('Transfer-Encoding') or not 0 <= length <= LIMIT:
+                    return self.answer(400, {'error':'invalid_body'})
+                value = json.loads(self.rfile.read(length) or b'{}')
+                action = self.path.removeprefix('/desk-sync/policy/')
+                policy = self.server.policy
+                if action == 'write':
+                    result = policy.write(value['route'],value['body'])
+                elif action == 'public-status': result=policy.public_status()
+                elif action == 'reconcile':
+                    policy.reconcile()
+                    if policy.error: return self.answer(503,{'error':policy.error})
+                    result=policy.journal.status()
+                else: result = policy.peer(action,value)
+                return self.answer(200,result)
             owner = owns(config['vip'])
             if self.path == '/desk-sync/lease' and self.command == 'POST':
                 if not owner: return self.answer(409, {'error': 'source_unavailable'})
@@ -406,6 +536,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 value = json.loads(self.rfile.read(length))
                 if value.get('action') == 'acquire':
                     return self.answer(200, self.server.maintenance.acquire(value['node']))
+                if value.get('action') == 'renew':
+                    return self.answer(200,self.server.maintenance.renew(value['node'],value['token']))
                 if value.get('action') == 'release':
                     return self.answer(200, {'released': self.server.maintenance.release(value['node'], value['token'])})
                 return self.answer(400, {'error': 'invalid_lease_action'})
@@ -469,8 +601,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             result = fetch(config['adguard'] + '/control/' + route, config,
                            self.command, value)
             return self.answer(200, result)
-        except MaintenanceBusy:
-            self.answer(409, {'error': 'filter_maintenance_busy'})
+        except MaintenanceBusy as error:
+            self.answer(409, {'error':'filter_maintenance_busy', 'reason':error.reason, 'retry_after':error.retry_after})
+        except PolicyFailure as error:
+            self.answer(error.code, {'error':error.message})
         except urllib.error.HTTPError as error:
             # Native rejection is distinct from transport failure; never echo URLs.
             error.close()
@@ -486,12 +620,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
     do_PUT = handle_api
 
 
-POLICY_ROUTES = ['querylog/config', 'stats/config', 'dns_info', 'filtering/status', 'rewrite/list', 'rewrite/settings',
+POLICY_ROUTES = ['status', 'profile', 'querylog/config', 'stats/config', 'dns_info', 'filtering/status', 'rewrite/list', 'rewrite/settings',
                  'clients', 'blocked_services/get', 'safesearch/status',
                  'safebrowsing/status', 'parental/status']
 
 
-def snapshot(base, config, context=None):
+def policy_snapshot(base, config, context=None):
     def canonical(value):
         if isinstance(value, dict):
             return {k: canonical(v) for k, v in value.items()}
@@ -510,7 +644,11 @@ def snapshot(base, config, context=None):
         if route == 'clients':
             value['clients'].sort(key=lambda x: x['name'])
         policy[route] = canonical(value)
-    return hashlib.sha256(encoded(policy)).hexdigest()
+    return policy
+
+
+def snapshot(base, config, context=None):
+    return hashlib.sha256(encoded(policy_snapshot(base,config,context))).hexdigest()
 
 
 def atomic_status(config, value):
@@ -521,7 +659,7 @@ def atomic_status(config, value):
     temporary.replace(path)
 
 
-def pull(config):
+def legacy_pull(config):
     state = {'protocol': 'desk-dns-sync-v1', 'node': config['node'], 'checked_at': time.time()}
     token = None
     complete = False
@@ -574,6 +712,33 @@ def pull(config):
             if complete and native_ready(config['node']): release_maintenance(config, token)
 
 
+def public_nodes():
+    return json.loads(Path('/etc/desk-dns/public.json').read_bytes())['nodes']
+
+
+def pull(config):
+    # In-process journal state avoids races between timer processes and HTTP writes.
+    try:
+        fetch('http://127.0.0.1:'+str(config['port'])+'/desk-sync/policy/reconcile',
+              config, 'POST', {}, timeout=150)
+        return 0
+    except Exception:
+        print('DNS committed policy reconciliation pending; next timer retries', flush=True)
+        return 1
+
+
+def load_policy():
+    path = Path(__file__).with_name('dns-policy.py')
+    if not path.exists(): path=Path(__file__).with_name('dns_policy.py')
+    spec=importlib.util.spec_from_file_location('desk_dns_policy',path)
+    module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+    return module
+
+
+class PolicyFailure(Exception):
+    pass
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('action', choices=['serve', 'pull', 'refresh'])
@@ -584,6 +749,19 @@ def main():
         raise SystemExit(refresh_filters(config))
     if args.action == 'pull':
         raise SystemExit(pull(config))
+    global _FILTER_JOB
+    marker=Path(config['state']).with_name('native-job.json')
+    if marker.exists():
+        _FILTER_JOB=json.loads(marker.read_bytes())
+        if native_pid()!=_FILTER_JOB['pid']: record_filter_job(config,False)
+    import sys
+    # importlib-loaded tests may not register this module in sys.modules.
+    from types import SimpleNamespace
+    api=SimpleNamespace(**globals())
+    module=load_policy()
+    global PolicyFailure
+    PolicyFailure=module.Failure
+    policy=module.Policy(config,api)
     maintenance = Maintenance(config)
     def watch_owner():
         while True:
@@ -591,8 +769,8 @@ def main():
             except Exception: maintenance.observe(False)
             time.sleep(2)
     threading.Thread(target=watch_owner, daemon=True).start()
-    local = Server(('127.0.0.1', config['port']), config, maintenance=maintenance)
-    source = Server((config['vip'], config['port']), config, source=True, maintenance=maintenance)
+    local = Server(('127.0.0.1', config['port']), config, maintenance=maintenance, policy=policy)
+    source = Server((config['vip'], config['port']), config, source=True, maintenance=maintenance, policy=policy)
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     context.minimum_version = ssl.TLSVersion.TLSv1_2
     context.load_cert_chain(config['certificate'], config['key'])

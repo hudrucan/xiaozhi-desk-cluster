@@ -50,6 +50,8 @@
 
     - ansible.builtin.include_tasks: sync-binary.yml
 
+    - ansible.builtin.include_tasks: policy-crypto.yml
+
     - name: Install small policy boundary and account preservation helpers
       ansible.builtin.copy:
         src: "{{ item }}"
@@ -57,7 +59,7 @@
         owner: root
         group: root
         mode: '0755'
-      loop: [desk_dns_sync.py, dns_sync_account.py, dns_probe.py]
+      loop: [desk_dns_sync.py, dns_policy.py, dns_sync_account.py, dns_probe.py]
       register: desk_dns_sync_scripts
 
     - name: Install the pinned VIP trust certificate and private key
@@ -169,5 +171,5 @@
       ansible.builtin.systemd_service:
         name: desk-dns-sync-agent
         enabled: true
-        state: "{{ 'restarted' if desk_dns_sync_scripts.changed or desk_dns_sync_units.changed or desk_dns_sync_tls.changed or desk_dns_sync_agent_config.changed else 'started' }}"
+        state: "{{ 'restarted' if desk_dns_sync_scripts.changed or dns_policy_journal_script.changed or desk_dns_sync_units.changed or desk_dns_sync_tls.changed or desk_dns_sync_agent_config.changed else 'started' }}"
         daemon_reload: true

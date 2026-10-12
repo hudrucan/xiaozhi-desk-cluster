@@ -7,12 +7,16 @@ After=network-online.target desk-adguard.service
 User=desk-dns-sync
 Group=desk-dns-sync
 Slice=desk-dnssync.slice
+StateDirectory=desk-dns-sync
+StateDirectoryMode=0700
+Environment=PYTHONPATH=/opt/desk-monitoring-sync/46.0.3/vendor
+Environment=PYTHONDONTWRITEBYTECODE=1
 ExecStart=/usr/bin/python3 /usr/local/libexec/desk-dns/desk-dns-sync.py serve
 Restart=on-failure
 RestartSec=3
 CPUWeight=5
-MemoryMax=48M
-TasksMax=24
+MemoryMax=96M
+TasksMax=48
 LimitNOFILE=128
 CapabilityBoundingSet=
 NoNewPrivileges=true

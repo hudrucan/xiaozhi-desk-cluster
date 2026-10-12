@@ -1,0 +1,141 @@
+---
+- name: Pause the old pull schedule before migrating to certified policy revisions
+  hosts: desk_dns
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  tasks:
+    - name: Refuse rollout while an unconfirmed native filter job is in flight
+      ansible.builtin.stat:
+        path: /var/lib/desk-dns-sync/native-job.json
+      register: rollout_native_job
+      failed_when: rollout_native_job.stat.exists
+
+    - name: Stop only the policy reconciliation timers during the serial migration
+      ansible.builtin.systemd_service:
+        name: "{{ item }}"
+        state: stopped
+      loop: [desk-dns-sync.timer, desk-dns-filter-refresh.timer]
+
+    - name: Wait for existing upstream pull and refresh jobs to finish
+      ansible.builtin.command:
+        argv: [/usr/bin/python3, '-c', 'import subprocess; states=[subprocess.check_output(["systemctl","show",u,"--property=ActiveState","--value"],text=True).strip() for u in ("desk-dns-sync","desk-dns-filter-refresh")]; assert all(s in ("inactive","failed") for s in states)']
+      register: previous_sync_idle
+      until: previous_sync_idle.rc == 0
+      retries: 24
+      delay: 5
+      changed_when: false
+
+- name: Repair configuration UI and policy replication without restarting DNS or Xiaozhi
+  hosts: desk_dns
+  become: true
+  gather_facts: false
+  serial: 1
+  any_errors_fatal: true
+  tasks:
+    - name: Read role defaults without overriding enabled inventory features
+      ansible.builtin.include_vars:
+        file: "{{ item }}"
+        name: "{{ 'repair_dns_defaults' if 'desk_dns/' in item else 'repair_monitor_defaults' }}"
+      loop: [roles/desk_dns/defaults/main.yml, roles/desk_monitoring/defaults/main.yml]
+
+    - name: Fill only missing defaults and preserve the shared LAN routing configuration
+      ansible.builtin.set_fact:
+        "{{ item.key }}": "{{ vars[item.key] | default(item.value) }}"
+      loop: "{{ (repair_dns_defaults | combine(repair_monitor_defaults)) | dict2items }}"
+      no_log: true
+
+    - name: Resolve exactly the existing symmetric private backend membership
+      ansible.builtin.set_fact:
+        desk_dns_nodes: "{{ desk_dns_nodes | default({}) | combine({item: {'management':hostvars[item].ansible_host,'private':hostvars[item].cluster_ip}}) }}"
+      loop: "{{ groups['desk_dns'] | sort }}"
+
+    - name: Capture protected service process identities
+      ansible.builtin.command:
+        argv: [systemctl, show, desk-adguard, desk-dnsdist, desk-dns-vip, xiaozhi-control-plane, xiaozhi-core, xiaozhi-mqtt-gateway, xiaozhi-worker-tts, --property=MainPID,ActiveState]
+      register: protected_before
+      changed_when: false
+
+    - name: Install private policy crypto and shared journal
+      ansible.builtin.include_role:
+        name: desk_dns
+        tasks_from: policy-crypto
+
+    - name: Install policy and UI boundary helpers
+      ansible.builtin.copy:
+        src: "roles/desk_dns/files/{{ item }}"
+        dest: "/usr/local/libexec/desk-dns/{{ item | replace('_','-') }}"
+        mode: '0755'
+      loop: [desk_dns_sync.py, dns_policy.py, cluster_ui.py, policy_wait.js]
+
+    - name: Install monitoring configuration helpers
+      ansible.builtin.copy:
+        src: "roles/desk_monitoring/files/{{ item }}"
+        dest: "/usr/local/libexec/desk-monitoring/{{ item | replace('_','-') }}"
+        mode: '0755'
+      loop: [config_journal.py, config_sync.py]
+
+    - name: Install the isolated policy agent unit
+      ansible.builtin.template:
+        src: roles/desk_dns/templates/desk-dns-sync-agent.service.j2
+        dest: /etc/systemd/system/desk-dns-sync-agent.service
+        mode: '0644'
+
+    - name: Validate and install private peer HTTP proxy
+      ansible.builtin.template:
+        src: roles/desk_dns/templates/backend-haproxy.cfg.j2
+        dest: /etc/desk-dns/backend-haproxy.cfg
+        mode: '0644'
+        validate: /usr/sbin/haproxy -c -f %s
+
+    - name: Validate and install AdGuard UI proxy
+      ansible.builtin.template:
+        src: roles/desk_dns/templates/ui-haproxy.cfg.j2
+        dest: /etc/desk-dns/ui-haproxy.cfg
+        mode: '0644'
+        validate: /usr/sbin/haproxy -c -f %s
+
+    - name: Validate and install monitoring UI proxy
+      ansible.builtin.template:
+        src: roles/desk_monitoring/templates/ui-proxy.cfg.j2
+        dest: /etc/desk-monitoring/ui-proxy.cfg
+        mode: '0644'
+        validate: /usr/sbin/haproxy -c -f %s
+
+    - name: Restart only the policy and monitoring configuration APIs
+      ansible.builtin.systemd_service:
+        name: "{{ item }}"
+        state: restarted
+        daemon_reload: true
+      loop: [desk-dns-sync-agent, beszel-config-sync, desk-dns-cluster-ui]
+
+    - name: Wait for local policy API and shared monitoring native health
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: 3002
+        timeout: 15
+
+    - name: Restart only this node's private HTTP and UI proxies
+      ansible.builtin.systemd_service:
+        name: "{{ item }}"
+        state: restarted
+      loop: [desk-dns-backend, desk-dns-ui, beszel-ui-proxy]
+
+    - name: Require protected service process identities to remain unchanged
+      ansible.builtin.command:
+        argv: [systemctl, show, desk-adguard, desk-dnsdist, desk-dns-vip, xiaozhi-control-plane, xiaozhi-core, xiaozhi-mqtt-gateway, xiaozhi-worker-tts, --property=MainPID,ActiveState]
+      register: protected_after
+      changed_when: false
+      failed_when: protected_after.stdout != protected_before.stdout
+
+- name: Resume convergence only after every peer understands certified revisions
+  hosts: desk_dns
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Resume policy and serial refresh timers
+      ansible.builtin.systemd_service:
+        name: "{{ item }}"
+        state: started
+        enabled: true
+      loop: [desk-dns-sync.timer, desk-dns-filter-refresh.timer]

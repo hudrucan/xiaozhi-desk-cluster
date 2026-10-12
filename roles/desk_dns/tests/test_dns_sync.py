@@ -273,14 +273,14 @@ class PullTests(unittest.TestCase):
 
     def test_vip_owner_never_syncs_to_itself(self):
         with patch.object(sync, 'owns', return_value=True), patch.object(sync, 'fetch') as remote:
-            self.assertEqual(sync.pull(self.config), 0)
+            self.assertEqual(sync.legacy_pull(self.config), 0)
             remote.assert_not_called()
 
     def test_converged_policy_does_not_spawn_upstream(self):
         identity = {'node': 'deskb2x', 'owner': True}
         with patch.object(sync, 'fetch', return_value=identity), patch.object(sync, 'snapshot', return_value='same'), \
                 patch.object(sync.subprocess, 'run') as run:
-            self.assertEqual(sync.pull(self.config), 0)
+            self.assertEqual(sync.legacy_pull(self.config), 0)
             run.assert_not_called()
         self.assertEqual(json.loads(Path(self.config['state']).read_text())['state'], 'synced')
 
@@ -290,12 +290,12 @@ class PullTests(unittest.TestCase):
                 patch.object(sync, 'snapshot', side_effect=['new', 'old', 'new', 'old']), \
                 patch.object(sync.subprocess, 'run') as run:
             run.return_value.returncode = 0
-            self.assertEqual(sync.pull(self.config), 1)
+            self.assertEqual(sync.legacy_pull(self.config), 1)
         with patch.object(sync, 'fetch', return_value=identity), \
                 patch.object(sync, 'snapshot', side_effect=['new', 'old', 'new', 'new']), \
                 patch.object(sync.subprocess, 'run') as run:
             run.return_value.returncode = 0
-            self.assertEqual(sync.pull(self.config), 0)
+            self.assertEqual(sync.legacy_pull(self.config), 0)
 
     def test_source_failover_or_policy_edit_during_pull_is_not_success(self):
         for identity, hashes in (([{'node': 'deskb2x', 'owner': True}, {'node': 'deskb3x', 'owner': True}],
@@ -304,7 +304,7 @@ class PullTests(unittest.TestCase):
             with patch.object(sync, 'fetch', side_effect=identity), \
                     patch.object(sync, 'snapshot', side_effect=hashes), patch.object(sync.subprocess, 'run') as run:
                 run.return_value.returncode = 0
-                self.assertEqual(sync.pull(self.config), 1)
+                self.assertEqual(sync.legacy_pull(self.config), 1)
 
 
 if __name__ == '__main__':

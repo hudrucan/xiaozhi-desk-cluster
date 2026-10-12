@@ -76,7 +76,7 @@
     src: "{{ item }}"
     dest: "/usr/local/libexec/desk-monitoring/{{ item | replace('_','-') }}"
     mode: '0755'
-  loop: [config_sync.py, config_seed.py]
+  loop: [config_sync.py, config_seed.py, config_journal.py]
   register: desk_monitoring_config_scripts
 
 - name: Install separate bounded configuration units

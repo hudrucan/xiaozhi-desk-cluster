@@ -1,0 +1,55 @@
+---
+- name: Load the checksum-pinned shared private crypto dependency definition
+  ansible.builtin.include_vars:
+    file: "{{ role_path }}/../desk_monitoring/defaults/main.yml"
+    name: dns_policy_dependencies
+
+- name: Check isolated native crypto before any package download
+  ansible.builtin.command:
+    argv: [/usr/bin/python3, '-c', 'from cryptography.fernet import Fernet; import sys; assert sys.version_info[:2] == (3,11); f=Fernet(Fernet.generate_key()); assert f.decrypt(f.encrypt(b"ready")) == b"ready"']
+  environment:
+    PYTHONPATH: "{{ dns_policy_dependencies.desk_monitoring_crypto_directory }}"
+    PYTHONDONTWRITEBYTECODE: '1'
+  register: dns_policy_crypto_ready
+  changed_when: false
+  failed_when: false
+
+- name: Install private verified wheels only when missing
+  when: dns_policy_crypto_ready.rc != 0
+  block:
+    - name: Create isolated wheel directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop: [/var/cache/desk-monitoring, "{{ dns_policy_dependencies.desk_monitoring_crypto_directory }}"]
+    - name: Download checksum-pinned wheels without changing system Python packages
+      ansible.builtin.get_url:
+        url: "{{ item.url }}"
+        dest: "/var/cache/desk-monitoring/{{ item.filename }}"
+        checksum: "sha256:{{ item.sha256 }}"
+        mode: '0644'
+      loop: "{{ dns_policy_dependencies.desk_monitoring_crypto_wheels }}"
+      loop_control:
+        label: "{{ item.name }}"
+    - name: Unpack only into the private Python path
+      ansible.builtin.command:
+        argv: [/usr/bin/python3, '-c', 'import sys,zipfile; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])', "/var/cache/desk-monitoring/{{ item.filename }}", "{{ dns_policy_dependencies.desk_monitoring_crypto_directory }}"]
+        creates: "{{ dns_policy_dependencies.desk_monitoring_crypto_directory }}/{{ item.marker }}"
+      loop: "{{ dns_policy_dependencies.desk_monitoring_crypto_wheels }}"
+      loop_control:
+        label: "{{ item.name }}"
+    - name: Require the isolated crypto import after installation
+      ansible.builtin.command:
+        argv: [/usr/bin/python3, '-c', 'from cryptography.fernet import Fernet; import sys; assert sys.version_info[:2] == (3,11); f=Fernet(Fernet.generate_key()); assert f.decrypt(f.encrypt(b"ready")) == b"ready"']
+      environment:
+        PYTHONPATH: "{{ dns_policy_dependencies.desk_monitoring_crypto_directory }}"
+        PYTHONDONTWRITEBYTECODE: '1'
+      changed_when: false
+
+- name: Install the shared configuration journal beside the policy service
+  ansible.builtin.copy:
+    src: "{{ role_path }}/../desk_monitoring/files/config_journal.py"
+    dest: /usr/local/libexec/desk-dns/config-journal.py
+    mode: '0755'
+  register: dns_policy_journal_script

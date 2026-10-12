@@ -79,98 +79,14 @@ def atomic(path, data):
         os.close(fd)
 
 
-class Failure(Exception):
-    def __init__(self, code, message):
-        self.code, self.message = code, message
-        super().__init__(message)
-
-
-class Journal:
-    """Single-decree Paxos per revision with a bounded, encrypted checkpoint.
-
-    Promise and accept are fsynced only on configuration changes. A new proposer
-    must carry forward the highest accepted value returned by its promise quorum.
-    Certificates retain a chosen value across proposer failure and node restart.
-    """
-    def __init__(self, path, cipher, node, members, key):
-        self.path, self.cipher, self.node = path, cipher, node
-        self.members, self.key = set(members), key
-        self.lock = threading.RLock()
-        self.state = json.loads(cipher.decrypt(path.read_bytes())) if path.exists() else {
-            'revision': -1, 'value': None, 'certificate': [], 'promised': [0, ''],
-            'accepted': None, 'mapping': {}, 'applied_revision': -1, 'applied_value': None}
-
-    def save(self):
-        atomic(self.path, self.cipher.encrypt(encoded(self.state)))
-
-    def status(self, full=False):
-        with self.lock:
-            result = {k: copy.deepcopy(self.state[k]) for k in ('revision', 'promised', 'accepted')}
-            result['applied_revision'] = self.state['applied_revision']
-            result['digest'] = digest(self.state['value'])
-            if full:
-                result.update(value=copy.deepcopy(self.state['value']),
-                              certificate=copy.deepcopy(self.state['certificate']))
-            else:
-                result.pop('accepted')
-            return result
-
-    def initialize(self, value):
-        with self.lock:
-            if self.state['revision'] >= 0:
-                if self.state['revision'] == 0 and digest(self.state['value']) != digest(value):
-                    raise Failure(409, 'Existing monitoring seed differs; retain existing configuration')
-                return
-            self.state.update(revision=0, value=value)
-            self.save()
-
-    def promise(self, revision, ballot):
-        with self.lock:
-            if revision != self.state['revision'] + 1:
-                return {'head': self.status(True)}
-            if ballot <= self.state['promised']:
-                raise Failure(409, 'Configuration ballot superseded')
-            self.state['promised'] = ballot
-            self.save()
-            return {'accepted': copy.deepcopy(self.state['accepted'])}
-
-    def receipt(self, revision, ballot, value):
-        message = {'node': self.node, 'revision': revision, 'ballot': ballot, 'digest': digest(value)}
-        return {**message, 'signature': hmac.new(self.key, encoded(message), hashlib.sha256).hexdigest()}
-
-    def accept(self, revision, ballot, value):
-        with self.lock:
-            if revision != self.state['revision'] + 1 or ballot < self.state['promised']:
-                raise Failure(409, 'Configuration revision superseded')
-            previous = self.state['accepted']
-            if previous and previous['ballot'] == ballot and digest(previous['value']) != digest(value):
-                raise Failure(409, 'A ballot cannot accept two configurations')
-            self.state.update(promised=ballot, accepted={'ballot': ballot, 'value': value})
-            self.save()
-            return self.receipt(revision, ballot, value)
-
-    def commit(self, revision, value, certificate):
-        with self.lock:
-            if revision <= self.state['revision']:
-                if revision == self.state['revision'] and digest(value) != digest(self.state['value']):
-                    raise Failure(409, 'Conflicting configuration checkpoint')
-                return
-            voters, ballots = set(), set()
-            for receipt in certificate:
-                message = {k: receipt[k] for k in ('node', 'revision', 'ballot', 'digest')}
-                expected = hmac.new(self.key, encoded(message), hashlib.sha256).hexdigest()
-                if (message['node'] not in self.members or message['revision'] != revision
-                        or message['digest'] != digest(value)
-                        or not hmac.compare_digest(expected, receipt['signature'])):
-                    raise Failure(403, 'Invalid configuration certificate')
-                voters.add(message['node'])
-                ballots.add(tuple(message['ballot']))
-            if len(voters) < 2 or len(ballots) != 1:
-                raise Failure(409, 'Configuration requires two independent acknowledgments')
-            self.state.update(revision=revision, value=value, certificate=certificate,
-                              promised=[0, ''], accepted=None)
-            self.save()
-
+# The same tiny configuration journal is reused by the DNS policy boundary.
+import importlib.util
+_journal_path = Path(__file__).with_name('config-journal.py')
+if not _journal_path.exists(): _journal_path = Path(__file__).with_name('config_journal.py')
+_spec = importlib.util.spec_from_file_location('desk_config_journal', _journal_path)
+_journal_module = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_journal_module)
+Failure, Journal = _journal_module.Failure, _journal_module.Journal
 
 def jwt_from_local_record(database, collection, identity=None, admin_email='admin@desk.cluster'):
     """Match pinned PB 0.40.4's short-lived native token format; never print keys.
@@ -480,6 +396,7 @@ class Cluster:
     def status(self, full=False):
         result = self.journal.status(full)
         result['apply_error'] = self.last_error_code
+        result['partial_apply'] = (self.journal.state.get('record_applied_revision', -1) > self.journal.state['applied_revision'] and self.journal.state.get('native_record_changes', False))
         return result
 
     def peer(self, action, payload):
@@ -501,33 +418,65 @@ class Cluster:
         raise Failure(404, 'Unknown monitoring peer action')
 
     def apply(self):
-        with self.apply_lock, self.journal.lock:
-            state = self.journal.state
-            if state['revision'] < 0 or state['applied_revision'] == state['revision']:
-                return
-            value = state['value']
+        # Peer status and UI health must not wait for native API or password hashing.
+        with self.apply_lock:
+            with self.journal.lock:
+                state = self.journal.state
+                revision = state['revision']
+                if revision < 0 or state['applied_revision'] == revision: return
+                value = copy.deepcopy(state['value'])
+                mapping = copy.deepcopy(state['mapping'])
+                previous = copy.deepcopy(state.get('record_applied_value', state['applied_value']))
+                previous_resets = copy.deepcopy(state.get('token_resets_applied', {}))
+            changed_resets = False
+            resets = value.get('token_resets', {})
+            for user, generation in resets.items():
+                if generation != previous_resets.get(user):
+                    local_user = mapping['users'].get(user)
+                    if local_user:
+                        token = jwt_from_local_record(self.hub.database, 'users', local_user)
+                        self.hub.request('/api/beszel/universal-token?enable=0', token=token)
+                        changed_resets = True
             local = {name: self.hub.records(name) for name in COLLECTIONS}
-            mapping = match_mapping(value, local, state['mapping'])
+            changed = 0
+            # Native hooks can initialize defaults or rename records. Re-read and
+            # apply the final projected configuration, rather than just trusting 200.
+            for attempt in range(4):
+                mapping = match_mapping(value, local, mapping)
+                requests = plan_apply(value, previous, mapping, local)
+                if not requests: break
+                if attempt == 3: raise Failure(503, 'Native records have not converged')
+                self.hub.request('/api/batch', 'POST', {'requests': requests})
+                changed += len(requests)
+                previous = value
+                local = {name: self.hub.records(name) for name in COLLECTIONS}
+                mapping = match_mapping(value, local, mapping)
+                with self.journal.lock:
+                    self.journal.state.update(mapping=copy.deepcopy(mapping),record_applied_revision=revision,
+                        record_applied_value=copy.deepcopy(value),token_resets_applied=copy.deepcopy(resets),
+                        native_record_changes=True)
+                    self.journal.save()
+            else:
+                raise Failure(503, 'Native records have not converged to committed settings')
+            mapping={name:{identity:local_id for identity,local_id in rows.items() if identity in value['collections'][name]} for name,rows in mapping.items()}
+            # Persist native-record progress before the separate settings API call.
+            # A failed settings call is explicit partial apply, never a false rollback.
+            with self.journal.lock:
+                self.journal.state.update(mapping=mapping, record_applied_revision=revision,
+                    record_applied_value=copy.deepcopy(value), token_resets_applied=copy.deepcopy(resets),
+                    native_record_changes=bool(changed or changed_resets or (state.get('native_record_changes') and state.get('record_applied_revision') == revision)))
+                self.journal.save()
             settings = self.hub.full_settings()
             if settings != value['settings']:
                 self.hub.request('/api/settings', 'PATCH', value['settings'])
-            requests = plan_apply(value, state['applied_value'], mapping, local)
-            if requests:
-                self.hub.request('/api/batch', 'POST', {'requests': requests})
-            # Native network-monitor hooks may rename records during the batch.
-            # Read their final IDs before publishing the mapping/applied revision.
-            if value['collections']['network_monitors']:
-                local['network_monitors'] = self.hub.records('network_monitors')
-                mapping = match_mapping(value, local, mapping)
-                native_ids = {row['id'] for row in local['network_monitors']}
-                if any(mapping['network_monitors'][key] not in native_ids
-                       for key in value['collections']['network_monitors']):
-                    raise Failure(503, 'Native network monitor identity is awaiting reconciliation')
-            mapping={name:{identity:local_id for identity,local_id in rows.items() if identity in value['collections'][name]} for name,rows in mapping.items()}
-            state.update(mapping=mapping, applied_revision=state['revision'], applied_value=copy.deepcopy(value))
-            self.journal.save()
+            if self.hub.full_settings() != value['settings']:
+                raise Failure(503, 'Native application settings have not converged')
+            with self.journal.lock:
+                state = self.journal.state
+                state.update(applied_revision=revision, applied_value=copy.deepcopy(value), native_record_changes=False)
+                self.journal.save()
             self.last_error = self.last_error_code = None
-            LOG.info('Configuration applied; revision=%s changed_records=%s', state['revision'], len(requests))
+            LOG.info('Configuration applied; revision=%s changed_records=%s', revision, changed)
 
     def refresh(self):
         self.hub_ready = self.hub.health()
@@ -583,15 +532,15 @@ class Cluster:
                 wanted = self.desired(old, intent)
                 if digest(old) == digest(wanted):
                     ready=self.ready_nodes()
-                    if len(ready)<2:
+                    if len(ready)<2 or self.config['node'] not in ready:
                         raise Failure(503,'Committed configuration is still awaiting two native apply acknowledgments')
                     return self.journal.state['revision'], ready
                 complete, revision, applied = self.choose(wanted, base_revision)
                 if not complete:
                     continue
-                if len(applied) < 2:
+                if len(applied) < 2 or self.config['node'] not in applied:
                     errors = [head.get('apply_error') for head in self.heads.values()]
-                    if not applied and errors and all(code == 400 for code in errors):
+                    if not applied and errors and all(code == 400 for code in errors) and not any(head.get('partial_apply') for head in self.heads.values()):
                         # Every reachable native API rejected before applying its
                         # transaction. Revert only if nobody committed a newer edit.
                         reverted, _, _ = self.choose(old, revision)
@@ -616,7 +565,8 @@ class Cluster:
         if collection == 'universal-tokens':
             updated=copy.deepcopy(value); rows=updated['collections']['universal_tokens']
             existing=[key for key,row in rows.items() if row['user']==identity]
-            if body['enable']=='0':
+            updated.setdefault('token_resets', {})[identity]=body['reset']
+            if body['enable']=='0' or body.get('permanent')!='1':
                 for key in existing: del rows[key]
             else:
                 key=existing[0] if existing else body['id']
@@ -660,6 +610,7 @@ class Cluster:
             admins = [row for row in updated['collections']['users'].values() if row.get('role') == 'admin']
             if not admins or not any(row['email'] == self.config.get('admin_email', 'admin@desk.cluster') for row in admins):
                 raise Failure(409, 'Retain the Ansible-managed auto-login administrator email')
+        updated['token_resets']={user:gen for user,gen in updated.get('token_resets',{}).items() if user in updated['collections']['users']}
         validate_uniques(updated)
         return updated
 
@@ -669,11 +620,16 @@ class Cluster:
                 and head['applied_revision'] == state['revision'] and head['digest'] == digest(state['value'])]
 
     def healthy(self):
-        state = self.journal.state
-        highest = max((h['revision'] for h in self.heads.values()), default=state['revision'])
-        return (self.hub_ready and state['revision'] >= 0 and state['applied_revision'] == state['revision']
-                and state['revision'] >= highest and self.last_error is None
-                and time.monotonic() - self.heads_at < 15)
+        # UI liveness is independent of write quorum or a pending configuration.
+        return self.hub.health()
+
+    def sync_status(self):
+        state = self.journal.status()
+        ready = self.ready_nodes()
+        return {'revision':state['revision'], 'applied_revision':state['applied_revision'],
+            'ready_nodes':ready, 'writable':len(self.heads)>=2,
+            'state':'synced' if len(ready)==len(self.config['members']) else 'pending',
+            'apply_error':self.last_error_code}
 
     def intent(self, path, method, body, auth, actor=None):
         # Native token refresh validates the caller's original identity and role.
@@ -701,10 +657,10 @@ class Cluster:
                 children.append(self.intent(route,request['method'],request.get('body',{}),auth,actor=actor))
             return {'collection':'batch','method':'POST','body':children}
         if path == '/api/beszel/universal-token':
-            if superuser or body.get('enable') not in ('0','1') or (body['enable']=='1' and body.get('permanent')!='1'):
-                raise Failure(400,'Only permanent tokens enter shared configuration')
+            if superuser or body.get('enable') not in ('0','1'):
+                raise Failure(400,'Invalid token operation')
             import uuid
-            body=copy.deepcopy(body); body['token']=body.get('token') or str(uuid.uuid4()); body['id']=record_identity('universal_tokens')
+            body=copy.deepcopy(body); body['token']=body.get('token') or str(uuid.uuid4()); body['id']=record_identity('universal_tokens'); body['reset']=secrets.token_hex(16)
             return {'collection':'universal-tokens','method':'SET','identity':reverse['users'][actor['id']],'body':body}
         if path == '/api/settings':
             if not superuser:
@@ -861,8 +817,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 if path == '/health':
                     self.send(200 if cluster.healthy() else 503, {'ready': cluster.healthy()})
                 elif path == '/api/desk-config/status':
-                    self.send(200, {'revision': cluster.journal.state['revision'], 'applied_revision': cluster.journal.state['applied_revision'],
-                                    'ready_nodes': cluster.ready_nodes(), 'writable': len(cluster.heads) >= 2})
+                    self.send(200, cluster.sync_status())
                 else:
                     raise Failure(404, 'Unknown monitoring configuration path')
                 return
@@ -899,7 +854,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     row=cluster.hub.request('/api/collections/'+child['collection']+'/records/'+local_id)
                     result.append({'status':201 if child['method']=='POST' else 200,'body':row})
             elif intent['collection']=='universal-tokens':
-                result={'token':intent['body']['token'],'active':intent['body']['enable']=='1','permanent':intent['body']['enable']=='1'}
+                if intent['body']['enable']=='1' and intent['body'].get('permanent')!='1':
+                    token = jwt_from_local_record(cluster.hub.database, 'users', cluster.journal.state['mapping']['users'][intent['identity']])
+                    result = cluster.hub.request('/api/beszel/universal-token?enable=1&token='+intent['body']['token'], token=token)
+                else:
+                    result={'token':intent['body']['token'],'active':intent['body']['enable']=='1','permanent':intent['body']['enable']=='1'}
             else:
                 result = {'success': True}
             self.send(200, result, {'X-Desk-Config-Revision': revision, 'X-Desk-Config-Coverage': str(len(ready)) + '/3'})

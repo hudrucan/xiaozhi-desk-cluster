@@ -79,9 +79,9 @@ VIP readiness queries `frontend.desk-dns.test` over UDP and TCP, answered by
 dnsdist itself. Deployment verification still requires native filtering and all
 three AdGuard identities; frontend liveness does not claim that filtering is up.
 
-The unified DNS UI uses a frontend-only health probe and a 180-second DNS
-backend timeout; a local filter compilation no longer marks the entire UI
-proxy unavailable. The last rollout phase validates the combined HTTP/MQTT
+The unified DNS UI probes an available native API and uses a 180-second
+backend timeout. Its native asset/read fallback keeps local filter compilation
+from removing the entire UI proxy. The last rollout phase validates the combined HTTP/MQTT
 HAProxy configuration and gracefully reloads only its DNS UI backend route.
 
 The deployed emergency pool is `1.1.1.1`. Native AdGuard servers stay in the
@@ -97,8 +97,9 @@ fallback; this does not configure a modem or an external always-on resolver.
 Filter writes through the unified UI and non-converged policy pulls acquire a
 single maintenance lease from the current DNS VIP owner. At least one other
 native TLS DoH backend must respond before a lease is granted. Successful work
-releases the lease after native DNS health; uncertain timeouts retain it until
-its 180-second expiry. A new VIP owner waits 180 seconds before granting work,
+releases the lease after native DNS health. Active jobs renew the lease;
+uncertain transport timeouts retain a durable native-process job marker.
+A complete HTTP error ends the job marker but still quarantines failed health. A new VIP owner waits 180 seconds before granting work,
 so in-flight operations from a previous owner can finish. During this cooldown,
 filter edits return HTTP 409 and can be retried; other UI reads remain available.
 Native background refresh is disabled (its interval displays zero in AdGuard).
@@ -393,26 +394,18 @@ password. Back up the ignored credential/certificate files securely. Check mode
 performs read-only preflight/guards and skips credentials, downloads, account
 changes and all service activation. A normal rerun is idempotent.
 
-Inspect a particular node without reading any secrets:
+The certified policy journal described below is now authoritative. The pinned
+upstream pull boundary is retained for migration/reference; routine timers call
+the long-lived policy agent instead of launching an upstream process. Inspect
+safe metadata without reading policy contents or credentials:
 
 ```bash
-ssh ops@192.168.1.101 'sudo cat /var/lib/desk-dns-sync/status.json'
-ssh ops@192.168.1.101 'sudo journalctl -u desk-dns-sync --since "10 minutes ago"'
+curl http://192.168.1.186/dns/control/desk_policy
+ssh ops@192.168.1.101 'sudo journalctl -u desk-dns-sync-agent --since "10 minutes ago"'
 ```
 
-Status is `origin`, `synced`, or `retry_pending`; a synced replica includes its
-source node, timestamp and canonical policy hash. The wrapper verifies policy
-after upstream exits, because a zero exit code alone does not guarantee API
-success. Origin/replica ownership or policy drift during a run prevents reporting
-success. Raw upstream output/error bodies are suppressed so upstream URLs or
-client data cannot spill into systemd logs. For detailed diagnosis, inspect the
-safe status and the AdGuard UI on the affected node.
-
-Sync is not a dependency of AdGuard, dnsdist or DNS VIP health; DNS keeps serving
-its last local policy if synchronization stops. Turning off a node's timer does
-not affect DNS forwarding. No router DNS changes occur in this playbook.
-
-Reference: [upstream sync documentation](https://github.com/bakito/adguardhome-sync/tree/v0.9.3).
+Sync remains independent of AdGuard, dnsdist and DNS VIP health. DNS serves the
+last native policy while a replica catches up. No router changes are performed.
 
 ## Current unified UI and local auth mode
 
@@ -433,8 +426,9 @@ snapshots are unchanged by this rollout. The modem is changed only by the user.
 
 Global statistics sum node counters and use query-count-weighted latency; top
 lists merge the upstream API's bounded lists. Logs merge by timestamp with global
-pagination. Partial read coverage is supplied in `X-Desk-DNS-Coverage`; failed
-mutations return an error. Native client names are retained and known node names
+pagination. Read/apply coverage is supplied in `X-Desk-DNS-Coverage`. Partial idempotent
+Clear/Reset returns HTTP 202 with actual coverage; retry the operation after the
+missing backend recovers. Native rejections retain their HTTP status. Native client names are retained and known node names
 come from public inventory. Unknown names remain IP-only; no names are invented.
 
 Query-log/statistics saves use PUT and synchronize across all nodes. No-body Clear
@@ -477,3 +471,70 @@ filter lists and their metadata were identical before/after. All three native DN
 backends were healthy, with both replicas synced to the current DNS VIP owner.
 This checks the live maintenance/refresh transport without downloading or replacing
 active lists; live add/delete of the user's lists was not performed by the agent.
+
+
+## Certified policy and resilient UI (2026-10-12)
+
+Every managed public Save uses the same protected validation as replica apply.
+Reserved health/identity rewrites cannot be deleted or disabled. Host-local DNS
+bind configuration and account changes remain managed by Ansible. Unsupported
+persistent mutation routes return 405 instead of silently bypassing sync.
+
+A configuration-only encrypted journal uses a two-node Paxos quorum. Checkpoints
+contain policy/revision/certificate and apply progress, never query logs, filter
+contents or metrics. A new DNS VIP owner recovers the latest certified revision
+before accepting edits. A writer durably marks its native replica dirty before
+changing it: interruption before a certified commit cannot promote orphan native
+edits into the authoritative policy. Promises, accepts, commits and native apply
+progress fsync only on changes; idle reconciliation performs no checkpoint IO.
+Credentials and URL secrets are encrypted using a key derived from the existing
+private sync credential. No JetStream or shared SQLite database is required.
+
+HTTP 200 for a policy Save means all three native readbacks acknowledged that
+revision. HTTP 202 means an operation is still running or a replica is pending;
+it includes the revision, actual coverage and `X-Desk-DNS-State: pending`.
+`/control/desk_policy` reports safe progress/error metadata. Filter downloads
+run behind an in-memory background job and renewable maintenance lease, so a
+slow native call does not turn the UI request into a gateway timeout. The
+native UI fetch adapter keeps the existing loading state until the job completes
+and passes back its actual refresh count or native error; it adds no badge or
+layout changes. An identical retry during that job observes the existing job instead of downloading
+twice; a different concurrent edit receives a structured 409.
+
+Rebuilds remain serial and require another healthy native backend. A small
+private native-job marker records the AdGuard PID before maintenance; it prevents
+an agent restart or lease expiry from overlapping an unconfirmed rebuild.
+An uncertain transport timeout is quarantined until a native process restart
+proves the previous job has ended. The existing owner-transition cooldown still
+applies. DNS forwarding and public emergency fallback are unchanged.
+
+The whole native UI, including its root HTML, assets and ordinary reads, can
+select another healthy native AdGuard while the DNS owner's backend rebuilds.
+UI health checks an actual available native API, independently of policy quorum.
+Aggregated logs/statistics/clients retain the existing real-client behavior.
+Raw native UI status keeps its original response schema; it is not summed.
+
+Deploy an existing installation without replacing lists, credentials, counters
+or native DNS/Xiaozhi processes:
+
+```bash
+ansible-playbook -i inventory.ini repair-ui-sync.yml
+```
+
+The repair playbook stops reconciliation timers, waits for old jobs, validates
+HAProxy candidates and updates API/proxies one node at a time. It verifies
+protected process identities and resumes timers after all peers understand the
+journal protocol. The initial policy comes from the current DNS VIP owner.
+
+
+Validation after the repair: 106 DNS Python tests and 6 native UI adapter tests
+passed; monitoring has 45 passing tests. All rendered templates, Python/YAML
+fixtures, repair playbook syntax and whitespace checks passed. Serial rollout
+had zero failed/unreachable nodes. A real Query Log config edit through the VIP
+returned HTTP 200 and coverage 3/3; native readback confirmed the scratch ignored
+domain on each backend. The original config was restored at DNS revision 2 and
+existing filter lists/metadata were unchanged. Same-value Query Log/Statistics
+saves succeeded. All three installed helper hashes matched the tested source,
+and both encrypted journal mtimes/sizes remained unchanged during an idle
+observation. This is a short IO observation, not a stress benchmark. No modem or
+firmware changes were made.

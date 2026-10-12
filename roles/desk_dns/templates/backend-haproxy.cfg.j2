@@ -5,14 +5,14 @@ global
 defaults
     mode http
     timeout connect 2s
-    timeout client 30s
+    timeout client 960s
     timeout server 10s
 
 frontend private_dns_backend
     bind {{ cluster_ip }}:5443 ssl crt /etc/desk-dns/backend/peer.pem alpn h2,http/1.1
     http-request deny unless { src 10.10.10.11 10.10.10.12 10.10.10.13 }
     acl dns_query path /dns-query
-    acl peer_api path_beg /desk-observe/control/
+    acl peer_api path_beg /desk-observe/control/ /desk-observe/policy/ /desk-observe/ui/
     http-request deny unless dns_query or peer_api
     http-request del-header CF-Connecting-IP
     http-request del-header True-Client-IP
@@ -28,7 +28,7 @@ backend adguard_doh
     server local 127.0.0.1:3001
 
 backend observe_api
-    timeout server 180s
+    timeout server 960s
     server local 127.0.0.1:3003
 
 # Separate read-only native statistics; same local AdGuard destination.

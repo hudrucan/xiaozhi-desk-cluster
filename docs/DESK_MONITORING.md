@@ -241,3 +241,38 @@ shared configuration boundary above handles settings.
 ```bash
 ansible-playbook -i inventory.ini monitoring-accounts.yml
 ```
+
+
+## Configuration failure isolation (2026-10-12)
+
+UI readiness now follows native Beszel health, independently of write quorum,
+pending apply or native validation failure. A configuration error cannot remove
+all otherwise healthy hubs from the management VIP. Peer status reads the journal
+under a short lock; native API calls and password hashing occur outside it.
+
+Apply records first, persist successful batch/mapping/password progress, then
+apply application settings through their separate native API. Readback must match
+the committed projection before acknowledging the revision. Failed settings
+after a successful record batch are explicit partial application and retry from
+that progress; they cannot falsely roll back over already changed records.
+A caller whose own native apply failed never reads an old local record/settings
+as the successful Save result, even if two other hubs applied.
+
+Temporary-token enable removes the shared permanent token before enabling the
+local ephemeral token. Shared disable/permanent changes invoke native token reset
+on every hub, including its in-memory temporary-token map. Reset generations
+are journaled, so an offline hub performs its reset once when catching up.
+Ephemeral tokens themselves remain native local runtime state.
+
+`/monitor/api/desk-config/status` exposes revision, native apply progress,
+ready nodes, writability and pending/error state without credentials. The
+`repair-ui-sync.yml` playbook installs these changes serially alongside the DNS
+policy/UI repair. Existing accounts, passwords, record identities and metrics
+are retained; no native hub restart is required.
+
+
+Post-rollout same-value network-monitor Save succeeded through each of the
+three VIP-selected hubs with HTTP 200 and coverage 3/3, at revision 25.
+All hubs reported the same committed/applied revision and retained their three
+existing monitors. The original administrator/password and native metrics were
+preserved. Idle encrypted checkpoint metadata stayed unchanged on every node.

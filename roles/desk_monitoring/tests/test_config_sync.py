@@ -211,4 +211,62 @@ class ConfigTests(unittest.TestCase):
   self.edit('node3',{'meta':{'subsequent':'next'}})
   for cluster in self.nodes.values():
    cluster.refresh();self.assertEqual(cluster.hub.settings['meta']['pending'],'retained');self.assertEqual(cluster.hub.settings['meta']['subsequent'],'next')
+ def test_native_ui_health_survives_quorum_apply_failure(self):
+  for c in self.nodes.values():c.hub.fail=429
+  with self.assertRaises(m.Failure):self.edit()
+  self.assertTrue(all(c.healthy() for c in self.nodes.values()))
+  self.assertTrue(all(c.journal.state['applied_revision']<c.journal.state['revision'] for c in self.nodes.values()))
+ def test_caller_cannot_return_stale_success_when_only_two_peers_applied(self):
+  self.nodes['node1'].hub.fail=503
+  with self.assertRaises(m.Failure) as error:self.edit()
+  self.assertEqual(error.exception.code,503)
+  self.assertEqual(self.nodes['node2'].hub.settings['meta']['appName'],'Shared')
+  self.assertEqual(self.nodes['node1'].hub.settings['meta']['appName'],'Beszel')
+ def test_slow_native_apply_does_not_hold_peer_status_or_ui_health(self):
+  c=self.nodes['node1'];started,release=threading.Event(),threading.Event();old=c.hub.request
+  def slow(path,*args,**kwargs):
+   if path=='/api/settings':started.set();release.wait(3)
+   return old(path,*args,**kwargs)
+  with patch.object(c.hub,'request',side_effect=slow),ThreadPoolExecutor(max_workers=2) as pool:
+   saving=pool.submit(self.edit);self.assertTrue(started.wait(1))
+   status=pool.submit(c.status);self.assertEqual(status.result(timeout=0.5)['revision'],1)
+   self.assertTrue(c.healthy());release.set();saving.result()
+ def test_record_progress_is_retained_when_separate_settings_api_rejects(self):
+  originals={name:c.hub.request for name,c in self.nodes.items()}
+  def reject(name,path,*args,**kwargs):
+   if path=='/api/settings':raise m.Failure(400,'settings rejection after record batch')
+   return originals[name](path,*args,**kwargs)
+  patches=[patch.object(c.hub,'request',side_effect=lambda path,*a,name=name,**k:reject(name,path,*a,**k)) for name,c in self.nodes.items()]
+  for p in patches:p.start()
+  try:
+   with self.assertRaises(m.Failure) as error:
+    self.nodes['node1'].submit({'collection':'batch','body':[{'collection':'users','method':'PATCH','identity':'aaaaaaaaaaaaaaa','body':{'name':'Changed'}},{'collection':'settings','method':'PATCH','body':{'meta':{'appName':'Shared'}}}]})
+   self.assertEqual(error.exception.code,503)
+   self.assertTrue(all(c.status()['partial_apply'] for c in self.nodes.values()))
+   self.assertTrue(all(c.journal.state['value']['collections']['users']['aaaaaaaaaaaaaaa']['name']=='Changed' for c in self.nodes.values()))
+  finally:
+   for p in patches:p.stop()
+  for c in self.nodes.values():c.refresh()
+  self.assertTrue(all(c.hub.settings['meta']['appName']=='Shared' for c in self.nodes.values()))
+ def test_shared_disable_resets_native_temporary_tokens_once_on_each_hub(self):
+  for c in self.nodes.values():c.hub.database='fixture'
+  originals={name:c.hub.request for name,c in self.nodes.items()};calls=[]
+  def reset(name,path,*args,**kwargs):
+   if path=='/api/beszel/universal-token?enable=0':calls.append(name);return {'active':False}
+   return originals[name](path,*args,**kwargs)
+  patches=[patch.object(c.hub,'request',side_effect=lambda path,*a,name=name,**k:reset(name,path,*a,**k)) for name,c in self.nodes.items()]
+  for p in patches:p.start()
+  try:
+   with patch.object(m,'jwt_from_local_record',return_value='fixture'):
+    self.nodes['node1'].submit({'collection':'universal-tokens','identity':'aaaaaaaaaaaaaaa','body':{'enable':'0','reset':'generation'}})
+    for c in self.nodes.values():c.refresh()
+   self.assertEqual(sorted(calls),sorted(self.nodes))
+  finally:
+   for p in patches:p.stop()
+ def test_temporary_token_enable_removes_shared_permanent_record(self):
+  c=self.nodes['node1'];value=copy.deepcopy(c.journal.state['value'])
+  value['collections']['universal_tokens']['eeeeeeeeee']={'user':'aaaaaaaaaaaaaaa','token':'fixture'}
+  wanted=c.desired(value,{'collection':'universal-tokens','identity':'aaaaaaaaaaaaaaa','body':{'enable':'1','permanent':'0','reset':'generation'}})
+  self.assertEqual(wanted['collections']['universal_tokens'],{})
+  self.assertEqual(wanted['token_resets'],{'aaaaaaaaaaaaaaa':'generation'})
 if __name__=='__main__':unittest.main()
