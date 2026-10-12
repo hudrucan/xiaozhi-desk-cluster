@@ -1275,8 +1275,15 @@ but does not install monitoring services.
 
 ## Unified LAN UI
 
-The current management entrypoint is `http://192.168.1.186/`, with `/settings/`,
-`/dns/` and `/monitor/`. The explicitly selected LAN mode uses anonymous AdGuard
+The current management entrypoint is `http://192.168.1.186/`, with `/xiaozhi/`,
+`/dns/` and `/monitor/`. Legacy `/settings/` bookmarks redirect to `/xiaozhi/`.
+The explicitly selected LAN mode uses anonymous AdGuard
 administration and native Beszel auto-login on all three hubs. `ui.yml` deploys
 this mode serially; protected DNS peer sync and DNS VIP `.250:53` remain separate.
 See [Unified LAN administration](docs/DESK_UI.md) for behavior and rollback.
+
+## Cloud OAuth recovery
+
+See [Cloud OAuth recovery](docs/CLOUD_OAUTH.md) for rejected refresh tokens,
+original-client reauthorization and credential-only serial recovery. Cached
+configuration and ready HTTP services do not imply successful Cloud sync.
