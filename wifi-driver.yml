@@ -1,0 +1,9 @@
+---
+- name: Manage the tested Desk Box WLAN override one node at a time
+  hosts: deskboxes
+  become: true
+  gather_facts: false
+  serial: 1
+  any_errors_fatal: true
+  tags: [wifi-driver]
+  roles: [desk_wifi_driver]

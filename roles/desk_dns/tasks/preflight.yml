@@ -1,4 +1,9 @@
 ---
+- name: Require the reviewed WLAN driver before movable VIP activation
+  ansible.builtin.include_role:
+    name: desk_wifi_driver
+    tasks_from: verify
+
 - name: Require full symmetric membership and supported operating system
   ansible.builtin.assert:
     that:

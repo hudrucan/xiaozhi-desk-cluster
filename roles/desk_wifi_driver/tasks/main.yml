@@ -1,0 +1,119 @@
+---
+- name: Require the reviewed artifact and activation policy
+  ansible.builtin.assert:
+    that:
+      - desk_wifi_driver_kernel == '6.1.174-rk35xx-ophub'
+      - desk_wifi_driver_sha256 == '84438521b1ea754c6b43a37276e567b266781290ac7444c0b49f9e3b6a4b0682'
+      - desk_wifi_driver_url == 'https://github.com/hudrucan/xiaozhi-desk-box/releases/download/deskbox-aic8800-vip-6.1.174-v1/aic8800_sdio_wlan.ko'
+      - desk_wifi_driver_reboot is boolean
+      - desk_wifi_driver_cache == '/var/cache/desk-wifi-driver/' + desk_wifi_driver_sha256 + '.ko'
+      - desk_wifi_driver_override == '/lib/modules/' + desk_wifi_driver_kernel + '/updates/deskbox/aic8800_sdio_wlan.ko'
+
+- name: Inspect kernel, board, stock module and live WLAN without mutation
+  ansible.builtin.command:
+    argv: [/usr/bin/python3, '-c', "{{ lookup('ansible.builtin.file', role_path + '/files/wifi-driver.py') }}", inspect, --management, "{{ ansible_host }}"]
+    stdin: "{{ lookup('ansible.builtin.file', role_path + '/files/driver-manifest.json') }}"
+  register: desk_wifi_driver_before
+  changed_when: false
+  check_mode: false
+
+- name: Require safe fresh-node activation before staging when reboot is requested
+  ansible.builtin.command:
+    argv: [/usr/bin/python3, '-c', "{{ lookup('ansible.builtin.file', role_path + '/files/wifi-driver.py') }}", can-reboot, --management, "{{ ansible_host }}"]
+    stdin: "{{ lookup('ansible.builtin.file', role_path + '/files/driver-manifest.json') }}"
+  changed_when: false
+  check_mode: false
+  when: desk_wifi_driver_reboot and not (desk_wifi_driver_before.stdout | from_json).runtime_ready
+
+- name: Manage the reviewed module during a real apply
+  when: not ansible_check_mode
+  block:
+    - name: Create root-owned artifact cache
+      ansible.builtin.file:
+        path: /var/cache/desk-wifi-driver
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Adopt the already verified deployed module without another download
+      ansible.builtin.copy:
+        src: "{{ desk_wifi_driver_override }}"
+        dest: "{{ desk_wifi_driver_cache }}"
+        remote_src: true
+        owner: root
+        group: root
+        mode: '0644'
+      when: (desk_wifi_driver_before.stdout | from_json).override_sha256 == desk_wifi_driver_sha256
+
+    - name: Fetch the immutable release artifact with SHA256 verification
+      ansible.builtin.get_url:
+        url: "{{ desk_wifi_driver_url }}"
+        dest: "{{ desk_wifi_driver_cache }}"
+        checksum: "sha256:{{ desk_wifi_driver_sha256 }}"
+        owner: root
+        group: root
+        mode: '0644'
+        timeout: 60
+      when: (desk_wifi_driver_before.stdout | from_json).override_sha256 != desk_wifi_driver_sha256
+
+    - name: Verify candidate ABI and identity before selecting it
+      ansible.builtin.command:
+        argv: [/usr/bin/python3, '-c', "{{ lookup('ansible.builtin.file', role_path + '/files/wifi-driver.py') }}", artifact, --path, "{{ desk_wifi_driver_cache }}"]
+        stdin: "{{ lookup('ansible.builtin.file', role_path + '/files/driver-manifest.json') }}"
+      changed_when: false
+
+    - name: Create only the external-module override directory
+      ansible.builtin.file:
+        path: "{{ desk_wifi_driver_override | dirname }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Install the matching override while preserving the stock module
+      ansible.builtin.copy:
+        src: "{{ desk_wifi_driver_cache }}"
+        dest: "{{ desk_wifi_driver_override }}"
+        remote_src: true
+        owner: root
+        group: root
+        mode: '0644'
+      register: desk_wifi_driver_install
+
+    - name: Update dependency selection only when necessary
+      ansible.builtin.command:
+        argv: [/usr/sbin/depmod, -a, "{{ desk_wifi_driver_kernel }}"]
+      changed_when: true
+      when: desk_wifi_driver_install.changed or not (desk_wifi_driver_before.stdout | from_json).selected_override
+
+    - name: Record public driver provenance under Ansible ownership
+      ansible.builtin.copy:
+        src: driver-manifest.json
+        dest: /etc/desk-wifi-driver.json
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Require explicit activation before proceeding to cluster services
+      ansible.builtin.assert:
+        that: (desk_wifi_driver_before.stdout | from_json).runtime_ready or desk_wifi_driver_reboot
+        fail_msg: Module staged, but stock is still running. On a fresh node rerun wifi-driver.yml with desk_wifi_driver_reboot=true. For a live cluster use the controlled HA reboot workflow, then rerun. No hot-reload is performed.
+
+    - name: Recheck fresh-node activation immediately before reboot
+      ansible.builtin.command:
+        argv: [/usr/bin/python3, '-c', "{{ lookup('ansible.builtin.file', role_path + '/files/wifi-driver.py') }}", can-reboot, --management, "{{ ansible_host }}"]
+        stdin: "{{ lookup('ansible.builtin.file', role_path + '/files/driver-manifest.json') }}"
+      changed_when: false
+      when: desk_wifi_driver_reboot and not (desk_wifi_driver_before.stdout | from_json).runtime_ready
+
+    - name: Activate only an explicitly authorized fresh-node module
+      ansible.builtin.reboot:
+        reboot_timeout: 240
+        connect_timeout: 5
+        post_reboot_delay: 5
+      when: desk_wifi_driver_reboot and not (desk_wifi_driver_before.stdout | from_json).runtime_ready
+
+- name: Verify activation without reloading or restarting any service
+  ansible.builtin.include_tasks: verify.yml
+  when: not ansible_check_mode or (desk_wifi_driver_before.stdout | from_json).runtime_ready

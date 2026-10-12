@@ -15,6 +15,14 @@ Host-specific private addressing remains authoritative in
 values. `group_vars/deskboxes.yml` retains the existing interface/connection
 settings and adds password references to Vault variables.
 
+## Wi-Fi driver and movable VIPs
+
+Ansible manages the reviewed AIC8800 WLAN module with DHCP-only ARP offload
+disabled. The original Armbian image and stock module are retained. `site.yml`
+applies `wifi-driver.yml` before cluster services; ingress and DNS VIP activation
+require the fixed module to be selected and running. Matching nodes are adopted
+without reboot or service restart. See [driver pins, activation and rollback](docs/DESK_WIFI_DRIVER.md).
+
 ## Core NATS
 
 All three nodes run **nats-server v2.15.0**, installed from the official

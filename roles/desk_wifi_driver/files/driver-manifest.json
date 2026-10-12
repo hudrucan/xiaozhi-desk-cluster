@@ -1,0 +1,12 @@
+{
+  "kernel_release": "6.1.174-rk35xx-ophub",
+  "driver_version": "6.4.3.0",
+  "source_repository": "unifreq/linux-6.1.y-rockchip",
+  "source_commit": "4884d3c6948f1fd461aff4441a147b5460d2551b",
+  "arp_offload": false,
+  "vermagic": "6.1.174-rk35xx-ophub SMP mod_unload aarch64",
+  "depends": "aic8800_sdio_bsp,cfg80211",
+  "module_sha256": "84438521b1ea754c6b43a37276e567b266781290ac7444c0b49f9e3b6a4b0682",
+  "headers_sha256": "04284da4767608d1183d0077c11926052f9304df859fcabf09ec25a087a3527d",
+  "kernel_archive_sha256": "005fce27ee3bd2aad619bfe9a4f5ef80a84bf01a374af05e7449a2f4eb55bd10"
+}

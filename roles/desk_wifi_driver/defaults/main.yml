@@ -1,0 +1,8 @@
+---
+desk_wifi_driver_kernel: 6.1.174-rk35xx-ophub
+desk_wifi_driver_sha256: 84438521b1ea754c6b43a37276e567b266781290ac7444c0b49f9e3b6a4b0682
+desk_wifi_driver_url: https://github.com/hudrucan/xiaozhi-desk-box/releases/download/deskbox-aic8800-vip-6.1.174-v1/aic8800_sdio_wlan.ko
+# Opt-in activation for an unconfigured box only. Current live nodes already match.
+desk_wifi_driver_reboot: false
+desk_wifi_driver_cache: "/var/cache/desk-wifi-driver/{{ desk_wifi_driver_sha256 }}.ko"
+desk_wifi_driver_override: "/lib/modules/{{ desk_wifi_driver_kernel }}/updates/deskbox/aic8800_sdio_wlan.ko"

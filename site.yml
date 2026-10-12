@@ -12,6 +12,11 @@
     - network
     - access
 
+# Select the reviewed Wi-Fi module before any cluster VIP can be activated.
+- name: Manage the Desk Box Wi-Fi driver
+  ansible.builtin.import_playbook: wifi-driver.yml
+  tags: [wifi-driver]
+
 - name: Harden Desk Cluster SSH
   hosts: deskboxes
   become: true

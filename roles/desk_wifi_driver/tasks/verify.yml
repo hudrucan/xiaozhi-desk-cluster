@@ -1,0 +1,7 @@
+---
+- name: Require the selected and running VIP-capable WLAN module
+  ansible.builtin.command:
+    argv: [/usr/bin/python3, '-c', "{{ lookup('ansible.builtin.file', role_path + '/files/wifi-driver.py') }}", verify, --management, "{{ ansible_host }}"]
+    stdin: "{{ lookup('ansible.builtin.file', role_path + '/files/driver-manifest.json') }}"
+  changed_when: false
+  check_mode: false
