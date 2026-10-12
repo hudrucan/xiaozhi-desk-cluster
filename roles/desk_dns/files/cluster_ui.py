@@ -19,6 +19,9 @@ if not path.exists(): path=Path(__file__).with_name('desk_dns_sync.py')
 spec=importlib.util.spec_from_file_location('dns_public_write_contract',path)
 contract=importlib.util.module_from_spec(spec);spec.loader.exec_module(contract)
 
+# AdGuard uses POST for these reads/validations; none change shared policy.
+NATIVE_READ_OPERATIONS = {('POST', 'version.json'), ('POST', 'test_upstream_dns'),
+                          ('POST', 'tls/validate'), ('GET', 'filtering/check_host')}
 FILTER_WRITES = {'filtering/config', 'filtering/add_url', 'filtering/remove_url',
                  'filtering/set_url', 'filtering/set_rules', 'filtering/refresh'}
 LIMIT = 4 * 1024 * 1024
@@ -249,9 +252,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if parts.path.startswith('/desk-observe/policy/') and self.command=='POST':
                 result=self.server.policy(parts.path.removeprefix('/desk-observe/policy/'),json.loads(body or b'{}'))
                 return self.answer(200,result)
-            if parts.path.startswith('/desk-observe/ui/') and self.command=='GET':
+            if parts.path.startswith('/desk-observe/ui/') and (self.command=='GET' or
+                    (self.command,parts.path.removeprefix('/desk-observe/ui/control/')) in NATIVE_READ_OPERATIONS):
                 target=parts.path.removeprefix('/desk-observe/ui')+('?' +parts.query if parts.query else '')
-                data,mime,node=self.server.native_local(target)
+                data,mime,node=self.server.native_local(target,self.command,body)
                 return self.answer(200,data,[n for n in self.server.config['nodes'] if n!=node],mime)
             if internal and not peer: return self.answer(404,{'error':'route_not_allowed'})
             if route=='policy-wait.js' and not peer and self.command=='GET':
@@ -289,7 +293,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if not aggregated:
                 # Safe native read/test routes. Unsupported writes cannot bypass
                 # shared validation or modify the protected transport configuration.
-                if self.command!='GET' and route not in ('test_upstream_dns', 'filtering/check_host'):
+                if self.command!='GET' and operation not in NATIVE_READ_OPERATIONS:
                     return self.answer(405,{'error':'unsupported_shared_write'})
                 data,mime,node=self.server.native(self.path,self.command,body)
                 if parts.path=='/' and 'text/html' in mime:

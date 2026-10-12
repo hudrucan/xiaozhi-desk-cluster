@@ -19,6 +19,39 @@ class BoundaryTests(unittest.TestCase):
   c.request(method,path,None if body is None else json.dumps(body),{'Authorization':auth} if auth else {})
   response=c.getresponse();data=response.read();headers=dict(response.getheaders());status=response.status;c.close()
   return status,data,headers
+ def test_dashboard_post_version_read_keeps_body_and_does_not_enter_policy_writer(self):
+  body={'recheck_now':False}
+  with patch.object(self.server,'native',return_value=(b'{}','application/json','node1')) as native,patch.object(self.server,'policy') as policy:
+   status,data,headers=self.request('/control/version.json','POST',body)
+  self.assertEqual(status,200);self.assertEqual(json.loads(data),{})
+  self.assertEqual(native.call_args.args,('/control/version.json','POST',json.dumps(body).encode()))
+  policy.assert_not_called()
+ def test_diagnostic_post_reads_are_allowed_but_upgrade_and_wrong_methods_are_not(self):
+  with patch.object(self.server,'native',return_value=(b'{}','application/json','node1')) as native:
+   for route in ('version.json','test_upstream_dns','tls/validate'):
+    self.assertEqual(self.request('/control/'+route,'POST',{})[0],200)
+   native.reset_mock()
+   for route,method in [('update','POST'),('version.json','PUT'),('filtering/check_host','POST')]:
+    self.assertEqual(self.request('/control/'+route,method,{})[0],405)
+   native.assert_not_called()
+ def test_authenticated_peer_can_serve_post_version_read_when_owner_native_is_unavailable(self):
+  body={'recheck_now':False}
+  with patch.object(self.server,'native_local',return_value=(b'{}','application/json','node1')) as native:
+   self.assertEqual(self.request('/desk-observe/ui/control/version.json','POST',body)[0],401)
+   self.assertEqual(self.request('/desk-observe/ui/control/version.json','POST',body,auth='Basic fixture')[0],200)
+   self.assertEqual(native.call_args.args,('/control/version.json','POST',json.dumps(body).encode()))
+   native.reset_mock()
+   self.assertEqual(self.request('/desk-observe/ui/control/update','POST',{},auth='Basic fixture')[0],404)
+   native.assert_not_called()
+ def test_post_version_read_can_fallback_to_a_native_peer(self):
+  opener=Mock();data=io.BytesIO(b'{}');data.headers={'Content-Type':'application/json'};opener.open.return_value=data
+  body=b'{"recheck_now":false}'
+  with patch.object(self.server,'native_local',side_effect=ConnectionRefusedError),patch.object(m.urllib.request,'build_opener',return_value=opener):
+   value,mime,node=self.server.native('/control/version.json','POST',body)
+  self.assertEqual((value,mime,node),(b'{}','application/json','node2'))
+  request=opener.open.call_args.args[0]
+  self.assertEqual(request.method,'POST');self.assertEqual(request.data,body)
+  self.assertTrue(request.full_url.endswith('/desk-observe/ui/control/version.json'))
  def test_reserved_rewrite_and_host_local_dns_save_do_not_reach_native_or_policy(self):
   with patch.object(self.server,'policy') as policy,patch.object(self.server,'native') as native:
    for path,method,body in [('/control/rewrite/settings/update','PUT',{'enabled':False}),('/control/rewrite/delete','POST',{'domain':'who.desk-dns.test','answer':'any'}),('/control/dns_config','POST',{'port':53})]:

@@ -538,3 +538,10 @@ saves succeeded. All three installed helper hashes matched the tested source,
 and both encrypted journal mtimes/sizes remained unchanged during an idle
 observation. This is a short IO observation, not a stress benchmark. No modem or
 firmware changes were made.
+
+
+Dashboard compatibility: AdGuard uses POST for the read-only `version.json`
+check. The UI boundary forwards that request, upstream tests and TLS validation
+with their native method/body; authenticated native peer fallback supports the
+same diagnostic operations. They do not enter the shared policy writer.
+The native binary upgrade endpoint remains outside this configuration boundary.
