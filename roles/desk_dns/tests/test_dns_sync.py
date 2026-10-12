@@ -142,6 +142,16 @@ class BoundaryTests(unittest.TestCase):
             self.assertEqual(self.request('/control/update', 'POST', {})[0], 405)
             upstream.assert_not_called()
 
+    def test_filter_native_rejection_keeps_status_without_echoing_error_body(self):
+        for code in (400,429,502):
+            error=urllib.error.HTTPError('http://local',code,'secret upstream error',{},None)
+            with patch.object(sync,'filter_write',side_effect=error):
+                status,value=self.request('/desk-sync/filter/add_url','POST',{'url':'https://example.invalid/list'})
+                self.assertEqual(status,code)
+                self.assertEqual(value,{'error':'adguard_request_rejected'})
+        with patch.object(sync,'filter_write',side_effect=sync.MaintenanceBusy):
+            self.assertEqual(self.request('/desk-sync/filter/refresh','POST',{})[0],409)
+
     def test_source_is_read_only_and_requires_actual_vip_ownership(self):
         self.server.source = True  # Socket was already accepted locally; test the route boundary.
         with patch.object(sync, 'owns', return_value=True), patch.object(sync, 'fetch') as upstream:
@@ -173,6 +183,18 @@ class BoundaryTests(unittest.TestCase):
 
 
 class SessionTests(unittest.TestCase):
+    def test_plaintext_success_is_ignored_for_plain_mutation_contract(self):
+        import io
+        config={'adguard':'http://127.0.0.1:3001','local_auth':False,'username':'test','password':'test'}
+        class FakeOpener:
+            def open(self,request,timeout):return io.BytesIO(b'OK 100 rules\n')
+        with patch.object(sync.urllib.request,'build_opener',return_value=FakeOpener()):
+            self.assertIsNone(sync.fetch(config['adguard']+'/control/filtering/add_url',config,'POST',{},return_mutation=False))
+        class JsonOpener:
+            def open(self,request,timeout):return io.BytesIO(b'{"updated":3}')
+        with patch.object(sync.urllib.request,'build_opener',return_value=JsonOpener()):
+            self.assertEqual(sync.fetch(config['adguard']+'/control/filtering/refresh',config,'POST',{},return_mutation=True),{'updated':3})
+
     def test_anonymous_local_fetch_skips_login_and_keeps_peer_auth(self):
         import io
         config = {'adguard': 'http://127.0.0.1:3001', 'local_auth': False,

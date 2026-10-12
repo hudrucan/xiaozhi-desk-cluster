@@ -290,7 +290,7 @@ def filter_write(config, route, value):
     token = acquire_maintenance(config)
     try:
         result = fetch(config['adguard'] + '/control/' + route, config, WRITES[route],
-                       value, return_mutation=True, timeout=120)
+                       value, return_mutation=route == 'filtering/refresh', timeout=120)
         # Do not release if the update left its native DNS backend unresponsive.
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline:
@@ -471,6 +471,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self.answer(200, result)
         except MaintenanceBusy:
             self.answer(409, {'error': 'filter_maintenance_busy'})
+        except urllib.error.HTTPError as error:
+            # Native rejection is distinct from transport failure; never echo URLs.
+            error.close()
+            self.answer(error.code, {'error': 'adguard_request_rejected'})
         except (ValueError, KeyError, TypeError):
             self.answer(400, {'error': 'invalid_policy'})
         except Exception:

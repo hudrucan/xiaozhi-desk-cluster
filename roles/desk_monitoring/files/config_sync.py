@@ -280,6 +280,10 @@ def natural_key(collection, row, reverse):
         return row['email'].lower()
     if collection == 'systems':
         return row['host'], str(row['port'])
+    if collection == 'network_monitors':
+        return (reverse['systems'].get(row['system'], row['system']), row['target'], row['protocol'],
+                row.get('port', 0) if row['protocol'] == 'tcp' else 0,
+                row.get('server', '') if row['protocol'] == 'dns' else '')
     if collection in ('user_settings', 'fingerprints', 'universal_tokens'):
         field = 'system' if collection == 'fingerprints' else 'user'
         return reverse[RELATIONS[collection][field]].get(row[field], row[field])
@@ -307,7 +311,11 @@ def match_mapping(value, local, existing):
         reverse = {name: {v: k for k, v in rows.items()} for name, rows in mapping.items()}
         for identity, desired in value['collections'][collection].items():
             if identity in mapping[collection]:
-                continue
+                if collection != 'network_monitors' or any(row['id'] == mapping[collection][identity] for row in local[collection]):
+                    continue
+                # Beszel create/update hooks choose a config-derived native ID.
+                # Rebind a missing old ID before planning another create.
+
             wanted = natural_key(collection, desired, {n: {k: k for k in rows} for n, rows in value['collections'].items()})
             matches = [row['id'] for row in local[collection]
                        if wanted is not None and natural_key(collection, row, reverse) == wanted]
@@ -361,7 +369,8 @@ def validate_uniques(value):
         ('systems',lambda row:(row.get('host'),str(row.get('port','')))),
         ('user_settings',lambda row:row.get('user')),
         ('fingerprints',lambda row:row.get('system')),
-        ('universal_tokens',lambda row:row.get('user'))):
+        ('universal_tokens',lambda row:row.get('user')),
+        ('network_monitors',lambda row:natural_key('network_monitors',row,{'systems':{}}))):
         identities=[key(row) for row in rows[collection].values()]
         if len(identities)!=len(set(identities)):
             raise Failure(409,'Shared configuration contains a duplicate '+collection+' identity')
@@ -505,6 +514,15 @@ class Cluster:
             requests = plan_apply(value, state['applied_value'], mapping, local)
             if requests:
                 self.hub.request('/api/batch', 'POST', {'requests': requests})
+            # Native network-monitor hooks may rename records during the batch.
+            # Read their final IDs before publishing the mapping/applied revision.
+            if value['collections']['network_monitors']:
+                local['network_monitors'] = self.hub.records('network_monitors')
+                mapping = match_mapping(value, local, mapping)
+                native_ids = {row['id'] for row in local['network_monitors']}
+                if any(mapping['network_monitors'][key] not in native_ids
+                       for key in value['collections']['network_monitors']):
+                    raise Failure(503, 'Native network monitor identity is awaiting reconciliation')
             mapping={name:{identity:local_id for identity,local_id in rows.items() if identity in value['collections'][name]} for name,rows in mapping.items()}
             state.update(mapping=mapping, applied_revision=state['revision'], applied_value=copy.deepcopy(value))
             self.journal.save()
@@ -632,6 +650,10 @@ class Cluster:
                                  'min': body.get('min', 0), 'value': body['value']}
             return updated
         updated = mutation(value, collection, identity, method, body)
+        if collection == 'network_monitors' and method != 'DELETE':
+            row = updated['collections'][collection][identity]
+            if row.get('protocol') != 'tcp': row['port'] = 0
+            if row.get('protocol') != 'dns': row['server'] = ''
         if collection == '_superusers' and not any(row['email']==self.config.get('admin_email','admin@desk.cluster') for row in updated['collections']['_superusers'].values()):
             raise Failure(409,'Retain the Ansible-managed PocketBase administrator')
         if collection == 'users':

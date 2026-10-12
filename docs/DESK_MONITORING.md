@@ -196,6 +196,24 @@ checks and `git diff --check` passed. Runtime config helpers matched the tested
 source on all three nodes. Metrics never enter the encrypted config journal;
 there is no JetStream dependency.
 
+## Network-monitor record identity recovery
+
+Beszel 0.21.0 derives network-monitor record IDs from the native system ID and
+monitor configuration. Create hooks replace a supplied ID; changing the target,
+protocol, TCP port or DNS server can replace the native record. Shared identities
+remain stable, but each hub must remap to its final native ID after applying a
+batch. Missing mappings recover an existing monitor by its system/configuration
+before planning a create. Duplicate monitor configurations are rejected before
+commit, and irrelevant port/server fields follow Beszel's normalization.
+
+This fixes the Save failure where all hubs remained at applied revision 20 while
+revision 22 retried a duplicate create, making every monitoring backend unready.
+The recovered revision applied with zero native record changes on all three hubs;
+subsequent live edits converged to revision 24. A same-value network-monitor Save
+through each VIP-selected hub returned HTTP 200 and coverage 3/3. Regression tests
+cover native ID changes during create/update, deletion, missing-ID recovery and
+duplicate rejection. Retained administrator passwords were not changed.
+
 ## Removal
 
 Keep the ignored credentials/data if rollback may be required. Set the inventory

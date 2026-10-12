@@ -46,6 +46,16 @@ class MaintenanceTests(unittest.TestCase):
             self.assertEqual(m.filter_write(self.config,'filtering/refresh',{'force':True}),{'updated':1})
             release.assert_called_once_with(self.config,'token')
 
+    def test_plain_text_mutations_do_not_require_json_but_refresh_preserves_json(self):
+        for route,value,json_reply in (
+            ('filtering/add_url',{'url':'https://example.invalid/list','name':'Test','whitelist':False},False),
+            ('filtering/remove_url',{'url':'https://example.invalid/list','whitelist':False},False),
+            ('filtering/refresh',{'whitelist':False},True)):
+            with patch.object(m,'acquire_maintenance',return_value='token'),patch.object(m,'fetch',return_value=None) as fetch,patch.object(m,'native_ready',return_value=True),patch.object(m,'release_maintenance') as release:
+                m.filter_write(self.config,route,value)
+                self.assertEqual(fetch.call_args.kwargs['return_mutation'],json_reply)
+                release.assert_called_once_with(self.config,'token')
+
     def test_uncertain_timeout_retains_lease(self):
         with patch.object(m,'acquire_maintenance',return_value='token'),patch.object(m,'fetch',side_effect=TimeoutError),patch.object(m,'release_maintenance') as release:
             with self.assertRaises(TimeoutError):m.filter_write(self.config,'filtering/refresh',{})

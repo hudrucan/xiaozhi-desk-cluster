@@ -39,6 +39,11 @@ class Hub:
     if request['method']=='DELETE':self.rows[name].pop(identity,None);continue
     item=copy.deepcopy(request['body']);password=item.pop('password',None);item.pop('passwordConfirm',None)
     if password:self.passwords[(name,identity)]=password
+    if name=='network_monitors':
+     # Reproduce Beszel's native create/update hook changing the supplied ID.
+     complete={**self.rows[name].get(identity,{}),**item}
+     native=__import__('hashlib').sha256((complete['system']+complete['target']+complete['protocol']+str(complete.get('port',0))+complete.get('server','')).encode()).hexdigest()[:8]
+     self.rows[name].pop(identity,None);identity=native
     self.rows[name][identity]={**self.rows[name].get(identity,{}),**item,'id':identity}
    return {'success':True}
   raise AssertionError(path)
@@ -163,6 +168,33 @@ class ConfigTests(unittest.TestCase):
   value=seed();value['collections']['alerts']['eeeeeeeeeeeeeee']={'user':'aaaaaaaaaaaaaaa','system':'ccccccccccccccc','name':'CPU','min':5,'value':80}
   updated=m.mutation(value,'systems','ccccccccccccccc','DELETE',{})
   self.assertEqual(updated['collections']['alerts'],{});self.assertEqual(updated['collections']['systems'],{})
+ def test_native_monitor_hook_ids_are_mapped_after_create_update_and_delete(self):
+  cluster=self.nodes['node1'];key='eeeeeeeeee'
+  intent={'collection':'network_monitors','method':'POST','identity':key,'body':{'system':'ccccccccccccccc','target':'example.invalid','protocol':'icmp','port':443,'server':'unused','interval':60,'enabled':False}}
+  _,ready=cluster.submit(intent);self.assertEqual(len(ready),3)
+  original={name:node.journal.state['mapping']['network_monitors'][key] for name,node in self.nodes.items()}
+  for name,node in self.nodes.items():
+   local_id=original[name];self.assertEqual(len(local_id),8);self.assertIn(local_id,node.hub.rows['network_monitors'])
+   row=node.journal.state['value']['collections']['network_monitors'][key];self.assertEqual(row['port'],0);self.assertEqual(row['server'],'')
+  _,ready=self.nodes['node2'].submit({'collection':'network_monitors','method':'PATCH','identity':key,'body':{'target':'changed.invalid'}})
+  self.assertEqual(len(ready),3)
+  for name,node in self.nodes.items():
+   local_id=node.journal.state['mapping']['network_monitors'][key];self.assertNotEqual(local_id,original[name]);self.assertNotIn(original[name],node.hub.rows['network_monitors']);self.assertIn(local_id,node.hub.rows['network_monitors'])
+  self.nodes['node3'].submit({'collection':'network_monitors','method':'DELETE','identity':key,'body':{}})
+  for node in self.nodes.values():self.assertEqual(node.hub.rows['network_monitors'],{});self.assertEqual(node.journal.state['mapping']['network_monitors'],{})
+ def test_missing_monitor_mapping_recovers_existing_native_record_without_recreate(self):
+  cluster=self.nodes['node1'];value=copy.deepcopy(cluster.journal.state['value']);key='eeeeeeeeee'
+  row={'system':'ccccccccccccccc','target':'example.invalid','protocol':'dns','port':0,'server':'1.1.1.1','interval':60,'enabled':False}
+  value['collections']['network_monitors'][key]=row
+  local={name:cluster.hub.records(name) for name in m.COLLECTIONS};mapping=copy.deepcopy(cluster.journal.state['mapping']);mapping['network_monitors'][key]=key
+  local['network_monitors']=[{'id':'12345678',**m.translate_refs('network_monitors',row,mapping)}]
+  rebound=m.match_mapping(value,local,mapping);self.assertEqual(rebound['network_monitors'][key],'12345678')
+  self.assertEqual(m.plan_apply(value,value,rebound,local),[])
+ def test_duplicate_monitor_configuration_is_rejected_before_commit(self):
+  cluster=self.nodes['node1'];body={'system':'ccccccccccccccc','target':'example.invalid','protocol':'icmp','interval':60,'enabled':False}
+  cluster.submit({'collection':'network_monitors','method':'POST','identity':'eeeeeeeeee','body':body})
+  with self.assertRaises(m.Failure) as error:cluster.submit({'collection':'network_monitors','method':'POST','identity':'ffffffffff','body':body})
+  self.assertEqual(error.exception.code,409)
  def test_network_monitor_server_is_plain_text_not_a_system_relation(self):
   value=m.translate_refs('network_monitors',{'system':'ccccccccccccccc','server':'dns.example.net'},self.nodes['node1'].journal.state['mapping'])
   self.assertEqual(value['server'],'dns.example.net')

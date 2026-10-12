@@ -451,3 +451,29 @@ forwarding.
 The plain-DNS packet observer remains available for the disabled identity mode.
 IPv6 DNS shares the existing DNS VIP election; see `DESK_DNS_IPV6.md`. It is
 deployed on all three nodes; no modem change is made by Ansible.
+
+## Filter mutation response handling (2026-10-12)
+
+AdGuard filter mutations do not all share the same response format. Add/remove,
+set URL/config/rules can return plain text or an empty HTTP 200 response; refresh
+returns JSON with its update count. The serial maintenance boundary ignores bodies
+for the plain/empty contracts, parses JSON only for refresh, and releases the lease
+after native backend health passes. This prevents a successful deletion from being
+reported as HTTP 400 during response parsing and retaining an unnecessary lease.
+Native HTTP errors retain their status through the boundary instead of becoming
+generic HTTP 503; response bodies with possibly private URLs are not forwarded.
+
+Restarting the maintenance coordinator retains its existing 180-second startup
+cooldown, allowing any previous update lease to expire before another backend can
+start a rebuild. DNS forwarding and filtering remain active during this window.
+An update during maintenance/cooldown returns HTTP 409, distinct from a backend or
+transport failure. The response fix restarts only the sync/API agent, leaving
+AdGuard, dnsdist, VIP processes and existing lists unchanged. Fake API regressions
+cover add/remove/refresh contracts and native HTTP 400/429/502 propagation.
+
+After the startup cooldown, a real request through `186/dns/control/filtering/refresh`
+with the confirmed-empty whitelist returned HTTP 200 and `updated: 0`. Existing
+filter lists and their metadata were identical before/after. All three native DNS
+backends were healthy, with both replicas synced to the current DNS VIP owner.
+This checks the live maintenance/refresh transport without downloading or replacing
+active lists; live add/delete of the user's lists was not performed by the agent.
