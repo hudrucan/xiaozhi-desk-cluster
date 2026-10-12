@@ -12,6 +12,10 @@
       loop:
         - {src: /etc/desk-dns/keepalived.conf, dest: /etc/desk-dns/pre-ipv6-keepalived.conf}
         - {src: /etc/systemd/system/desk-dns-vip.service, dest: /etc/desk-dns/pre-ipv6-vip.service}
+    - name: Install native readiness probes before referencing them in VRRP
+      ansible.builtin.include_role:
+        name: desk_healthcheck
+
     - name: Validate IPv6 attached to the existing IPv4 VRRP election
       ansible.builtin.template:
         src: keepalived.conf.j2

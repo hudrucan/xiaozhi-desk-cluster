@@ -12,6 +12,10 @@
       loop: "{{ groups['desk_dns'] | sort }}"
       changed_when: false
 
+    - name: Install native readiness probes before referencing them in VRRP
+      ansible.builtin.include_role:
+        name: desk_healthcheck
+
     - name: Validate independent Keepalived candidate without starting it
       ansible.builtin.template:
         src: keepalived.conf.j2

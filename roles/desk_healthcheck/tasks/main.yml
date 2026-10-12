@@ -1,0 +1,41 @@
+---
+- name: Build and install native probes only when enabled in a real deployment
+  when: desk_healthcheck_native_enabled | default(false) | bool and not ansible_check_mode
+  block:
+    - name: Require the existing Debian ARM64 runtime
+      ansible.builtin.assert:
+        that:
+          - ansible_facts.os_family == 'Debian'
+          - ansible_facts.architecture in ['aarch64', 'arm64']
+    - name: Resolve the source-addressed controller artifact
+      ansible.builtin.set_fact:
+        desk_healthcheck_artifact: "/private/tmp/desk-healthcheck-build/{{ lookup('ansible.builtin.file', role_path + '/files/healthcheck.go') | hash('sha256') }}/desk-healthcheck"
+    - name: Create the controller build cache outside Git
+      ansible.builtin.file:
+        path: "{{ desk_healthcheck_artifact | dirname }}"
+        state: directory
+        mode: '0755'
+      delegate_to: localhost
+      become: false
+      run_once: true
+    - name: Build the dependency-free ARM64 helper on the controller
+      ansible.builtin.command:
+        argv: [go, build, -trimpath, -ldflags, '-s -w -buildid=', -o, "{{ desk_healthcheck_artifact }}", "{{ role_path }}/files/healthcheck.go"]
+        creates: "{{ desk_healthcheck_artifact }}"
+      environment:
+        GOOS: linux
+        GOARCH: arm64
+        CGO_ENABLED: '0'
+        GO111MODULE: 'off'
+        GOCACHE: /private/tmp/desk-healthcheck-go-cache
+        GOTOOLCHAIN: local
+      delegate_to: localhost
+      become: false
+      run_once: true
+    - name: Install the root-owned native probe without touching running services
+      ansible.builtin.copy:
+        src: "{{ desk_healthcheck_artifact }}"
+        dest: /usr/local/libexec/desk-healthcheck
+        owner: root
+        group: root
+        mode: '0755'

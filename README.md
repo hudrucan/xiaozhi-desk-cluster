@@ -1249,6 +1249,12 @@ retain that referenced environment until it is replaced deliberately.
 See server `docs/cluster-conversation-idle.md` for focused tests and the physical
 idle/wake verification. Source restarts interrupt existing conversations.
 
+## Native recurring VIP healthchecks
+
+The existing cluster enables native probes for the Settings and DNS VIP elections.
+See [Desk healthchecks](docs/DESK_HEALTHCHECKS.md) for rollout, unchanged readiness
+conditions and measured idle CPU reduction. Full deployment verification stays in Python.
+
 ## Optional three-node DNS
 
 AdGuard Home + dnsdist with a separate DNS VIP (`192.168.1.250`) is available

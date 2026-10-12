@@ -1,0 +1,112 @@
+---
+# Change only readiness script commands; retain deployed elections, VIPs and timers.
+- name: Prepare native healthchecks on the complete existing cluster
+  hosts: deskboxes
+  become: true
+  gather_facts: true
+  any_errors_fatal: true
+  tasks:
+    - name: Require symmetric ingress and DNS membership
+      ansible.builtin.assert:
+        that:
+          - ansible_play_hosts_all | sort == ['deskb1x', 'deskb2x', 'deskb3x']
+          - groups['xiaozhi_ingress'] | sort == ansible_play_hosts_all | sort
+          - groups['desk_dns'] | sort == ansible_play_hosts_all | sort
+          - desk_healthcheck_native_enabled | bool
+    - name: Freeze existing services and VIP addresses before replacing probes
+      ansible.builtin.command:
+        argv: [/usr/bin/python3, '-c', "{{ lookup('ansible.builtin.file', playbook_dir + '/roles/desk_healthcheck/files/rollout_guard.py') }}", freeze]
+      register: desk_healthcheck_before
+      changed_when: false
+      check_mode: false
+    - ansible.builtin.include_role:
+        name: desk_healthcheck
+    - name: Require the native ingress and DNS probes to agree with live readiness
+      ansible.builtin.command:
+        argv: "{{ item }}"
+      loop:
+        - [/usr/local/libexec/desk-healthcheck, ingress, --socket, /run/xiaozhi-haproxy.sock, --nodes, 'deskb1x,deskb2x,deskb3x']
+        - [/usr/local/libexec/desk-healthcheck, dns, --host, "{{ ansible_host }}", --port, '5353']
+      changed_when: false
+      when: not ansible_check_mode
+    - name: Compare native preference with the existing DNS policy
+      ansible.builtin.command:
+        argv: [/usr/bin/python3, '-c', "{{ lookup('ansible.builtin.file', playbook_dir + '/roles/desk_healthcheck/files/rollout_guard.py') }}", compare]
+      changed_when: false
+      when: not ansible_check_mode
+
+- name: Reload each existing VIP process serially with the lighter probes
+  hosts: deskboxes
+  become: true
+  gather_facts: false
+  serial: 1
+  any_errors_fatal: true
+  tasks:
+    - name: Install only readiness script replacements with per-node rollback
+      when: not ansible_check_mode
+      block:
+        - name: Preserve the current DNS configuration for rollback
+          ansible.builtin.copy:
+            src: /etc/desk-dns/keepalived.conf
+            dest: /etc/desk-dns/pre-native-healthcheck.conf
+            remote_src: true
+            mode: '0600'
+          when: "'/usr/bin/python3 ' in (desk_healthcheck_before.stdout | from_json).configs['/etc/desk-dns/keepalived.conf']"
+        - name: Replace the recurring ingress Python process
+          ansible.builtin.replace:
+            path: /etc/keepalived/keepalived.conf
+            regexp: '^    script "/usr/local/libexec/xiaozhi-ingress-probe stats --socket /run/xiaozhi-haproxy.sock --nodes deskb1x deskb2x deskb3x"$'
+            replace: '    script "/usr/local/libexec/desk-healthcheck ingress --socket /run/xiaozhi-haproxy.sock --nodes deskb1x,deskb2x,deskb3x"'
+            backup: true
+            validate: /usr/sbin/keepalived --config-test -f %s
+          register: desk_healthcheck_ingress
+        - name: Replace the recurring DNS frontend probe
+          ansible.builtin.replace:
+            path: /etc/desk-dns/keepalived.conf
+            regexp: '^    script "/usr/bin/python3 /usr/local/libexec/desk-dns/dns-probe.py ready --config /etc/desk-dns/public.json --host ([0-9.]+) --port 5353"$'
+            replace: '    script "/usr/local/libexec/desk-healthcheck dns --host \1 --port 5353"'
+            validate: /usr/sbin/keepalived --config-test -f %s
+          register: desk_healthcheck_dns
+        - name: Replace the recurring Xiaozhi owner preference probe
+          ansible.builtin.replace:
+            path: /etc/desk-dns/keepalived.conf
+            regexp: '^    script "/usr/bin/python3 /usr/local/libexec/desk-dns/dns-probe.py prefer --config /etc/desk-dns/public.json"$'
+            replace: '    script "/usr/local/libexec/desk-healthcheck prefer --state /etc/xiaozhi-ingress.json"'
+            validate: /usr/sbin/keepalived --config-test -f %s
+          register: desk_healthcheck_prefer
+        - name: Require only the intended script commands to have changed
+          ansible.builtin.command:
+            argv: [/usr/bin/python3, '-c', "{{ lookup('ansible.builtin.file', playbook_dir + '/roles/desk_healthcheck/files/rollout_guard.py') }}", candidate]
+            stdin: "{{ desk_healthcheck_before.stdout }}"
+          changed_when: false
+        - name: Reload only changed active VIP processes without stopping them
+          ansible.builtin.command:
+            argv: [systemctl, kill, --kill-whom=main, --signal=HUP, "{{ item.unit }}"]
+          loop:
+            - {unit: keepalived, changed: "{{ desk_healthcheck_ingress.changed }}"}
+            - {unit: desk-dns-vip, changed: "{{ desk_healthcheck_dns.changed or desk_healthcheck_prefer.changed }}"}
+          when: item.changed | bool and (desk_healthcheck_before.stdout | from_json).units[item.unit].ActiveState == 'active'
+          changed_when: true
+        - name: Require stable VIP ownership and protected services after reload
+          ansible.builtin.command:
+            argv: [/usr/bin/python3, '-c', "{{ lookup('ansible.builtin.file', playbook_dir + '/roles/desk_healthcheck/files/rollout_guard.py') }}", guard]
+            stdin: "{{ desk_healthcheck_before.stdout }}"
+          register: desk_healthcheck_guard
+          until: desk_healthcheck_guard.rc == 0
+          retries: 5
+          delay: 2
+          changed_when: false
+      rescue:
+        - name: Restore exactly the configuration captured before this attempt
+          ansible.builtin.copy:
+            content: "{{ (desk_healthcheck_before.stdout | from_json).configs[item] }}"
+            dest: "{{ item }}"
+            mode: '0644'
+          loop: [/etc/keepalived/keepalived.conf, /etc/desk-dns/keepalived.conf]
+        - name: Reload active processes to recover their original probes
+          ansible.builtin.command:
+            argv: [systemctl, kill, --kill-whom=main, --signal=HUP, "{{ item }}"]
+          loop: [keepalived, desk-dns-vip]
+          when: (desk_healthcheck_before.stdout | from_json).units[item].ActiveState == 'active'
+        - ansible.builtin.fail:
+            msg: Native healthcheck rollout failed; this node's original probes restored.

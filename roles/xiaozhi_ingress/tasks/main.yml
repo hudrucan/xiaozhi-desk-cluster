@@ -98,6 +98,10 @@
     - name: Require HAProxy to reach all three healthy private backends
       ansible.builtin.include_tasks: verify_backends.yml
 
+    - name: Install native readiness probes before referencing them in VRRP
+      ansible.builtin.include_role:
+        name: desk_healthcheck
+
     - name: Validate and install the Keepalived candidate
       ansible.builtin.template:
         src: keepalived.conf.j2

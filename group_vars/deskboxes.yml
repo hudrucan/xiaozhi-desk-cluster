@@ -25,3 +25,6 @@ desk_dns_serialized_updates: true
 # Shared Beszel config; this source seeds once and is not a permanent leader.
 desk_monitoring_sync_enabled: true
 desk_monitoring_sync_source: deskb1x
+
+# Native readiness probes retain the existing checks and VRRP timing.
+desk_healthcheck_native_enabled: true

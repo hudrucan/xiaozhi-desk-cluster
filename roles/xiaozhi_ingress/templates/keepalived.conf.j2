@@ -6,7 +6,11 @@ global_defs {
 }
 
 vrrp_script xiaozhi_haproxy_ready {
+{% if desk_healthcheck_native_enabled | default(false) %}
+    script "/usr/local/libexec/desk-healthcheck ingress --socket {{ xiaozhi_ingress_stats_socket }} --nodes {{ groups['xiaozhi_ingress'] | sort | join(',') }}"
+{% else %}
     script "{{ xiaozhi_ingress_probe }} stats --socket {{ xiaozhi_ingress_stats_socket }} --nodes {{ groups['xiaozhi_ingress'] | sort | join(' ') }}"
+{% endif %}
     interval 2
     timeout 3
     fall 2
