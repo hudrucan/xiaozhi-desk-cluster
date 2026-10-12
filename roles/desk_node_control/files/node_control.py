@@ -94,13 +94,13 @@ class Control:
         self.nonces = {}
         self.cached_health = (0, None)
         self.opener = build_opener(ProxyHandler({}))
-        self.state = {'lease': None, 'executed': None}
+        self.state = {'lease': None, 'executed': None, 'completed': None}
         if self.path.exists():
             try:
                 value = json.loads(self.path.read_text())
-                if set(value) != set(self.state):
+                if not isinstance(value,dict) or not {'lease','executed'} <= set(value) <= set(self.state):
                     raise ValueError()
-                self.state = value
+                self.state.update(value)
             except (OSError, ValueError, TypeError):
                 raise RuntimeError('Node control state needs review') from None
         self.reboot = reboot or self.system_reboot
@@ -270,10 +270,26 @@ class Control:
         if path == '/peer/state':
             if value != {}: raise Failure(400, 'Invalid state request')
             with self.lock: lease = self.state['lease']
-            return {**self.health(), 'lease': lease}
+            return {**self.health(), 'lease': lease, 'completed': self.state['completed']}
         if path == '/peer/confirm':
             if set(value) != {'token'}: raise Failure(400, 'Invalid confirmation')
             return self.confirm(value['token'])
+        if path == '/peer/complete':
+            if set(value) != {'id'}: raise Failure(400, 'Invalid completion')
+            with self.lock:
+                if self.state['completed'] and self.state['completed']['id'] == value['id']:
+                    return {'completed': True}
+                lease = self.state['lease'] or self.state['executed']
+                if lease is None or lease['id'] != value['id']:
+                    raise Failure(409, 'Unknown completed operation')
+                # Keep the result after releasing the lock so every observer can
+                # see Rejoined, including a browser that was briefly hidden.
+                self.state['completed'] = {**lease, 'state':'rejoined',
+                    'finished':int(time.time()), 'expires':int(time.time())+3600}
+                if self.state['lease'] and self.state['lease']['id'] == value['id']:
+                    self.state['lease'] = None
+                self.save()
+            return {'completed': True}
         if path == '/peer/release':
             if set(value) != {'id'}: raise Failure(400, 'Invalid release')
             with self.lock:
@@ -322,7 +338,13 @@ class Control:
     def status(self):
         views = self.views()
         leases = [v['lease'] for v in views.values() if v.get('lease')]
-        if not leases: return {'protocol': PROTOCOL, 'operation': None}
+        if not leases:
+            completed = [v['completed'] for v in views.values() if v.get('completed')
+                         and v['completed']['expires'] > time.time()]
+            if not completed: return {'protocol': PROTOCOL, 'operation': None}
+            result = max(completed,key=lambda value:value['finished'])
+            return {'protocol':PROTOCOL, 'operation':{k:result[k] for k in
+                ('id','node','state','started','expires','finished')}}
         active_leases = [v for v in leases if v['expires'] > time.time()]
         lease = min(active_leases or leases, key=lambda v: v['started'])
         target = views.get(lease['node'], {})
@@ -335,9 +357,8 @@ class Control:
         if time.time() - lease['started'] > 300 and state != 'rejoined': state = 'needs_attention'
         if state == 'rejoined':
             for node in self.members:
-                if node != lease['node']:
-                    try: self.peer(node, '/peer/release', {'id': lease['id']})
-                    except Failure: pass
+                try: self.peer(node, '/peer/complete', {'id': lease['id']})
+                except Failure: pass
         return {'protocol': PROTOCOL, 'operation': {'id': lease['id'], 'node': lease['node'],
             'state': state, 'started': lease['started'], 'expires': lease['expires']}}
 

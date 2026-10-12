@@ -113,7 +113,8 @@ NATS routes and an actual DNS backend health answer are required on all three
 nodes before confirmation. Recovery reports accepted/offline/starting/rejoined,
 with needs-attention after five minutes if boot/services are not confirmed. It
 requires a new boot ID and all service/config checks. Successful recovery releases
-the survivor leases. Expired leases do not permit another reboot unless all three
+the survivor leases and retains a small completed result for one hour on the
+peers, so a second tab cannot consume the only recovery notification. Expired leases do not permit another reboot unless all three
 nodes are healthy again and the user confirms a new operation. Small operation
 state files are written only for explicit actions; no JetStream or metrics history.
 

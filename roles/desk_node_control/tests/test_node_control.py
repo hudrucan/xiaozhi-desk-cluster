@@ -90,6 +90,10 @@ class ControlTests(unittest.TestCase):
         self.assertEqual(self.controls['deskb2x'].status()['operation']['state'],'rejoined')
         self.assertIsNone(self.controls['deskb1x'].active())
         self.assertIsNone(self.controls['deskb2x'].active())
+        # Another browser/observer must still see completion after lock release.
+        self.assertEqual(self.controls['deskb1x'].status()['operation']['state'],'rejoined')
+        restored = nc.Control(self.controls['deskb2x'].config,self.controls['deskb2x'].path,reboot=Mock())
+        self.assertEqual(restored.state['completed']['state'],'rejoined')
 
     def test_failed_second_lease_never_executes_and_releases_own_partial_lock(self):
         token = self.challenge()
