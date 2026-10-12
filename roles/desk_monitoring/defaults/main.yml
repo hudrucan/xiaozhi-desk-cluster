@@ -5,3 +5,27 @@ desk_monitoring_agent_sha256: 82804205a370a790679e836c3c3d658bc804205517e1c3f676
 desk_monitoring_hub_port: 8090
 desk_monitoring_agent_port: 45876
 desk_monitoring_auto_login_email: ""
+
+# Configuration is replicated only when explicitly enabled; metrics stay local.
+desk_monitoring_sync_enabled: false
+desk_monitoring_sync_source: ""
+desk_monitoring_proxy_port: 8091
+desk_monitoring_config_port: 8092
+desk_monitoring_peer_port: 8094
+desk_monitoring_crypto_directory: /opt/desk-monitoring-sync/46.0.3/vendor
+desk_monitoring_crypto_wheels:
+  - name: cryptography
+    filename: cryptography-46.0.3.whl
+    marker: cryptography-46.0.3.dist-info/METADATA
+    sha256: 6eae65d4c3d33da080cff9c4ab1f711b15c1d9760809dad6ea763f3812d254cb
+    url: https://files.pythonhosted.org/packages/4b/0a/863a3604112174c8624a2ac3c038662d9e59970c7f926acdcfaed8d61142/cryptography-46.0.3-cp311-abi3-manylinux_2_28_aarch64.whl
+  - name: cffi
+    filename: cffi-2.0.0.whl
+    marker: cffi-2.0.0.dist-info/METADATA
+    sha256: 730cacb21e1bdff3ce90babf007d0a0917cc3e6492f336c2f0134101e0944f93
+    url: https://files.pythonhosted.org/packages/b8/56/6033f5e86e8cc9bb629f0077ba71679508bdf54a9a5e112a3c0b91870332/cffi-2.0.0-cp311-cp311-manylinux2014_aarch64.manylinux_2_17_aarch64.whl
+  - name: pycparser
+    filename: pycparser-2.23.whl
+    marker: pycparser-2.23.dist-info/METADATA
+    sha256: e5c6e8d3fbad53479cab09ac03729e0a9faf2bee3db8208a550daf5af81a5934
+    url: https://files.pythonhosted.org/packages/a0/e3/59cd50310fc9b59512193629e1984c1f95e5c8ae6e5d8c69532ccc65a7fe/pycparser-2.23-py3-none-any.whl

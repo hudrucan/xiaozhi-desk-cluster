@@ -1,0 +1,31 @@
+global
+    maxconn 64
+    nbthread 1
+defaults
+    mode http
+    timeout connect 2s
+    timeout client 360s
+    timeout server 360s
+frontend monitor_private
+    bind {{ cluster_ip }}:{{ desk_monitoring_proxy_port }}
+    http-request deny unless { src {% for node in groups['desk_monitoring'] | sort %}{{ hostvars[node].cluster_ip }} {% endfor %}127.0.0.1 }
+    acl ephemeral path /api/realtime /api/beszel/test-notification /api/beszel/test-heartbeat /api/beszel/smart/refresh /api/beszel/zfs/refresh
+    acl auth_call path_reg ^/api/collections/(users|_superusers)/(auth-refresh|auth-with-password|auth-methods|request-otp|auth-with-otp|auth-with-oauth2)$
+    acl token_change urlp(enable) -m str 0 1
+    acl permanent_token urlp(permanent) -m str 1
+    acl token_delete urlp(enable) -m str 0
+    use_backend config_health if { path /api/health }
+    use_backend native_hub if ephemeral or auth_call or { path_beg /api/settings/test/ /api/backups }
+    use_backend config_writer if { path /api/beszel/universal-token } token_change permanent_token
+    use_backend config_writer if { path /api/beszel/universal-token } token_delete
+    use_backend config_writer if { method POST PATCH PUT DELETE }
+    use_backend config_writer if { path /api/desk-config/status }
+    default_backend native_hub
+backend native_hub
+    server local {{ cluster_ip }}:{{ desk_monitoring_hub_port }}
+backend config_writer
+    timeout server 180s
+    server local {{ cluster_ip }}:{{ desk_monitoring_config_port }}
+backend config_health
+    http-request set-path /health
+    server local {{ cluster_ip }}:{{ desk_monitoring_config_port }}

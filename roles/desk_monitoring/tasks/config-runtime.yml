@@ -1,0 +1,88 @@
+---
+- name: Require the installed native Beszel runtime and dedicated private ports
+  ansible.builtin.assert:
+    that:
+      - desk_monitoring_sync_enabled | bool
+      - desk_monitoring_version == '0.21.0'
+      - desk_monitoring_proxy_port == 8091
+      - desk_monitoring_config_port == 8092
+      - desk_monitoring_peer_port == 8094
+      - desk_monitoring_auto_login_email == 'admin@desk.cluster'
+
+- name: Check the native Python ABI before installing private crypto wheels
+  ansible.builtin.command:
+    argv: [/usr/bin/python3, '-c', 'import sys; assert sys.version_info[:2] == (3,11); print("Python 3.11 ABI ready")']
+  changed_when: false
+
+- name: Reject new ports owned by a different service
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/python3
+      - '-c'
+      - |
+        import re, subprocess
+        for port,unit in ((8091,'beszel-ui-proxy'),(8092,'beszel-config-sync'),(8094,'beszel-config-sync')):
+            pid=subprocess.check_output(['systemctl','show',unit,'--property=MainPID','--value'],text=True).strip()
+            rows=subprocess.check_output(['ss','-H','-ltnp','sport = :'+str(port)],text=True)
+            assert not rows.strip() or (pid!='0' and all(pid in re.findall(r'pid=(\d+)',r) for r in rows.splitlines())), 'Monitoring port collision'
+  changed_when: false
+
+- name: Create isolated dependency and private metadata directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: root
+    group: "{{ item.group | default('root') }}"
+    mode: "{{ item.mode | default('0755') }}"
+  loop:
+    - {path: /var/cache/desk-monitoring}
+    - {path: "{{ desk_monitoring_crypto_directory }}"}
+    - {path: /usr/local/libexec/desk-monitoring}
+    - {path: /etc/desk-monitoring/sync, group: beszel-hub, mode: '0750'}
+
+- name: Download checksum-pinned crypto wheels without changing system or Xiaozhi packages
+  ansible.builtin.get_url:
+    url: "{{ item.url }}"
+    dest: "/var/cache/desk-monitoring/{{ item.filename }}"
+    checksum: "sha256:{{ item.sha256 }}"
+    mode: '0644'
+  loop: "{{ desk_monitoring_crypto_wheels }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Unpack verified wheels into only the private Python path
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/python3
+      - '-c'
+      - 'import sys,zipfile; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])'
+      - "/var/cache/desk-monitoring/{{ item.filename }}"
+      - "{{ desk_monitoring_crypto_directory }}"
+    creates: "{{ desk_monitoring_crypto_directory }}/{{ item.marker }}"
+  loop: "{{ desk_monitoring_crypto_wheels }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Verify native crypto import in the isolated path
+  ansible.builtin.command:
+    argv: [/usr/bin/python3, '-c', 'from cryptography.fernet import Fernet; f=Fernet(Fernet.generate_key()); assert f.decrypt(f.encrypt(b"ready")) == b"ready"; print("Isolated crypto import ready")']
+  environment:
+    PYTHONPATH: "{{ desk_monitoring_crypto_directory }}"
+    PYTHONDONTWRITEBYTECODE: '1'
+  changed_when: false
+
+- name: Install small configuration and initial account helpers
+  ansible.builtin.copy:
+    src: "{{ item }}"
+    dest: "/usr/local/libexec/desk-monitoring/{{ item | replace('_','-') }}"
+    mode: '0755'
+  loop: [config_sync.py, config_seed.py]
+  register: desk_monitoring_config_scripts
+
+- name: Install separate bounded configuration units
+  ansible.builtin.template:
+    src: "{{ item }}.j2"
+    dest: "/etc/systemd/system/{{ item }}"
+    mode: '0644'
+  loop: [desk-monitorconfig.slice, beszel-config-sync.service, beszel-ui-proxy.service]
+  register: desk_monitoring_config_units

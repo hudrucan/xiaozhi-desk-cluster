@@ -1,0 +1,26 @@
+[Unit]
+Description=Private Beszel UI with shared configuration write boundary
+After=network-online.target beszel-hub.service beszel-config-sync.service
+Wants=beszel-hub.service beszel-config-sync.service
+[Service]
+User=beszel-hub
+Group=beszel-hub
+ExecStart=/usr/sbin/haproxy -db -f /etc/desk-monitoring/ui-proxy.cfg
+Restart=on-failure
+RestartSec=5
+Slice=desk-monitorconfig.slice
+MemoryMax=24M
+TasksMax=16
+Nice=10
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+CapabilityBoundingSet=
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_UNIX AF_INET
+[Install]
+WantedBy=multi-user.target

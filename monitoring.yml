@@ -1,5 +1,5 @@
 ---
-# Opt-in trial; never imported by site.yml. Histories/accounts are independent.
+# Opt-in monitoring; never imported by site.yml. Histories remain local.
 - name: Freeze the cluster before installing independent monitoring hubs
   hosts: desk_monitoring
   become: true
@@ -42,6 +42,42 @@
     - ansible.builtin.include_role:
         name: desk_monitoring
         tasks_from: agent
+- name: Prepare shared monitoring settings only when explicitly enabled
+  hosts: desk_monitoring
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  tasks:
+    - name: Require an explicit initial source before enabling shared settings
+      ansible.builtin.assert:
+        that: desk_monitoring_sync_source in groups['desk_monitoring']
+      when: desk_monitoring_sync_enabled | bool
+    - name: Prepare private config trust and encrypted seed without rotating existing secrets
+      ansible.builtin.command:
+        argv: ["{{ ansible_playbook_python }}", scripts/create-monitoring-sync-secret.py, --root, "{{ playbook_dir }}", --source, "{{ desk_monitoring_sync_source }}", --management, "{{ hostvars[desk_monitoring_sync_source].ansible_host }}", --admin-email, "{{ desk_monitoring_auto_login_email }}"]
+        chdir: "{{ playbook_dir }}"
+      delegate_to: localhost
+      become: false
+      run_once: true
+      register: desk_monitoring_shared_seed
+      changed_when: desk_monitoring_shared_seed.stdout == 'created'
+      when: desk_monitoring_sync_enabled | bool and not ansible_check_mode
+    - name: Load existing ignored config sync credentials without displaying them
+      ansible.builtin.set_fact:
+        desk_monitoring_sync_credentials: "{{ lookup('ansible.builtin.file', playbook_dir + '/secret/desk-monitoring-sync.json') | from_json }}"
+      no_log: true
+      when: desk_monitoring_sync_enabled | bool and not ansible_check_mode
+- name: Install shared settings serially before switching the monitoring frontend
+  hosts: desk_monitoring
+  become: true
+  gather_facts: false
+  serial: 1
+  any_errors_fatal: true
+  tasks:
+    - ansible.builtin.include_role:
+        name: desk_monitoring
+        tasks_from: config-sync
+      when: desk_monitoring_sync_enabled | bool
 - name: Expose monitoring behind the existing management frontend
   hosts: desk_monitoring
   become: true

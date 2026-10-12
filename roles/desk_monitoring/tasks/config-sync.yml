@@ -1,0 +1,129 @@
+---
+- name: Keep shared monitoring deployment explicitly outside check-mode mutations
+  when: not ansible_check_mode
+  block:
+    - ansible.builtin.include_tasks: config-runtime.yml
+
+    - name: Create the bounded encrypted configuration state directory
+      ansible.builtin.file:
+        path: /var/lib/desk-monitoring-config
+        state: directory
+        owner: beszel-hub
+        group: beszel-hub
+        mode: '0700'
+
+    - name: Install the pinned peer trust and encrypted initial snapshot
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/secret/{{ item.source }}"
+        dest: "{{ item.destination }}"
+        owner: root
+        group: beszel-hub
+        mode: "{{ item.mode }}"
+      loop:
+        - {source: desk-monitoring-sync.crt, destination: /etc/desk-monitoring/sync/peer.crt, mode: '0644'}
+        - {source: desk-monitoring-sync.key, destination: /etc/desk-monitoring/sync/peer.key, mode: '0640'}
+        - {source: desk-monitoring-seed.fernet, destination: /etc/desk-monitoring/sync/seed.fernet, mode: '0640'}
+      no_log: true
+      diff: false
+      register: desk_monitoring_config_trust
+
+    - name: Install protected replica membership and state paths without exposing credentials
+      ansible.builtin.copy:
+        content: "{{ {'node': inventory_hostname, 'members': desk_monitoring_nodes, 'key': desk_monitoring_sync_credentials.key, 'admin_email': desk_monitoring_auto_login_email, 'port': desk_monitoring_config_port, 'peer_port': desk_monitoring_peer_port, 'journal': '/var/lib/desk-monitoring-config/checkpoint.fernet', 'seed': '/etc/desk-monitoring/sync/seed.fernet', 'certificate': '/etc/desk-monitoring/sync/peer.crt', 'private_key': '/etc/desk-monitoring/sync/peer.key'} | to_nice_json }}\n"
+        dest: /etc/desk-monitoring/config-sync.json
+        owner: root
+        group: beszel-hub
+        mode: '0640'
+      no_log: true
+      diff: false
+      register: desk_monitoring_config_metadata
+
+    - name: Retain this hub's initial configuration in a small encrypted rollback snapshot
+      ansible.builtin.command:
+        argv: [/usr/bin/python3, /usr/local/libexec/desk-monitoring/config-seed.py, backup]
+      environment:
+        PYTHONPATH: "{{ desk_monitoring_crypto_directory }}"
+        PYTHONDONTWRITEBYTECODE: '1'
+      register: desk_monitoring_pre_sync_backup
+      changed_when: desk_monitoring_pre_sync_backup.stdout == 'changed'
+      no_log: true
+
+    - name: Check whether initial account hashes need alignment without exposing them
+      ansible.builtin.command:
+        argv: [/usr/bin/python3, /usr/local/libexec/desk-monitoring/config-seed.py, inspect]
+      environment:
+        PYTHONPATH: "{{ desk_monitoring_crypto_directory }}"
+        PYTHONDONTWRITEBYTECODE: '1'
+      register: desk_monitoring_config_auth
+      changed_when: false
+      no_log: true
+
+    - name: Align only existing account credentials with a private rollback while this hub is stopped
+      when: desk_monitoring_config_auth.stdout == 'changed'
+      block:
+        - ansible.builtin.systemd_service:
+            name: beszel-hub
+            state: stopped
+        - name: Preserve identities and histories while aligning the initial authentication rows
+          ansible.builtin.command:
+            argv: [/usr/bin/python3, /usr/local/libexec/desk-monitoring/config-seed.py, align]
+          environment:
+            PYTHONPATH: "{{ desk_monitoring_crypto_directory }}"
+            PYTHONDONTWRITEBYTECODE: '1'
+          no_log: true
+        - ansible.builtin.systemd_service:
+            name: beszel-hub
+            state: started
+        - name: Require native hub health after initial credential alignment
+          ansible.builtin.uri:
+            url: "http://{{ cluster_ip }}:{{ desk_monitoring_hub_port }}/api/health"
+            use_proxy: false
+            timeout: 3
+          register: desk_monitoring_initial_auth_ready
+          until: desk_monitoring_initial_auth_ready.status == 200
+          retries: 10
+          delay: 1
+          changed_when: false
+      rescue:
+        - ansible.builtin.systemd_service:
+            name: beszel-hub
+            state: stopped
+        - name: Restore only authentication rows from the encrypted private rollback
+          ansible.builtin.command:
+            argv: [/usr/bin/python3, /usr/local/libexec/desk-monitoring/config-seed.py, rollback]
+          environment:
+            PYTHONPATH: "{{ desk_monitoring_crypto_directory }}"
+            PYTHONDONTWRITEBYTECODE: '1'
+          no_log: true
+        - ansible.builtin.systemd_service:
+            name: beszel-hub
+            state: started
+        - ansible.builtin.fail:
+            msg: Monitoring credential alignment failed; previous authentication restored.
+
+    - name: Validate and install only the private monitoring UI proxy
+      ansible.builtin.template:
+        src: ui-proxy.cfg.j2
+        dest: /etc/desk-monitoring/ui-proxy.cfg
+        mode: '0644'
+        validate: /usr/sbin/haproxy -c -f %s
+      register: desk_monitoring_private_proxy
+
+    - name: Start or update only shared monitoring configuration and UI boundaries
+      ansible.builtin.systemd_service:
+        name: "{{ item }}"
+        enabled: true
+        state: "{{ 'restarted' if desk_monitoring_config_scripts.changed or desk_monitoring_config_units.changed or desk_monitoring_config_trust.changed or desk_monitoring_config_metadata.changed or desk_monitoring_private_proxy.changed else 'started' }}"
+        daemon_reload: true
+      loop: [beszel-config-sync, beszel-ui-proxy]
+
+    - name: Wait for this hub to serve committed configuration before exposing the route
+      ansible.builtin.uri:
+        url: "http://{{ cluster_ip }}:{{ desk_monitoring_config_port }}/health"
+        use_proxy: false
+        timeout: 3
+      register: desk_monitoring_config_ready
+      until: desk_monitoring_config_ready.status == 200
+      retries: 15
+      delay: 2
+      changed_when: false

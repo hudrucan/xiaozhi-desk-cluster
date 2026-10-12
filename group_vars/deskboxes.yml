@@ -21,3 +21,7 @@ desk_dns_ipv6_vip_enabled: true
 # Authorized fail-open DNS during a total AdGuard backend outage.
 desk_dns_emergency_enabled: true
 desk_dns_serialized_updates: true
+
+# Shared Beszel config; this source seeds once and is not a permanent leader.
+desk_monitoring_sync_enabled: true
+desk_monitoring_sync_source: deskb1x

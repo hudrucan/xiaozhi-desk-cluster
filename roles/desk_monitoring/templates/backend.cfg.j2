@@ -8,5 +8,5 @@ backend desk_monitoring_hubs
     http-check expect status 200
     http-request replace-path ^/monitor/(.*)$ /\1
 {% for node in groups['desk_monitoring'] | sort %}
-    server {{ node }} {{ hostvars[node].cluster_ip }}:{{ desk_monitoring_hub_port }} cookie {{ node }} check inter 5s fall 2 rise 2
+    server {{ node }} {{ hostvars[node].cluster_ip }}:{{ desk_monitoring_proxy_port if desk_monitoring_sync_enabled | default(false) else desk_monitoring_hub_port }} cookie {{ node }} check inter 5s fall 2 rise 2
 {% endfor %}

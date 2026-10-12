@@ -16,12 +16,29 @@ only provides the frontend: it does not own monitoring data, and the selected hu
 may be another node. A failed hub is removed
 from the pool; monitoring sessions switch to another independent hub on failure.
 
-Histories, users, alert settings and browser preferences are **independent**.
-The initial login credentials are the same across all hubs, but subsequent UI
-changes are local. This trial does not replicate databases or promise a shared
-historical timeline. Do not put a live PocketBase database on shared storage or
-copy it between running hubs. Metadata polling through all three hubs costs more
-than a single hub; measure this trial before choosing the long-term topology.
+With `desk_monitoring_sync_enabled`, all three hubs share user preferences,
+accounts, system definitions, alerts, quiet hours, network-monitor definitions,
+persistent connection tokens and PocketBase application settings (including SMTP
+and backup policy). Native authentication signing keys, per-agent fingerprints,
+metric samples, live status, logs and backup archives stay local. Existing record
+IDs are mapped per hub so system histories remain attached to their original IDs.
+Do not copy a live PocketBase database or put it on shared storage.
+
+The shared configuration boundary is separate from native Beszel. `/monitor/`
+keeps the same sticky hub selection; configuration mutations enter that hub's
+replication boundary. Any hub may propose an update. Two of the three replicas
+must durably accept the revision and apply it through native PocketBase APIs
+before Save is acknowledged. A disconnected replica catches up when it returns.
+A single remaining hub can show its last committed configuration and metrics,
+but shared writes need two replicas. Replication does not create a new VIP or
+make the Settings VIP owner a monitoring leader.
+
+The protocol keeps one encrypted, bounded checkpoint with the latest committed
+configuration, ballot and accepted proposal. Promise/accept/checkpoint writes
+happen on configuration changes only; idle polling every five seconds does not
+write this file. No NATS/JetStream stream is created and no metric history enters
+this checkpoint. Private peer traffic uses pinned TLS, HMAC envelopes and replay
+checks. API bodies, passwords, tokens and notification URLs are not logged.
 
 ## Deployment
 
@@ -55,6 +72,56 @@ the public route. The full HTTP+MQTT HAProxy candidate is validated before atomi
 installation and graceful reload, with restoration on reload failure. Core,
 workers, gateways, DNS and VRRP are not restarted by this playbook. DNS node 2's
 intentionally withdrawn VRRP state is preserved.
+
+## Shared settings rollout
+
+For existing three-node hubs:
+
+```bash
+ansible-playbook -i inventory.ini monitoring-sync.yml --syntax-check
+ansible-playbook -i inventory.ini monitoring-sync.yml
+```
+
+Inventory enables shared settings and sets `desk_monitoring_sync_source` to
+`deskb1x`. This selects the initial snapshot once, preserving node 1's changed
+administrator credentials; it is not a permanent leader. Ignored controller
+files `secret/desk-monitoring-sync.json`, `desk-monitoring-seed.fernet` and the
+pinned peer certificate/key retain this bootstrap material. Reruns reuse it
+rather than rotate passwords or recreate an initial snapshot.
+
+Each existing hub retains a small encrypted pre-sync configuration backup.
+Initial migration stops only that hub when needed to align the existing Beszel
+and PocketBase administrator email/password hashes. It preserves account IDs,
+history and other tables, rotates affected local token keys, and has an encrypted
+auth-only rollback. Initial raw passwords are never recovered or printed.
+Subsequent password edits use PocketBase validation and hooks on every replica,
+with the requested password encrypted inside the configuration checkpoint.
+
+The Ansible-managed auto-login administrator remains `admin@desk.cluster`.
+The boundary rejects deletion, demotion or email changes that would remove that
+identity; name/preferences/password changes and additional accounts can sync.
+Raw collection-schema edits, OAuth/MFA collection policy changes and avatar/file
+uploads are outside this boundary. Native one-shot tests, realtime registration,
+login and local backup operations remain local. Temporary one-hour connection
+tokens remain local; permanent tokens and explicit disable operations sync.
+After failover, refresh the page before editing an old record ID or reauthenticate
+a PocketBase admin session; native IDs and signing keys remain local.
+
+The config service and private UI proxy use `desk-monitorconfig.slice`, separate
+from sampling: 10% of one CPU, low CPU/IO weights, 64 MiB memory high threshold,
+96 MiB maximum. Individual limits are 64/24 MiB. Their ports 8091 (private UI),
+8092 (config writer) and 8094 (TLS peer RPC) bind only the existing private
+addresses, with exact cluster-peer ACLs. Public access still uses only
+`192.168.1.186/monitor/`. Check state without revealing config/credentials:
+
+```bash
+curl -fsS http://192.168.1.186/monitor/api/desk-config/status
+```
+
+Crypto wheels are checksum-pinned and unpacked into a dedicated vendor directory
+for the installed Debian 12/Python 3.11 ARM64 runtime. No system Python or Xiaozhi
+virtual environment is modified. The regular `monitoring.yml` also preserves and
+installs shared settings before exposing its proxy when the flag is enabled.
 
 ## Scope and overhead
 
@@ -97,12 +164,46 @@ stats tests passed. YAML/Python/template checks, Ansible syntax/check mode,
 HAProxy candidate validation with the existing MQTT fragment and
 `git diff --check` passed. No physical power-loss test was performed.
 
+## Shared-config verification (2026-10-12)
+
+The initial source was `deskb1x`: its changed Beszel password and PocketBase
+administrator password hashes were retained and aligned on the other two hubs.
+Read-only checks confirmed the seed hashes on all three hubs, preserved native
+administrator/system IDs and existing metric history, and three systems up on
+every hub. The temporary test account was removed.
+
+Real API checks through the VIP passed for preferences saved from nodes 1, 2
+and 3; a save with node 3's config service stopped was accepted by the other two,
+and node 3 caught up when restarted. Temporary account creation, password
+rotation from node 2 and native password authentication on all three hubs passed.
+The PocketBase console's collection-ID route also replicated an administrator
+edit; its original value was restored. These checks did not change the retained
+administrator password. No physical power-loss test was performed.
+
+Native batch transactions need at least 30 seconds for CPU-capped password
+hashing, rather than PocketBase's initial 3-second deadline. The shared boundary
+keeps that minimum when settings are saved; CPU and memory ceilings are unchanged.
+
+A 20-second idle observation measured config-process CPU at 1.52%, 1.60% and
+1.55% of one CPU on nodes 1/2/3, with service memory at 21.0, 20.2 and 19.5 MiB.
+All three encrypted checkpoints were 6,796 bytes. Their modification times and
+process disk-write counters were unchanged: no idle checkpoint writes. This is
+a short observation, not a peak measurement. DNS, Xiaozhi and monitoring URLs
+remained HTTP 200; the full deployment also passed protected-service guards.
+
+All 36 monitoring tests, template/YAML/Python validation, both playbook syntax
+checks and `git diff --check` passed. Runtime config helpers matched the tested
+source on all three nodes. Metrics never enter the encrypted config journal;
+there is no JetStream dependency.
+
 ## Removal
 
 Keep the ignored credentials/data if rollback may be required. Set the inventory
 flag `xiaozhi_ingress_monitoring_enabled: false`, remove the marked monitoring
 blocks from the installed HAProxy candidate, validate it with the existing MQTT
-fragment and gracefully reload HAProxy. Stop/disable **only** `beszel-hub` and
+fragment and gracefully reload HAProxy. When shared settings are enabled, also stop/disable
+`beszel-config-sync` and `beszel-ui-proxy`; retain their encrypted rollback/state
+if recovery is needed. Stop/disable **only** `beszel-hub` and
 `beszel-agent` on all three nodes. No VIP movement is required.
 
 ## Current LAN auto-login
@@ -110,13 +211,14 @@ fragment and gracefully reload HAProxy. Stop/disable **only** `beszel-hub` and
 The inventory now enables native `AUTO_LOGIN` for each hub's existing admin at the
 user's request. No manual login is required, including after hub failover.
 The original ignored bootstrap credentials remain available for provisioning;
-history and preferences are still independent. See [Unified UI](DESK_UI.md).
+histories remain local and preferences now sync when enabled. See [Unified UI](DESK_UI.md).
 
 All three existing admin accounts and new bootstrap accounts use
 `admin@desk.cluster`. `monitoring-accounts.yml` migrates existing emails serially
 with a private backup and rollback; it retains each account's ID, password,
 token key, settings and history. Monitoring reruns also converge this email
-before enabling auto-login. This does not replicate hub settings or histories.
+before enabling auto-login. The email migration itself does not replicate settings or histories; the separate
+shared configuration boundary above handles settings.
 
 ```bash
 ansible-playbook -i inventory.ini monitoring-accounts.yml

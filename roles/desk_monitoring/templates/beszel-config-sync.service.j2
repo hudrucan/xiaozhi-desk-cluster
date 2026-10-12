@@ -1,0 +1,32 @@
+[Unit]
+Description=Replicate Beszel configuration only when changed
+After=network-online.target beszel-hub.service
+Wants=network-online.target beszel-hub.service
+[Service]
+User=beszel-hub
+Group=beszel-hub
+Environment="PYTHONPATH={{ desk_monitoring_crypto_directory }}"
+Environment="PYTHONDONTWRITEBYTECODE=1"
+ExecStart=/usr/bin/python3 /usr/local/libexec/desk-monitoring/config-sync.py
+StateDirectory=desk-monitoring-config
+StateDirectoryMode=0700
+Restart=on-failure
+RestartSec=5
+Slice=desk-monitorconfig.slice
+CPUWeight=5
+MemoryMax=64M
+TasksMax=48
+Nice=10
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+CapabilityBoundingSet=
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_NETLINK
+[Install]
+WantedBy=multi-user.target
