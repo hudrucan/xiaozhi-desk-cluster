@@ -460,6 +460,28 @@ func freshActivity(v map[string]any, boot, node, p string, maxAge, now float64) 
 	}
 	return ok && boot != "" && v["boot_id"] == boot && v[idKey] == node && v["protocol"] == p && len(instance) == 32 && now+0.1 >= stamp && now-stamp <= maxAge
 }
+func desiredSync(cp map[string]any, node string) SyncStatus {
+	state := SyncStatus{State: "unknown"}
+	if cp["protocol"] != "xiaozhi-control-plane-v1" || cp["node_id"] != node {
+		return state
+	}
+	source, reconciliation := object(cp["configuration"]), object(cp["reconciliation"])
+	state.Revision, state.State = number(source["desired_revision"]), "pending"
+	ready := reconciliation["state"] == "ready"
+	// A refresh retains the last validated snapshot. Applied runtime revisions
+	// are still checked separately; new desired revisions remain pending.
+	if reconciliation["state"] == "refreshing" && reconciliation["error_code"] == nil {
+		last, ok := reconciliation["last_success_at"].(string)
+		at, err := time.Parse(time.RFC3339Nano, last)
+		ready = ok && err == nil && time.Since(at) >= 0 && time.Since(at) < 5*time.Minute
+	}
+	if ready && source["sync_status"] == "synced" && reconciliation["error_code"] == nil {
+		state.State = "synced"
+	} else if reconciliation["error_code"] != nil {
+		state.State = "failed"
+	}
+	return state
+}
 func (d *Dashboard) slow(ctx context.Context) {
 	if time.Since(d.slowAt) < 30*time.Second {
 		return
@@ -468,18 +490,7 @@ func (d *Dashboard) slow(ctx context.Context) {
 	ip := d.member.Private
 	values := parallelGets(ctx, d, []string{"http://" + ip + ":8004/api/cluster", "http://127.0.0.1:3003/control/desk_policy", "http://" + ip + ":8092/api/desk-config/status", "http://" + ip + ":8004/api/settings/runtime"})
 	result := map[string]SyncStatus{}
-	cp := values[0]
-	state := SyncStatus{State: "unknown"}
-	if cp["protocol"] == "xiaozhi-control-plane-v1" && cp["node_id"] == d.config.Node {
-		source := object(cp["configuration"])
-		state.Revision = number(source["desired_revision"])
-		state.State = "pending"
-		if object(cp["reconciliation"])["state"] == "ready" && source["sync_status"] == "synced" {
-			state.State = "synced"
-		} else if object(cp["reconciliation"])["error_code"] != nil {
-			state.State = "failed"
-		}
-	}
+	state := desiredSync(values[0], d.config.Node)
 	result["xiaozhi"] = state
 	if values[3]["protocol"] == "xiaozhi-runtime-apply-v1" {
 		rows, _ := values[3]["nodes"].([]any)
@@ -545,7 +556,7 @@ func (d *Dashboard) collect(ctx context.Context) {
 	n.Memory = memoryPercent(string(raw))
 	n.Temp = temperature()
 	activity := readJSON("/run/xiaozhi-worker/activity.json", 65536)
-	if freshActivity(activity, n.Boot, n.ID, "xiaozhi-worker-activity-v1", 3, up) {
+	if freshActivity(activity, n.Boot, n.ID, "xiaozhi-worker-activity-v1", 3, uptime()) {
 		for _, key := range []string{"asr", "llm", "tts"} {
 			v := number(activity[key])
 			if v != nil && *v <= 2 {
@@ -559,7 +570,7 @@ func (d *Dashboard) collect(ctx context.Context) {
 		n.Components["worker"] = "unavailable"
 	}
 	dns := readJSON("/run/desk-dns/activity.json", 65536)
-	if freshActivity(dns, n.Boot, n.ID, "desk-dns-activity-v1", 3, up) {
+	if freshActivity(dns, n.Boot, n.ID, "desk-dns-activity-v1", 3, uptime()) {
 		count, ok := dns["queries"].(float64)
 		stamp, _ := dns["monotonic"].(float64)
 		instance, _ := dns["instance"].(string)
@@ -586,7 +597,8 @@ func (d *Dashboard) collect(ctx context.Context) {
 	}
 	n.Admission["core"], n.Admission["mqtt"] = boolean(core["admission_paused"]), boolean(gateway["admission_paused"])
 	n.Connections = map[string]*int{"core": number(core["active_connections"]), "mqtt": number(gateway["open_mqtt_connections"])}
-	n.MaintenanceSupported = n.MaintenanceSupported && core["maintenance_supported"] == true && gateway["maintenance_supported"] == true
+	dnsMaintenance := readJSON("/etc/desk-dns/maintenance.json", 2048)
+	n.MaintenanceSupported = n.MaintenanceSupported && core["maintenance_supported"] == true && gateway["maintenance_supported"] == true && dnsMaintenance["protocol"] == "desk-dns-maintenance-v1" && dnsMaintenance["node"] == n.ID
 	n.DNSHealth = d.collectDNS(ctx, n)
 	n.Components["mqtt"] = "unavailable"
 	if gateway["gateway_id"] == n.ID && (gateway["status"] == "ready" || (gateway["admission_paused"] == true && gateway["mqtt_listening"] == true && gateway["udp_listening"] == true)) {

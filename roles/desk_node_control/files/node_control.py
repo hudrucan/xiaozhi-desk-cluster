@@ -27,6 +27,7 @@ PROTOCOL = 'desk-node-operation-v1'
 MAX_BODY = 8192
 LEASE_SECONDS = 600
 CHALLENGE_SECONDS = 60
+DNS_QUIET_SECONDS = 10  # Current private DNS proxy timeout server: 10s.
 BOOT_PATH = '/proc/sys/kernel/random/boot_id'
 
 
@@ -44,9 +45,9 @@ def boot_id():
 
 
 def dns_ready(host, port):
-    """Ignored existing backend health name; validate ID and an IPv4 answer."""
+    """Frontend liveness independent of an intentionally withdrawn backend."""
     identity = secrets.randbelow(65536)
-    name = b''.join(bytes([len(p)]) + p.encode() for p in 'health.desk-dns.test'.split('.')) + b'\0'
+    name = b''.join(bytes([len(p)]) + p.encode() for p in 'frontend.desk-dns.test'.split('.')) + b'\0'
     query = struct.pack('!6H', identity, 0x100, 1, 0, 0, 0) + name + struct.pack('!2H', 1, 1)
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
@@ -91,6 +92,7 @@ class Control:
         self.key = bytes.fromhex(config['key'])
         self.path = Path(state_path)
         self.lock = threading.RLock()
+        self.resume_lock = threading.Lock()
         self.nonces = {}
         self.cached_health = (0, None)
         self.opener = build_opener(ProxyHandler({}))
@@ -142,7 +144,7 @@ class Control:
             age = time.time() - datetime.fromisoformat(value['observed_at'].replace('Z', '+00:00')).timestamp()
             components = value.get('components', {})
             configs = value.get('configuration', {})
-            result['metadata'] = {k: value.get(k) for k in ('ip', 'vip', 'core', 'mqtt', 'activity', 'connections', 'admission', 'maintenance_supported')}
+            result['metadata'] = {k: value.get(k) for k in ('ip', 'vip', 'core', 'mqtt', 'activity', 'connections', 'admission', 'maintenance_supported', 'dns_health')}
             result['revisions'] = {k: configs.get(k, {}).get('revision') for k in ('xiaozhi', 'dns', 'monitoring')}
             valid = value.get('id') == self.node and value.get('boot_id') == result['boot_id'] and 0 <= age <= 15
             valid &= all(components.get(k) == 'ready' for k in ('worker', 'core', 'mqtt', 'dns'))
@@ -205,6 +207,19 @@ class Control:
     def matching_ready(views):
         return len(views) == 3 and all(v.get('ready') for v in views.values()) and len({encode(v.get('revisions')) for v in views.values()}) == 1
 
+    @staticmethod
+    def dns_survivors(views, target, withdrawn=False):
+        expected = set(views) - {target}
+        if len(expected) != 2:
+            return False
+        for node in expected:
+            health = views[node].get('metadata', {}).get('dns_health', {})
+            eligible = health.get('eligible_backends', [])
+            if (health.get('mode') != 'adguard' or not expected <= set(eligible)
+                    or (withdrawn and target in eligible)):
+                return False
+        return True
+
     def challenge(self, value):
         if not {'node'} <= set(value) <= {'node','action'} or value['node'] not in self.members or value.get('action','reboot') not in ('maintenance','reboot'):
             raise Failure(400, 'Unknown node')
@@ -221,6 +236,8 @@ class Control:
         if not self.matching_ready(views):
             raise Failure(412, 'All three nodes must be healthy and synced before reboot')
         target = value['node']
+        if not self.dns_survivors(views, target):
+            raise Failure(412, 'Both surviving AdGuard backends must be eligible before maintenance')
         if views[target].get('metadata', {}).get('maintenance_supported') is not True:
             raise Failure(412, 'Deploy maintenance support on worker, core and gateway first')
         payload = {'id': secrets.token_hex(16), 'node': target, 'boot_id': views[target]['boot_id'],
@@ -297,7 +314,7 @@ class Control:
                         or token['maintenance_id'] != current['id'] or not executed):
                     raise Failure(409, 'Maintenance changed; prepare again')
             views = self.views()
-            if not self.matching_ready(views) or any(views[n].get('lease') != executed for n in self.members if n!=self.node):
+            if not self.matching_ready(views) or not self.dns_survivors(views,self.node,withdrawn=True) or any(views[n].get('lease') != executed for n in self.members if n!=self.node):
                 raise Failure(412, 'Survivor readiness or lease changed')
             meta = views[self.node].get('metadata', {})
             counts = [meta.get('core'),meta.get('mqtt'),*meta.get('activity',{}).values(),*meta.get('connections',{}).values()]
@@ -318,7 +335,7 @@ class Control:
             return {'accepted':True,'id':current['id'],'node':self.node,'uncertain':False}
         if path == '/peer/resume':
             if set(value) != {'id'} or not isinstance(value['id'],str): raise Failure(400, 'Invalid resume')
-            return self.resume(value['id'])
+            return self.request_resume(value['id'])
         if path == '/peer/confirm':
             if set(value) != {'token'}: raise Failure(400, 'Invalid confirmation')
             return self.confirm(value['token'])
@@ -398,7 +415,25 @@ class Control:
         subprocess.run(['/usr/bin/systemctl', action, name], check=True, timeout=15,
                        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
+    def request_resume(self, operation_id):
+        # A peer request must acknowledge before its four-second HTTP deadline.
+        # The existing recovery monitor owns service starts and lease release.
+        with self.lock:
+            value = self.state['maintenance']
+            if value is None or value['id'] != operation_id:
+                return {'resumed':True}
+            if value['state'] == 'rebooting' and value['boot_id'] == boot_id():
+                raise Failure(409, 'Reboot was already requested; wait for recovery')
+            value['state'] = 'recovering'
+            self.save()
+        return {'resuming':True}
+
     def resume(self, operation_id, recovering=False):
+        # Cancel, expiry and explicit Resume can coincide. Restore once.
+        with self.resume_lock:
+            return self._resume(operation_id, recovering)
+
+    def _resume(self, operation_id, recovering=False):
         with self.lock:
             value = self.state['maintenance']
             if value is None or value['id'] != operation_id:
@@ -430,6 +465,7 @@ class Control:
             self.save()
         self.write_admission(value)
         deadline = min(lease['expires'], time.time() + 240)
+        dns_withdrawn_at = None
         try:
             while time.time() < deadline:
                 with self.lock:
@@ -438,14 +474,21 @@ class Control:
                 views = self.views()
                 survivors = [views[n] for n in self.members if n != self.node]
                 if not (all(v.get('ready') and v.get('lease') == lease for v in survivors)
-                        and len({encode(v.get('revisions')) for v in survivors}) == 1):
+                        and len({encode(v.get('revisions')) for v in survivors}) == 1
+                        and self.dns_survivors(views,self.node)):
                     raise Failure(412, 'Survivor readiness changed during drain')
                 local = views.get(self.node, {})
                 meta = local.get('metadata', {})
                 counts = [meta.get('core'), meta.get('mqtt'), *meta.get('activity', {}).values(),
                           *meta.get('connections', {}).values()]
                 paused = meta.get('admission', {})
-                if (local.get('ready') and meta.get('maintenance_supported') is True
+                dns_drained = self.dns_survivors(views,self.node,withdrawn=True)
+                if not dns_drained:
+                    dns_withdrawn_at = None
+                elif dns_withdrawn_at is None:
+                    dns_withdrawn_at = time.monotonic()
+                dns_quiet = dns_withdrawn_at is not None and time.monotonic()-dns_withdrawn_at >= DNS_QUIET_SECONDS
+                if (dns_quiet and local.get('ready') and meta.get('maintenance_supported') is True
                         and all(paused.get(k) is True for k in ('worker', 'core', 'mqtt'))
                         and len(counts) >= 7 and all(type(n) is int and n == 0 for n in counts)):
                     break
@@ -544,7 +587,10 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header('Content-Length', str(len(raw)))
         self.send_header('X-Content-Type-Options', 'nosniff')
         self.end_headers()
-        self.wfile.write(raw)
+        try:
+            self.wfile.write(raw)
+        except ConnectionError:
+            pass  # The caller timed out; the accepted operation retains ownership.
 
     def handle_request(self):
         control = self.server.control

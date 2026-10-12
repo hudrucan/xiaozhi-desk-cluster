@@ -2,8 +2,9 @@
 
 Runtime source commits: server `7f757cd4`, MQTT gateway `ce8929a`.
 
-This change is source-only pending operator verification. No tests, Go build,
-provider requests, service deployment or physical reboot were run for this feature.
+The user authorized rollout and a one-node acceptance run on 2026-10-12.
+Source updates preserve the installed Python/Node dependencies, bundles and credentials.
+See the acceptance record below for measured results and remaining checks.
 
 ## Dashboard DNS health
 
@@ -45,23 +46,35 @@ an exclusive durable lease. Only one node can enter maintenance at a time.
 3. Core rejects new WebSocket sessions; gateways exclude paused cores, reject
    new MQTT connections/hellos and close only idle MQTT transports without a
    bridge. Active bridges and UDP conversations are preserved.
-4. Controller waits for acknowledged pause, zero ASR/LLM/VLM/TTS jobs and zero
+4. The private DNS proxy fails only the reserved `health.desk-dns.test` probe
+   while the boot-local admission flag is valid. Real DNS remains available;
+   no admin socket/credentials/API are added. Controller requires both survivors
+   to observe the target absent from their real DNS backend eligibility masks,
+   then allows the current 10-second private proxy response window to finish.
+   Its liveness probe uses `frontend.desk-dns.test`, so the intentional backend
+   withdrawal does not falsely mark surviving nodes unhealthy.
+   It then waits for acknowledged pause, zero ASR/LLM/VLM/TTS jobs and zero
    core/MQTT connections. It checks the two survivors remain healthy, synced
    and holding the same lease. A busy conversation is allowed up to four minutes
    to finish naturally; timeout resumes admission instead of forcing a reboot.
 5. Only after drain, controller stops the previously active `keepalived` and
    `desk-dns-vip` election services and waits for both VIPs to have exactly one
    healthy surviving owner. DNS backends remain running during this stage.
-6. Maintenance-only stays paused with Resume and a separately confirmed Reboot
+6. Resume acknowledges immediately; the existing recovery monitor restores service
+   eligibility and releases leases. Recovery is serialized across cancel/expiry.
+   Maintenance-only stays paused with Resume and a separately confirmed Reboot
    available. Reboot mode reboots only after handoff. Native backend checks
    continue controlling DNS backend eligibility.
-7. Maintenance expires after ten minutes. Controller restores admission and
+7. Telemetry GETs may retry surviving UI backends during shutdown; POST actions
+   explicitly disable layer-7 retry. Cloud refresh retains a recent validated
+   desired snapshot only while runtime revisions still match; errors/stale state
+   remain failed/pending. Maintenance expires after ten minutes. Controller restores admission and
    previously active election services on cancel/expiry or return after reboot.
    Worker/core/gateway validate the flag's boot and expiry independently, so
    a stale flag cannot indefinitely block admission. VIP services still use
    their existing readiness probes; recovery does not force VIP ownership.
 
-No protocol/firmware changes, new daemon, database or JetStream are added.
+No firmware or voice transport protocol changes, new daemon, database or JetStream are added.
 The existing root node controller gains one root-owned RuntimeDirectory and
 fixed start/stop actions for two known services; telemetry remains read-only.
 
@@ -82,16 +95,42 @@ for suite in worker_asr worker_llm worker_llm_stream worker_tts_segments voice_t
 done
 ```
 
-After offline results, deploy server worker/core and MQTT gateway revisions
-serially with no active session on the restarting node, then deploy the
-collector/controller/page with `desk-dashboard.yml`. Maintenance stays disabled
-until all nodes report support and healthy/synced state. The separate
-`dns-health.yml` validates DNS candidates and adds only the metadata rules,
-serially. It neither rebuilds filters nor modifies resolver/policy/VIP settings.
-Do not deploy a new controller/page before the runtime revisions support pause.
+Deploy compatible runtime source serially with `maintenance-source.yml` and
+explicit immutable `xiaozhi_maintenance_server_revision` /
+`xiaozhi_maintenance_gateway_revision` values. Then apply metadata-only
+`dns-health.yml`, boot-local `dns-maintenance.yml`, and finally
+`desk-dashboard.yml`. The metadata/gate plays preserve the live forwarding,
+filter, resolver and VIP configuration. Maintenance remains disabled until the
+runtime support and installed DNS health gate are present on all three nodes.
+Do not deploy a new controller/page before runtime support and DNS gates.
 
-One physical acceptance run then needs a real conversation: enter maintenance
-on its node and verify it finishes, peers receive new jobs, both VIPs move,
-Resume recovers admission, and confirmed reboot returns healthy/synced. Also
-verify blocked/long conversations time out without forced reboot. These checks
-remain NOT RUN until reported by the operator.
+```sh
+ansible-playbook -i inventory.ini maintenance-source.yml \
+  -e xiaozhi_maintenance_server_revision=7f757cd4e80c6ffa79c206f7d1ff29603e09a21f \
+  -e xiaozhi_maintenance_gateway_revision=ce8929a1fa115752f7916f24eefe8493cc394188
+ansible-playbook -i inventory.ini dns-health.yml
+ansible-playbook -i inventory.ini dns-maintenance.yml
+ansible-playbook -i inventory.ini desk-dashboard.yml
+```
+
+Acceptance on 2026-10-12:
+
+- PASS: focused fake-provider server suites (67 tests), gateway harnesses (5),
+  node controller (20 tests), dashboard Python (4) and Go (8 tests), template
+  rendering and native HAProxy validation. No paid provider calls.
+- PASS: node 3 maintenance preserved an authenticated synthetic WebSocket
+  session, rejected new sessions, withdrew its reserved DNS health probe while
+  real queries still responded, drained after the session closed, and resumed
+  admission automatically.
+- PASS: confirmed physical reboot of node 3 returned healthy and synced in
+  153.3 seconds. All 98 sampled IPv4/IPv6 DNS queries succeeded; maximum sampled
+  latency was 119.69 ms. Both other nodes remained available. Node 3 initially
+  owned neither VIP, so this run does not establish VIP-owner reboot failover.
+- Tracking recovered from one operation GET timeout during drain. DNS remained
+  available; uninterrupted operation polling is not established by this run.
+- NOT RUN: real firmware ASR/LLM/TTS conversation preservation, busy-session
+  four-minute expiry, and physical reboot of a node initially owning a VIP.
+  Firmware was off during this acceptance run.
+
+Node operation status appears immediately below the node cards, with a 14 px
+separation, before node details and Services.

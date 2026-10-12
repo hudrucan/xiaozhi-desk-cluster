@@ -18,8 +18,8 @@ settings and adds password references to Vault variables.
 ## DNS health and node maintenance
 
 Source for DNS reachability/routing telemetry and confirmed drain-before-reboot
-maintenance is prepared. Deployment and runtime acceptance remain pending operator
-verification; see [behavior and validation](docs/CLUSTER_EXPERIENCE.md).
+maintenance is deployed. See the one-node acceptance results and rollout
+procedure in [behavior and validation](docs/CLUSTER_EXPERIENCE.md).
 
 ## Wi-Fi driver and movable VIPs
 

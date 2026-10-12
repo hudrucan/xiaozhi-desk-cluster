@@ -24,6 +24,8 @@ class ControlTests(unittest.TestCase):
         self.controls = {}
         self.health = {}
         self.callbacks = []
+        self.quiet_patch = patch.object(nc, 'DNS_QUIET_SECONDS', 0)
+        self.quiet_patch.start(); self.addCleanup(self.quiet_patch.stop)
         for member in MEMBERS:
             node = member['id']
             config = {'node':node,'port':8011,'members':MEMBERS,'key':'ab'*32,'public_host':'192.168.1.186',
@@ -32,11 +34,15 @@ class ControlTests(unittest.TestCase):
             self.controls[node] = control
             self.health[node] = {'node':node,'boot_id':'old-boot','ready':True,
                                  'revisions':{'xiaozhi':11,'dns':5,'monitoring':4},'metadata':{
+                                     'dns_health':{'mode':'adguard','eligible_backends':['deskb1x','deskb2x','deskb3x']},
                                      'maintenance_supported':True,'activity':{'asr':0,'llm':0,'tts':0},
                                      'core':0,'mqtt':0,'connections':{'core':0,'mqtt':0},
                                      'admission':{'worker':True,'core':True,'mqtt':True},
                                      'vip':{'xiaozhi':node=='deskb1x','dns':node=='deskb2x'}}}
-            control.write_admission = Mock()
+            def withdraw(value, node=node):
+                for state in self.health.values():
+                    state['metadata']['dns_health']['eligible_backends'] = [n for n in state['metadata']['dns_health']['eligible_backends'] if n!=node]
+            control.write_admission = Mock(side_effect=withdraw)
             control.vip_service = Mock()
             control.health = lambda node=node: copy.deepcopy(self.health[node])
             control.peer = lambda target,path,body: self.controls[target].peer_action(path,body)
@@ -61,6 +67,12 @@ class ControlTests(unittest.TestCase):
         self.health['deskb2x']['revisions']['dns'] = 6
         with self.assertRaises(nc.Failure): self.challenge()
         self.assertFalse(self.callbacks)
+
+    def test_missing_native_dns_survivor_rejects_before_any_pause(self):
+        self.health['deskb1x']['metadata']['dns_health']['eligible_backends']=['deskb1x','deskb3x']
+        with self.assertRaises(nc.Failure):self.challenge()
+        self.assertFalse(self.callbacks)
+        self.controls['deskb3x'].write_admission.assert_not_called()
 
     def test_preparation_never_reboots_and_boot_change_invalidates_confirmation(self):
         token = self.challenge()
@@ -188,6 +200,41 @@ class ControlTests(unittest.TestCase):
         target.vip_service.assert_any_call('keepalived','start')
         self.assertIsNone(target.state['maintenance'])
         self.assertIsNone(one.active())
+
+    def test_resume_acknowledges_before_service_recovery_and_keeps_lease(self):
+        one,target=self.controls['deskb1x'],self.controls['deskb3x']
+        one.confirm(one.challenge({'node':'deskb3x','action':'maintenance'})['token'])
+        self.callbacks[0]()
+        operation=target.state['maintenance']['id']
+        target.vip_service.reset_mock()
+        self.assertEqual(target.peer_action('/peer/resume',{'id':operation}),{'resuming':True})
+        target.vip_service.assert_not_called()
+        self.assertEqual(target.state['maintenance']['state'],'recovering')
+        self.assertIsNotNone(one.active())
+        target.resume(operation,recovering=True)
+        target.vip_service.assert_any_call('keepalived','start')
+        self.assertIsNone(one.active())
+        calls=target.vip_service.call_count
+        target.resume(operation,recovering=True)
+        self.assertEqual(target.vip_service.call_count,calls)
+
+    def test_dns_withdrawal_must_be_observed_before_vip_stop_or_reboot(self):
+        one,target=self.controls['deskb1x'],self.controls['deskb3x']
+        target.write_admission = Mock()  # No native backend withdrawal observed.
+        one.confirm(self.challenge())
+        with patch.object(nc.time,'sleep',side_effect=nc.Failure(409,'Drain timed out')):
+            self.callbacks[0]()
+        target.vip_service.assert_not_called()
+        target.reboot.assert_not_called()
+        self.assertIsNone(target.state['maintenance'])
+
+    def test_existing_dns_response_window_precedes_vip_stop(self):
+        one,target=self.controls['deskb1x'],self.controls['deskb3x']
+        one.confirm(self.challenge())
+        with patch.object(nc,'DNS_QUIET_SECONDS',10), patch.object(nc.time,'sleep',side_effect=nc.Failure(409,'Cancelled')):
+            self.callbacks[0]()
+        target.vip_service.assert_not_called()
+        target.reboot.assert_not_called()
 
     def test_survivor_failure_cancels_drain_without_stopping_vips_or_reboot(self):
         one,target=self.controls['deskb1x'],self.controls['deskb3x']

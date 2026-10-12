@@ -1,5 +1,10 @@
 backend desk_dashboard
     balance roundrobin
+    # Retry read-only telemetry when a node disappears between health samples.
+    retries 2
+    option redispatch
+    retry-on conn-failure empty-response 502 503 504
+    http-request disable-l7-retry unless METH_GET
     timeout server 5s
     option httpchk
     http-check send meth GET uri /health ver HTTP/1.1 hdr Host localhost
@@ -10,6 +15,11 @@ backend desk_dashboard
 {% if desk_node_control_enabled | default(false) %}
 backend desk_node_control
     balance roundrobin
+    # Retry read-only telemetry when a node disappears between health samples.
+    retries 2
+    option redispatch
+    retry-on conn-failure empty-response 502 503 504
+    http-request disable-l7-retry unless METH_GET
     timeout server 25s
     option httpchk
     http-check send meth GET uri /health ver HTTP/1.1 hdr Host localhost

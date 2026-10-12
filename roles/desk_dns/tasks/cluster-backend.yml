@@ -49,6 +49,12 @@
         mode: '0600'
       no_log: true
       diff: false
+    - name: Install the read-only boot-local maintenance health gate
+      ansible.builtin.template:
+        src: maintenance-health.lua.j2
+        dest: /usr/local/libexec/desk-dns/maintenance-health.lua
+        mode: '0644'
+      register: desk_dns_maintenance_gate
     - name: Install validated private TLS DNS backend
       ansible.builtin.template:
         src: backend-haproxy.cfg.j2
@@ -66,7 +72,7 @@
     - name: Activate only the new DNS-only services
       ansible.builtin.systemd_service:
         name: "{{ item }}"
-        state: "{{ 'restarted' if desk_dns_cluster_scripts.changed or desk_dns_cluster_config.changed or desk_dns_backend_proxy.changed or desk_dns_cluster_units.changed else 'started' }}"
+        state: "{{ 'restarted' if desk_dns_cluster_scripts.changed or desk_dns_cluster_config.changed or desk_dns_backend_proxy.changed or desk_dns_maintenance_gate.changed or desk_dns_cluster_units.changed else 'started' }}"
         enabled: true
         daemon_reload: true
       loop: [desk-dns-cluster-ui, desk-dns-backend]
@@ -82,3 +88,9 @@
       retries: 5
       delay: 1
       no_log: true
+
+    - name: Record the configured maintenance health gate without secrets
+      ansible.builtin.copy:
+        content: '{{ {"protocol":"desk-dns-maintenance-v1","node":inventory_hostname} | to_json }}'
+        dest: /etc/desk-dns/maintenance.json
+        mode: '0644'

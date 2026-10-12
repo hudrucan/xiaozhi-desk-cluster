@@ -1,5 +1,6 @@
 global
     maxconn 256
+    lua-load /usr/local/libexec/desk-dns/maintenance-health.lua
     stats socket /run/desk-dns-backend/admin.sock mode 660 level user
 
 defaults
@@ -11,7 +12,11 @@ defaults
 frontend private_dns_backend
     bind {{ cluster_ip }}:5443 ssl crt /etc/desk-dns/backend/peer.pem alpn h2,http/1.1
     http-request deny unless { src 10.10.10.11 10.10.10.12 10.10.10.13 }
+    option http-buffer-request
     acl dns_query path /dns-query
+    # Only the reserved health question withdraws; real DNS stays available.
+    acl dns_health_question req.body,hex,lower -m sub 066865616c7468086465736b2d646e73047465737400
+    http-request deny deny_status 503 if dns_query dns_health_question { lua.desk_node_draining -m bool }
     acl peer_api path_beg /desk-observe/control/ /desk-observe/policy/ /desk-observe/ui/
     http-request deny unless dns_query or peer_api
     http-request del-header CF-Connecting-IP

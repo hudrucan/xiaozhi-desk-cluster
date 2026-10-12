@@ -103,3 +103,21 @@ func TestEventReplicationIsBoundedAndDeduplicatesObservers(t *testing.T) {
 		t.Fatalf("expected one recent logical event, got %d", len(got))
 	}
 }
+
+func TestRefreshingDesiredStateStillRequiresAValidatedSnapshot(t *testing.T) {
+	cp := map[string]any{"protocol": "xiaozhi-control-plane-v1", "node_id": "deskb3x",
+		"configuration":  map[string]any{"desired_revision": float64(11), "sync_status": "synced"},
+		"reconciliation": map[string]any{"state": "refreshing", "last_success_at": time.Now().Add(-time.Minute).Format(time.RFC3339Nano)}}
+	if desiredSync(cp, "deskb3x").State != "synced" {
+		t.Fatal("validated snapshot was lost during refresh")
+	}
+	r := object(cp["reconciliation"])
+	r["last_success_at"] = time.Now().Add(-10 * time.Minute).Format(time.RFC3339Nano)
+	if desiredSync(cp, "deskb3x").State != "pending" {
+		t.Fatal("stale reconciliation accepted")
+	}
+	r["error_code"] = "cloud_refresh_failed"
+	if desiredSync(cp, "deskb3x").State != "failed" {
+		t.Fatal("failed refresh accepted")
+	}
+}

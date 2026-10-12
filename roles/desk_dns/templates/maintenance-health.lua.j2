@@ -1,0 +1,23 @@
+-- Read only the root-owned, nonsecret, boot-local maintenance flag.
+-- Called only for the reserved DNS health question, never ordinary queries.
+local boot_file = io.open("/proc/sys/kernel/random/boot_id", "r")
+local boot = boot_file and boot_file:read("*l") or ""
+if boot_file then boot_file:close() end
+local node = "{{ inventory_hostname }}"
+local stamp, cached = 0, false
+core.register_fetches("desk_node_draining", function(txn)
+    local now = os.time()
+    if now == stamp then return cached end
+    stamp, cached = now, false
+    local file = io.open("/run/desk-node-maintenance/state.json", "r")
+    if not file then return false end
+    local raw = file:read(2049) or ""
+    file:close()
+    if #raw > 2048 or boot == "" then return false end
+    local expires = tonumber(raw:match('"expires"%s*:%s*(%d+)%s*[,}]'))
+    cached = raw:match('"protocol"%s*:%s*"desk%-node%-maintenance%-v1"') ~= nil
+        and raw:match('"node"%s*:%s*"([^"\\]+)"') == node
+        and raw:match('"boot_id"%s*:%s*"([^"\\]+)"') == boot
+        and expires ~= nil and expires > now and expires <= now + 660
+    return cached
+end)
