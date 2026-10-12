@@ -1,0 +1,128 @@
+# Cluster dashboard
+
+The management VIP serves a read-only overview at `/`. Xiaozhi, DNS and Monitoring
+retain `/xiaozhi/`, `/dns/` and `/monitor/`. `/api/cluster/status` is the same bounded
+JSON contract a future front-mounted ESP32 display can consume.
+
+## Data and ownership
+
+Three identical `desk-dashboard` services bind only to their existing private IPs
+on port 8010. Only configured private peers may read their HTTP endpoints. The
+management proxy exposes exactly `/api/cluster/status`; `/local` stays private.
+No endpoint accepts writes or a caller-supplied upstream address.
+
+Each collector samples every five seconds. Browser requests return cached data,
+and browser polling pauses when the page is hidden. CPU comes from host `/proc/stat`
+deltas (guest time is not counted twice, I/O wait is excluded from busy time), RAM
+uses MemAvailable, and temperature uses existing thermal sysfs. CPU has no value
+until the second sample. VIP ownership is checked against actual local interfaces
+and the existing applied VIP metadata, never Cloud desired ownership.
+
+MQTT/Core counts come from the existing local status endpoints. Worker activity
+and DNS query rates reuse existing `/run` metadata, checked against node identity,
+boot and freshness. Unknown/stale sources are shown as unknown, with no retained
+ownership or busy indicators. Native AdGuard HTTP health is labelled responding;
+it is not a claim that every external lookup succeeds or that fallback is inactive.
+
+Cloud configuration, runtime apply readiness, DNS policy and Monitoring sync are
+read every 30 seconds. Runtime revision uses the existing live runtime status API,
+not a newly written bundle on disk. No models are loaded or hashed by this service.
+The UI's Config summary means current desired Xiaozhi config is synced and both
+worker/core runtime revisions match. Per-service configuration is in node details.
+
+The current worker activity groups LLM and Vision under one compute counter;
+the dashboard honestly labels it **LLM / VLM**. No segment number, RTF or token
+latency is invented. Those fields need separate telemetry before being shown.
+
+## Events
+
+Observed node reachability, reboot, local VIP acquisition/release, service health
+and configuration transitions are retained in bounded RAM rings. Peers exchange
+these cached rings; aggregate snapshots deduplicate IDs and nearby duplicate node
+reachability observations. At most 64 events from the last six hours are returned.
+This is an observed event feed, not a complete durable audit log. Whole-cluster
+restarts clear it; changes faster than the sample interval may not be observed.
+Per-turn voice events stay in Xiaozhi voice logs. The root page shows six recent
+events, with an option to expand the retained history.
+
+## Deployment and isolation
+
+```sh
+ANSIBLE_LOCAL_TEMP=/private/tmp/desk-ui-ansible ANSIBLE_PIPELINING=1 \
+  ansible-playbook -i inventory.ini -u ops desk-dashboard.yml
+```
+
+The dependency-free ARM64 binary is compiled on the controller, not the TV boxes.
+It uses a single Go processor, low CPU weight and a 3% service CPU ceiling, with
+48 MB maximum memory. These limits apply only to the dashboard; DNS and TTS have
+no new request limits. The service cannot write the root filesystem. Its only capability is
+CAP_DAC_READ_SEARCH, explicitly authorized to read worker-owned 0600 activity
+metadata without changing the existing writer or restarting it. Credentials/config
+bundle paths, /var/lib, /opt and home directories are inaccessible in its service
+mount namespace. It reads fixed safe metadata paths and cached APIs; no credential
+files are read.
+
+Rollout starts only the new collectors and gracefully reloads HAProxy with both
+HTTP and MQTT configurations validated together. Existing voice, DNS, monitoring,
+VIP configuration, processes and policy are guarded against changes. Prior root
+pages are retained for per-node rollback on failure. Existing UI/ingress playbooks
+retain the dashboard route on later deployments. No modem or firmware changes.
+
+## Validation
+
+```sh
+GO111MODULE=off go test ./roles/desk_dashboard/files
+python -m unittest discover -s roles/desk_dashboard/tests -p 'test_*.py'
+python -m unittest discover -s roles/desk_ui/tests -p 'test_*.py'
+```
+
+On older Go/Darwin linker combinations, use `go test -ldflags=-linkmode=external`.
+Check the public overview, each node's details, `/api/cluster/status`, and the
+three unchanged service links. Compare `desk-dashboard` CPUUsageNSec over a
+sample interval and MemoryCurrent on each node before claiming any overhead.
+
+## Firmware Web Control link
+
+The optional Xiaozhi Client card probes the configured private IPv4 HTTP endpoint
+`/api/status/system` every 15 seconds, in parallel with other cached status reads.
+It verifies version, device IP and uptime, and retains no SSID or other robot status
+fields. Offline or stale health renders a disabled native button. It links directly
+to the device only when healthy; no firmware action or camera capture is triggered.
+
+
+## Confirmed node reboot
+
+`desk_node_control_enabled` explicitly enables a separate `desk-node-control`
+service on the private interface (8011). The collector remains GET-only and cannot
+read `/etc/desk-node-control`. The new agent holds only a dedicated peer action
+key, and implements one fixed action: `/usr/bin/systemctl reboot --no-block`.
+There is no SSH or arbitrary command API. The service is root to ask PID1 to run
+its ordinary orderly reboot sequence; it has no Linux capabilities.
+
+The dashboard exposes Reboot node in Node details. Prepare and Confirm are
+separate same-origin JSON POSTs. Confirm uses a signed 60-second challenge bound
+to node identity and current boot ID. Two non-target nodes must durably hold the
+same exclusive 10-minute operation lease. The target rechecks both surviving
+nodes and persists the executed request ID before scheduling a reboot. Lost
+acknowledgements do not trigger retries. Peer traffic uses HMAC, a timestamp and
+one-use nonce on the private addresses; public HAProxy routes only the three exact
+operation paths, never `/peer/`.
+
+Fresh collector identity/boot, MQTT/core/worker readiness, all shared revisions,
+NATS routes and an actual DNS backend health answer are required on all three
+nodes before confirmation. Recovery reports accepted/offline/starting/rejoined,
+with needs-attention after five minutes if boot/services are not confirmed. It
+requires a new boot ID and all service/config checks. Successful recovery releases
+the survivor leases. Expired leases do not permit another reboot unless all three
+nodes are healthy again and the user confirms a new operation. Small operation
+state files are written only for explicit actions; no JetStream or metrics history.
+
+The shared peer key is generated once in ignored `secret/desk-node-control.key`.
+Never print or commit it. A reboot is never part of rollout verification. Offline
+unit fixtures replace the reboot command. A user can test HA by confirming one
+node, observing VIP migration, then waiting for Rejoined before another test.
+Xiaozhi sessions on the rebooted core are interrupted and must reconnect; they
+are not replayed or migrated. Power loss or a node that cannot boot needs manual
+intervention. Xiaozhi VIP does not preempt on return; DNS follows its separate
+health/priority policy.
+

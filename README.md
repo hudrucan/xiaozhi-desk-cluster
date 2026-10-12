@@ -1305,3 +1305,9 @@ This source-only playbook needs no Vault decryption, preserves installed
 credentials and voice bundles, and restarts only control planes serially. Native
 `ffmpeg` and libopus are already present in the cluster and are included in the
 control-plane role's prerequisites for future deployments.
+
+## Shared cluster overview
+
+The existing management VIP hosts the read-only node dashboard, node details and
+recent cluster events at `/`. It shares `/api/cluster/status` with a future local
+display. Deploy with `desk-dashboard.yml`; see [dashboard operations](docs/DESK_DASHBOARD.md).

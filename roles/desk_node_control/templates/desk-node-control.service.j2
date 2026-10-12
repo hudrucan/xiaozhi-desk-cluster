@@ -1,0 +1,39 @@
+[Unit]
+Description=Confirmed Desk Cluster node reboot and recovery tracking
+Wants=network-online.target desk-dashboard.service
+After=network-online.target desk-dashboard.service
+
+[Service]
+ExecStart=/usr/bin/python3 /usr/local/libexec/desk-node-control/node-control.py /etc/desk-node-control/config.json
+Environment=PYTHONDONTWRITEBYTECODE=1
+Restart=on-failure
+RestartSec=5
+StateDirectory=desk-node-control
+StateDirectoryMode=0700
+UMask=0077
+CPUWeight=1
+CPUQuota=3%
+Nice=10
+MemoryMax=64M
+TasksMax=32
+LimitNOFILE=128
+CapabilityBoundingSet=
+AmbientCapabilities=
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+InaccessiblePaths=/opt -/etc/nats -/etc/haproxy -/etc/xiaozhi-mqtt-gateway.env -/etc/xiaozhi-core.env -/etc/xiaozhi-worker.env -/etc/xiaozhi-control-plane.env -/etc/xiaozhi-control-plane -/etc/xiaozhi-worker-asr -/etc/xiaozhi-worker-llm -/etc/xiaozhi-worker-tts -/etc/xiaozhi-core-tts -/etc/xiaozhi-runtime-apply -/etc/desk-monitoring -/etc/desk-dns/sync -/etc/desk-dns/backend
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+LockPersonality=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_UNIX AF_INET
+TimeoutStopSec=5
+
+[Install]
+WantedBy=multi-user.target

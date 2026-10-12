@@ -1,2 +1,227 @@
+{% if desk_dashboard_enabled | default(false) %}
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="dark"><title>Desk Cluster</title>
+<style>
+
+#desk-cluster.dc-app{--dc-bg:light-dark(#f9f6ef,#100d08);--dc-surface:light-dark(#fffdf7,#1c170f);--dc-hover:light-dark(#f2ebdd,#241e14);--dc-text:light-dark(#352a1b,#f3ead8);--dc-muted:light-dark(#756754,#b9aa91);--dc-faint:light-dark(#8b7d69,#8e8069);--dc-border:light-dark(#e0d5c3,#3d3221);--dc-gold:light-dark(#896019,#d5a85e);--dc-soft:light-dark(#f2e3c8,#332817);--dc-green:light-dark(#267046,#82bf91);--dc-red:light-dark(#b53b31,#ed9282);background:var(--dc-bg);color:var(--dc-text);font:14px/1.5 Inter,ui-sans-serif,system-ui,sans-serif;min-height:740px;padding:0 30px 28px;box-sizing:border-box;border-radius:16px}
+#desk-cluster *{box-sizing:border-box}
+#desk-cluster .dc-top{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:23px 0;border-bottom:1px solid var(--dc-border);padding-right:74px}
+#desk-cluster .dc-brand{display:flex;align-items:center;gap:10px;font-weight:650;letter-spacing:-.3px;font-size:17px}
+#desk-cluster .dc-mark{color:var(--dc-gold);display:flex}
+#desk-cluster .dc-address{font-size:12px;color:var(--dc-faint);font-family:ui-monospace,monospace}
+#desk-cluster .dc-intro{display:flex;justify-content:space-between;align-items:flex-end;gap:18px;padding:32px 0 23px}
+#desk-cluster .dc-eyebrow{font-size:11px;letter-spacing:1.6px;text-transform:uppercase;color:var(--dc-gold);font-weight:600}
+#desk-cluster h1{font-size:29px;line-height:1.2;letter-spacing:-.9px;margin:8px 0 7px;font-weight:650}
+#desk-cluster p{margin:0;color:var(--dc-muted)}
+#desk-cluster .dc-online{display:inline-flex;align-items:center;gap:7px;white-space:nowrap;color:var(--dc-green);font-size:12px}
+#desk-cluster .dc-dot{display:inline-block;width:6px;height:6px;background:var(--dc-green);border-radius:50%;flex-shrink:0}
+#desk-cluster .dc-summary{display:flex;flex-wrap:wrap;gap:10px 24px;padding:13px 0 22px;font-size:12px;color:var(--dc-muted)}
+#desk-cluster .dc-summary span{display:flex;align-items:center;gap:7px}
+#desk-cluster .dc-summary b{color:var(--dc-text);font-weight:500}
+#desk-cluster .dc-nodes{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}
+#desk-cluster .dc-node{border:1px solid var(--dc-border);border-radius:17px;overflow:hidden;background:var(--dc-surface);min-width:0}
+#desk-cluster .dc-node[data-selected="true"]{border-color:var(--dc-gold)}
+#desk-cluster .dc-node-head{padding:19px 19px 16px;display:flex;align-items:center;justify-content:space-between;gap:8px}
+#desk-cluster .dc-node-name{font-weight:600;font-size:16px;letter-spacing:-.3px}
+#desk-cluster .dc-ip{color:var(--dc-faint);font:12px/1.5 ui-monospace,monospace;margin-top:3px}
+#desk-cluster .dc-roles{display:flex;flex-wrap:wrap;gap:6px;padding:0 19px;min-height:48px;align-content:flex-start}
+#desk-cluster .dc-role{font-size:11px;border-radius:6px;padding:4px 7px;color:var(--dc-muted);background:var(--dc-hover);display:inline-flex;gap:5px;align-items:center}
+#desk-cluster .dc-role.owner{color:var(--dc-gold);background:var(--dc-soft)}
+#desk-cluster .dc-role svg{width:12px;height:12px}
+#desk-cluster .dc-activity{padding:15px 19px 19px;min-height:99px}
+#desk-cluster .dc-label{font-size:10px;text-transform:uppercase;letter-spacing:1.25px;color:var(--dc-faint);font-weight:600}
+#desk-cluster .dc-task{display:flex;gap:8px;align-items:center;margin-top:8px;font-weight:500;font-size:15px}
+#desk-cluster .dc-task svg{color:var(--dc-gold);width:16px;height:16px;flex-shrink:0}
+#desk-cluster .dc-task-meta{font-size:12px;color:var(--dc-muted);padding-top:4px}
+#desk-cluster .dc-metrics{border-top:1px solid var(--dc-border);display:grid;grid-template-columns:1fr 1fr 1fr;padding:14px 19px;gap:10px}
+#desk-cluster .dc-metric small{color:var(--dc-faint);font-size:11px;display:block;margin-bottom:3px}
+#desk-cluster .dc-metric strong{font-size:13px;font-weight:500;font-variant-numeric:tabular-nums}
+#desk-cluster .dc-bar{height:3px;background:var(--dc-hover);border-radius:3px;margin-top:7px;overflow:hidden}
+#desk-cluster .dc-bar i{display:block;height:100%;background:var(--dc-gold);opacity:.8}
+#desk-cluster .dc-node-button{width:100%;border:0;border-top:1px solid var(--dc-border);color:var(--dc-muted);background:transparent;display:flex;align-items:center;justify-content:space-between;padding:12px 19px;font:inherit;font-size:12px;min-height:44px}
+#desk-cluster .dc-node-button:hover{background:var(--dc-hover);color:var(--dc-text)}
+#desk-cluster .dc-node-button svg{width:14px;height:14px}
+#desk-cluster .dc-detail{margin-top:16px;background:var(--dc-surface);border:1px solid var(--dc-border);border-radius:17px;overflow:hidden}
+#desk-cluster .dc-detail[hidden]{display:none}
+#desk-cluster .dc-detail-title{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:19px 22px;border-bottom:1px solid var(--dc-border)}
+#desk-cluster .dc-detail-identity{display:flex;align-items:center;gap:12px;min-width:0}
+#desk-cluster .dc-detail-emblem{display:flex;align-items:center;justify-content:center;width:38px;height:38px;border-radius:11px;background:var(--dc-soft);color:var(--dc-gold);flex-shrink:0}
+#desk-cluster .dc-detail-identity h2{font-size:16px;font-weight:600;margin:0;letter-spacing:-.3px}
+#desk-cluster .dc-detail-subtitle{color:var(--dc-muted);font-size:12px;margin-top:2px}
+#desk-cluster .dc-detail-actions{display:flex;align-items:center;gap:13px}
+#desk-cluster .dc-close{font:inherit;color:var(--dc-muted);background:transparent;border:0;display:flex;align-items:center;justify-content:center;width:44px;height:44px;border-radius:9px}
+#desk-cluster .dc-close:hover{background:var(--dc-hover);color:var(--dc-text)}
+#desk-cluster .dc-detail-grid{display:grid;grid-template-columns:1fr 1.12fr 1fr;padding:23px 22px;gap:23px}
+#desk-cluster .dc-detail-col{min-width:0}
+#desk-cluster .dc-detail-col+.dc-detail-col{border-left:1px solid var(--dc-border);padding-left:23px}
+#desk-cluster .dc-detail-heading{font-size:11px;letter-spacing:1.2px;text-transform:uppercase;color:var(--dc-faint);font-weight:600;margin:0 0 16px}
+#desk-cluster .dc-detail-role{display:flex;align-items:flex-start;gap:10px;margin-bottom:17px}
+#desk-cluster .dc-detail-role>svg{width:16px;height:16px;margin-top:2px;color:var(--dc-gold);flex-shrink:0}
+#desk-cluster .dc-detail-role strong{font-weight:500;font-size:13px;display:block}
+#desk-cluster .dc-detail-role small{display:block;color:var(--dc-muted);font-size:12px;margin-top:3px;overflow-wrap:anywhere}
+#desk-cluster .dc-connection-row{display:flex;justify-content:space-between;gap:12px;margin-top:9px;font-size:12px;color:var(--dc-muted)}
+#desk-cluster .dc-connection-row b{font-weight:500;color:var(--dc-text);text-align:right}
+#desk-cluster .dc-stage{position:relative;display:grid;grid-template-columns:20px 1fr auto;gap:8px;align-items:center;padding:8px 0;font-size:12px;color:var(--dc-muted)}
+#desk-cluster .dc-stage>svg{width:15px;height:15px}
+#desk-cluster .dc-stage.active{color:var(--dc-text)}
+#desk-cluster .dc-stage.active>svg{color:var(--dc-gold)}
+#desk-cluster .dc-stage-status{font-size:11px;color:var(--dc-faint)}
+#desk-cluster .dc-stage.active .dc-stage-status{color:var(--dc-gold)}
+#desk-cluster .dc-work-note{margin-top:10px;font-size:12px;color:var(--dc-muted)}
+#desk-cluster .dc-work-note strong{color:var(--dc-text);font-weight:500}
+#desk-cluster .dc-sync-row{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:8px 0;font-size:12px}
+#desk-cluster .dc-sync-row small{font-size:11px;color:var(--dc-faint)}
+#desk-cluster .dc-sync-state{display:flex;align-items:center;gap:6px;color:var(--dc-green);font-size:11px;white-space:nowrap}
+#desk-cluster .dc-sync-state svg{width:13px;height:13px}
+#desk-cluster .dc-sync-state.unknown{color:var(--dc-faint)}
+#desk-cluster .dc-detail-footer{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;padding:13px 22px;background:var(--dc-hover);font-size:11px;color:var(--dc-faint)}
+#desk-cluster .dc-detail-link{display:flex;align-items:center;gap:7px;color:var(--dc-gold);text-decoration:none;min-height:32px;font-size:12px}
+#desk-cluster .dc-detail-link:hover{text-decoration:underline}
+#desk-cluster .dc-detail-link svg{width:13px;height:13px}
+@media(max-width:760px){ #desk-cluster .dc-detail-grid{grid-template-columns:1fr 1fr;gap:20px}#desk-cluster .dc-detail-col:last-child{grid-column:1/-1;border-left:0;border-top:1px solid var(--dc-border);padding:18px 0 0}#desk-cluster .dc-detail-col:last-child .dc-sync-rows{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:18px}#desk-cluster .dc-sync-row{flex-wrap:wrap;gap:4px}}
+@media(max-width:540px){ #desk-cluster .dc-detail-title{padding:15px}#desk-cluster .dc-detail-actions .dc-online{display:none}#desk-cluster .dc-detail-grid{grid-template-columns:1fr;padding:20px 15px;gap:20px}#desk-cluster .dc-detail-col+.dc-detail-col{border-left:0;border-top:1px solid var(--dc-border);padding:18px 0 0}#desk-cluster .dc-detail-col:last-child .dc-sync-rows{display:block}#desk-cluster .dc-sync-row{flex-wrap:nowrap}#desk-cluster .dc-detail-footer{padding:12px 15px}}
+#desk-cluster .dc-services-title{margin:27px 0 11px;font-size:11px;letter-spacing:1.4px;text-transform:uppercase;color:var(--dc-faint);font-weight:600}
+#desk-cluster .dc-services{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}
+#desk-cluster .dc-service{padding:17px 18px;background:var(--dc-surface);border:1px solid var(--dc-border);border-radius:14px;color:var(--dc-text);text-decoration:none;display:block}
+#desk-cluster .dc-service:hover{background:var(--dc-hover);border-color:var(--dc-gold)}
+#desk-cluster .dc-service-title{display:flex;align-items:center;gap:9px;font-weight:600}
+#desk-cluster .dc-service-title svg{width:17px;height:17px;color:var(--dc-gold)}
+#desk-cluster .dc-service p{font-size:12px;padding:8px 0 12px}
+#desk-cluster .dc-service-bottom{display:flex;align-items:center;justify-content:space-between;color:var(--dc-faint);font-size:11px}
+#desk-cluster .dc-service-bottom svg{width:13px;height:13px}
+#desk-cluster .dc-foot{display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-top:21px;color:var(--dc-faint);font-size:11px}
+#desk-cluster.dc-app[data-layout="rows"] .dc-nodes{display:flex;flex-direction:column;gap:10px}
+#desk-cluster.dc-app[data-layout="rows"] .dc-node{display:grid;grid-template-columns:1.05fr 1.1fr 1.4fr 1.2fr 44px;align-items:center;border-radius:14px}
+#desk-cluster.dc-app[data-layout="rows"] .dc-node-head{padding:19px 15px;align-items:flex-start}
+#desk-cluster.dc-app[data-layout="rows"] .dc-roles{padding:0 8px;min-height:0}
+#desk-cluster.dc-app[data-layout="rows"] .dc-activity{padding:17px 12px;min-height:0}
+#desk-cluster.dc-app[data-layout="rows"] .dc-metrics{padding:15px 12px;border-top:0;gap:8px}
+#desk-cluster.dc-app[data-layout="rows"] .dc-node-button{height:100%;padding:0 12px;border-top:0}
+#desk-cluster.dc-app[data-layout="rows"] .dc-node-button span{display:none}
+#desk-cluster .dc-offline .dc-dot{background:var(--dc-red)}
+#desk-cluster .dc-offline .dc-task{color:var(--dc-red)}
+#desk-cluster .dc-offline .dc-task svg{color:var(--dc-red)}
+@media(max-width:760px){ #desk-cluster.dc-app{padding:0 18px 23px;min-height:740px}#desk-cluster .dc-node-head{padding:16px 13px}#desk-cluster .dc-roles{padding:0 13px;min-height:69px}#desk-cluster .dc-activity{padding:13px;min-height:113px}#desk-cluster .dc-metrics{padding:13px;gap:5px}#desk-cluster .dc-node-button{padding:10px 13px}#desk-cluster.dc-app[data-layout="rows"] .dc-node{grid-template-columns:1fr 1fr 1.1fr 40px}#desk-cluster.dc-app[data-layout="rows"] .dc-metrics{display:none}#desk-cluster .dc-service{padding:14px}}
+@media(max-width:540px){ #desk-cluster .dc-top{padding-right:65px;align-items:flex-start;flex-direction:column;gap:4px}#desk-cluster .dc-intro{align-items:flex-start;flex-direction:column;gap:12px;padding-top:25px}#desk-cluster h1{font-size:25px}#desk-cluster .dc-nodes,#desk-cluster .dc-services{grid-template-columns:1fr}#desk-cluster .dc-roles{min-height:0;padding-bottom:0}#desk-cluster .dc-activity{min-height:0;padding:17px 13px}#desk-cluster .dc-node-head{padding:15px 13px 13px}#desk-cluster.dc-app[data-layout="rows"] .dc-node{grid-template-columns:1fr 44px}#desk-cluster.dc-app[data-layout="rows"] .dc-node-head{padding-bottom:10px}#desk-cluster.dc-app[data-layout="rows"] .dc-roles{grid-column:1;padding:0 15px}#desk-cluster.dc-app[data-layout="rows"] .dc-activity{grid-column:1;padding:12px 15px 16px}#desk-cluster.dc-app[data-layout="rows"] .dc-node-button{grid-column:2;grid-row:1/4}#desk-cluster .dc-service p{padding:7px 0}#desk-cluster .dc-detail-lines{flex-direction:column}}
+
+body{margin:0;background:#100d08;color:#f3ead8;font-family:Inter,ui-sans-serif,system-ui,sans-serif;padding:20px 14px}#desk-cluster{width:min(1120px,100%);margin:auto}#desk-cluster button{cursor:pointer}#desk-cluster .dc-brand{color:inherit;text-decoration:none}#desk-cluster .dc-mark svg{width:20px;height:20px}#desk-cluster .dc-events{margin-top:24px;background:var(--dc-surface);border:1px solid var(--dc-border);border-radius:17px;overflow:hidden}#desk-cluster .dc-events-head{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:19px 22px;border-bottom:1px solid var(--dc-border)}#desk-cluster .dc-events-head h2{font-size:15px;font-weight:600;margin:0 0 4px}#desk-cluster .dc-events-head p{font-size:12px}#desk-cluster .dc-events-toggle{font:inherit;font-size:12px;color:var(--dc-gold);border:0;background:transparent;padding:10px 0;white-space:nowrap;min-height:44px}#desk-cluster .dc-event{padding:14px 22px;display:flex;align-items:center;gap:12px}#desk-cluster .dc-event+.dc-event{border-top:1px solid var(--dc-border)}#desk-cluster .dc-event-icon{display:flex;color:var(--dc-gold);flex-shrink:0}#desk-cluster .dc-event-content{min-width:0;flex:1;font-size:13px;overflow-wrap:anywhere}#desk-cluster .dc-event-content small{display:block;color:var(--dc-faint);font-size:11px;margin-top:3px}#desk-cluster .dc-event time{font-size:11px;color:var(--dc-faint);font-variant-numeric:tabular-nums;white-space:nowrap}#desk-cluster .dc-empty{padding:24px 22px;font-size:12px}#desk-cluster .dc-task{flex-wrap:wrap;overflow-wrap:anywhere}#desk-cluster .dc-activity{min-height:115px}#desk-cluster .dc-node-button:focus-visible,#desk-cluster a:focus-visible,#desk-cluster button:focus-visible{outline:2px solid var(--dc-gold);outline-offset:3px}#desk-cluster .dc-detail-heading{overflow-wrap:anywhere}#desk-cluster .dc-services-title{font-size:11px}#desk-cluster .dc-detail-link{min-height:44px}@media(max-width:540px){body{padding:0}#desk-cluster{border-radius:0}#desk-cluster .dc-events-head,#desk-cluster .dc-event{padding-left:15px;padding-right:15px}#desk-cluster .dc-summary{gap:10px 15px}#desk-cluster .dc-activity{min-height:0}}
+#desk-cluster .dc-services{grid-template-columns:repeat(4,minmax(0,1fr))}#desk-cluster .dc-client-service{min-width:0}#desk-cluster .dc-client-service .dc-service{width:100%;height:100%;text-align:left;font-family:inherit}#desk-cluster .dc-client-disabled{cursor:default;opacity:.65}#desk-cluster .dc-client-disabled:hover{background:var(--dc-surface);border-color:var(--dc-border)}#desk-cluster .dc-client-status{display:flex;align-items:center;gap:5px}@media(max-width:900px){ #desk-cluster .dc-services{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:540px){ #desk-cluster .dc-services{grid-template-columns:1fr}}
+#desk-cluster .dc-service{display:flex;flex-direction:column;min-height:120px}#desk-cluster .dc-service-bottom{margin-top:auto;padding-top:8px}#desk-cluster .dc-client-service{display:flex}#desk-cluster .dc-client-service .dc-service{flex:1}@media(max-width:540px){ #desk-cluster .dc-service{min-height:112px}}
+
+#desk-cluster .dc-reboot{display:inline-flex;align-items:center;gap:7px;min-height:38px;padding:7px 11px;border:1px solid var(--dc-border);border-radius:8px;background:transparent;color:var(--dc-muted);font:inherit;font-size:12px;cursor:pointer}#desk-cluster .dc-reboot:hover:not(:disabled){border-color:var(--dc-gold);color:var(--dc-text)}#desk-cluster .dc-reboot:disabled{opacity:.45;cursor:not-allowed}#desk-cluster .dc-detail-links{display:flex;align-items:center;gap:15px;flex-wrap:wrap}#desk-cluster .dc-operation{margin:0 0 18px;padding:12px 15px;background:var(--dc-surface);border:1px solid var(--dc-border);border-radius:12px;font-size:12px;color:var(--dc-muted)}#desk-cluster .dc-operation strong{color:var(--dc-text)}#desk-cluster dialog{width:min(440px,calc(100% - 32px));max-height:calc(100% - 32px);overflow:auto;background:var(--dc-surface);color:var(--dc-text);border:1px solid var(--dc-border);border-radius:16px;padding:23px;font:14px/1.5 Inter,ui-sans-serif,system-ui,sans-serif}#desk-cluster dialog::backdrop{background:rgba(0,0,0,.6)}#desk-cluster dialog h2{margin:0 0 10px;font-size:19px}#desk-cluster dialog p{margin:8px 0}#desk-cluster .dc-confirm-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:22px}#desk-cluster .dc-confirm-primary{background:var(--dc-gold);color:var(--dc-bg);border-color:var(--dc-gold)}#desk-cluster .dc-confirm-note{font-size:12px;color:var(--dc-faint)}
+</style></head><body><main id="desk-cluster" class="dc-app">
+<header class="dc-top"><a class="dc-brand" href="/" aria-label="Desk Cluster home"><span class="dc-mark" data-icon="layers"></span>Desk Cluster</a><span class="dc-address" id="address"></span></header>
+<div class="dc-intro"><div><div class="dc-eyebrow">Cluster overview</div><h1>Three nodes. One home.</h1><p>Ownership, activity and health at a glance.</p></div><span class="dc-online" id="online">Connecting…</span></div>
+<div class="dc-summary" id="summary"></div>
+<div class="dc-nodes" id="nodes"></div>
+<div id="details" hidden></div>
+<h2 class="dc-services-title">Services</h2><nav class="dc-services" aria-label="Cluster services">
+<a class="dc-service" href="/xiaozhi/"><div class="dc-service-title"><span data-icon="bot"></span>Xiaozhi</div><p>Providers, memory, soundbank and voice logs.</p><div class="dc-service-bottom"><span>/xiaozhi/</span><span data-icon="arrow"></span></div></a>
+<div id="client-service" class="dc-client-service"><button type="button" class="dc-service dc-client-disabled" disabled><div class="dc-service-title">Xiaozhi Client</div><p>Desk Robot · Web Control</p><div class="dc-service-bottom"><span>Checking device…</span></div></button></div>
+<a class="dc-service" href="/dns/"><div class="dc-service-title"><span data-icon="shield"></span>DNS</div><p>AdGuard Home · Filtering, clients and query logs.</p><div class="dc-service-bottom"><span>/dns/</span><span data-icon="arrow"></span></div></a>
+<a class="dc-service" href="/monitor/"><div class="dc-service-title"><span data-icon="activity"></span>Monitoring</div><p>Beszel · CPU, memory, temperatures and services.</p><div class="dc-service-bottom"><span>/monitor/</span><span data-icon="arrow"></span></div></a>
+
+</nav>
+
+<div id="node-operation" class="dc-operation" role="status" hidden></div>
+<dialog id="reboot-dialog" aria-labelledby="reboot-title"><h2 id="reboot-title">Reboot node</h2><div id="reboot-description"></div><p class="dc-confirm-note">Other nodes continue serving the cluster. Active conversations on this node will be interrupted. Recovery is tracked automatically; a node that fails to boot may need manual attention.</p><div class="dc-confirm-actions"><button id="reboot-cancel" class="dc-reboot" type="button">Cancel</button><button id="reboot-confirm" class="dc-reboot dc-confirm-primary" type="button" disabled>Reboot node</button></div></dialog>
+<section class="dc-events" aria-label="Recent cluster events"><header class="dc-events-head"><div><h2>Recent events</h2><p>Ownership, service health and configuration changes.</p></div><button id="event-toggle" type="button" class="dc-events-toggle" hidden>View all</button></header><div id="events"><p class="dc-empty">Waiting for cluster status…</p></div></section>
+<footer class="dc-foot"><span>Trusted LAN access · One address for all services</span><span id="updated" role="status">Connecting to cluster…</span></footer>
+</main>
+<script>
+'use strict';
+const membership={{ dashboard_members | to_json }};
+const firmwareURL={{ desk_dashboard_client_url | default('') | to_json }};
+const nodeControlEnabled={{ desk_node_control_enabled | default(false) | to_json }};
+{% raw %}
+const root=document.getElementById('desk-cluster');
+const state={selected:null,showAll:false,snapshot:null,unavailable:false};
+const iconPaths={layers:'M12 3 3 8l9 5 9-5-9-5ZM3 12l9 5 9-5M3 16l9 5 9-5',server:'M4 3h16v7H4zM4 14h16v7H4zM7 6h.01M7 17h.01',crown:'m3 6 4 4 5-7 5 7 4-4-2 14H5L3 6Z',sparkles:'m12 3 2.8 6.2L21 12l-6.2 2.8L12 21l-2.8-6.2L3 12l6.2-2.8L12 3Z',volume:'m11 5-6 4H2v6h3l6 4V5Zm4 3a6 6 0 0 1 0 8m3-11a10 10 0 0 1 0 14',mic:'M9 4a3 3 0 0 1 6 0v8a3 3 0 0 1-6 0V4Zm-3 7v1a6 6 0 0 0 12 0v-1M12 18v4M8 22h8',network:'M9 2h6v6H9zM2 16h6v6H2zM16 16h6v6h-6zM12 8v4M5 16v-4h14v4',pause:'M8 5v14M16 5v14',shield:'m12 2 8 3v6c0 5-8 11-8 11S4 16 4 11V5l8-3Zm-4 10 3 3 5-6',check:'m5 12 4 4L19 6',arrow:'M7 17 17 7M7 7h10v10',x:'m6 6 12 12M6 18 18 6',activity:'M2 12h4l3-9 6 18 3-9h4',bot:'M6 8h12a2 2 0 0 1 2 2v9H4v-9a2 2 0 0 1 2-2ZM12 8V3M9 12h.01M15 12h.01M9 16h6',sync:'M4 9a8 8 0 0 1 14-4l2 2M20 3v4h-4M20 15A8 8 0 0 1 6 20l-2-2M4 22v-4h4',alert:'m12 3 10 18H2L12 3ZM12 9v5M12 17h.01',clock:'M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20ZM12 6v6l4 2'};
+function icon(name){return `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${iconPaths[name]||iconPaths.server}"/></svg>`;}
+function esc(value){return String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+function finite(v){return typeof v==='number'&&Number.isFinite(v);}
+function metric(v,unit){return finite(v)?esc(v.toFixed(unit==='°C'?1:0))+unit:'—';}
+function blank(m){return {id:m.id,ip:m.management,online:false,vip:{},activity:{},sessions:{},components:{},configuration:{}};}
+function fresh(n){return !state.unavailable&&n.online===true&&Date.now()-Date.parse(n.observed_at)<=20000;}
+function live(n){if(fresh(n))return n;return {...blank({id:n.id,management:n.ip}),observed_at:n.observed_at};}
+function workerName(kind){return {asr:'ASR',llm:'LLM / VLM',tts:'TTS'}[kind];}
+function task(n){
+ if(!fresh(n))return ['alert','Telemetry unavailable','Waiting for the node to respond'];
+ const active=['asr','llm','tts'].filter(k=>finite(n.activity[k])&&n.activity[k]>0);
+ if(active.length)return [active.length===1?{asr:'mic',llm:'sparkles',tts:'volume'}[active[0]]:'activity',active.map(workerName).join(' + '),active.map(k=>`${n.activity[k]} ${k.toUpperCase()} job${n.activity[k]===1?'':'s'}`).join(' · ')];
+ if(['asr','llm','tts'].some(k=>!finite(n.activity[k])))return ['alert','Worker status unavailable','Activity has not been confirmed'];
+ if(finite(n.dns_queries_per_second)&&n.dns_queries_per_second>0)return ['network','DNS · Serving',`${n.dns_queries_per_second.toFixed(1)} queries/s · ${n.core>0?'conversation idle':'voice idle'}`];
+ return ['pause','Voice · Idle',n.core>0?'Conversation open · ready for input':'No active voice jobs'];
+}
+function roles(n){const entries=[];if(n.vip.xiaozhi===true)entries.push(['Xiaozhi VIP',true]);if(n.vip.dns===true)entries.push(['DNS VIP',true]);if(n.mqtt>0)entries.push([`MQTT · ${n.mqtt}`,false]);if(n.core>0)entries.push([`Core · ${n.core}`,false]);if(!entries.length)entries.push([fresh(n)?'Voice worker':'Unavailable',false]);return entries.map(([label,owner])=>`<span class="dc-role ${owner?'owner':''}">${owner?icon('crown'):''}${esc(label)}</span>`).join('');}
+function configSummary(nodes,key){let highest=null;for(const n of nodes){const r=n.configuration[key]?.revision;if(finite(r)&&(highest===null||r>highest))highest=r;}return {ready:nodes.filter(n=>fresh(n)&&highest!==null&&n.configuration[key]?.revision===highest&&n.configuration[key]?.state==='synced').length,revision:highest};}
+function nodeMarkup(n){const [symbol,title,subtitle]=task(n);return `<article class="dc-node ${fresh(n)?'':'dc-offline'}" data-selected="${state.selected===n.id}"><div class="dc-node-head"><div><div class="dc-node-name">${esc(n.id)}</div><div class="dc-ip">${esc(n.ip)}</div></div><i class="dc-dot" aria-label="${fresh(n)?'Online':'Unavailable'}"></i></div><div class="dc-roles">${roles(n)}</div><div class="dc-activity"><div class="dc-label">Current activity</div><div class="dc-task">${icon(symbol)}${esc(title)}</div><div class="dc-task-meta">${esc(subtitle)}</div></div><div class="dc-metrics">${[['CPU',n.cpu,'%'],['Memory',n.memory,'%'],['Temp',n.temperature,'°C']].map(([label,value,unit])=>`<div class="dc-metric"><small>${label}</small><strong>${metric(value,unit)}</strong>${unit==='%'?`<div class="dc-bar"><i style="width:${finite(value)?Math.min(100,Math.max(0,value)):0}%"></i></div>`:''}</div>`).join('')}</div><button type="button" class="dc-node-button" data-node="${esc(n.id)}" aria-expanded="${state.selected===n.id}" aria-controls="details"><span>View node details</span>${icon('arrow')}</button></article>`;}
+function detailMarkup(n){
+ const online=fresh(n);const owners=[['xiaozhi','Xiaozhi VIP','Management UI'],['dns','DNS VIP','IPv4 + IPv6 resolver']].filter(([key])=>n.vip[key]===true);
+ const ownerHTML=owners.length?owners.map(([,name,description])=>`<div class="dc-detail-role">${icon('crown')}<div><strong>${name}</strong><small>${description}</small></div></div>`).join(''):`<div class="dc-detail-role">${icon(online?'server':'alert')}<div><strong>${online&&n.vip.xiaozhi===false&&n.vip.dns===false?'No VIP assigned':'Ownership unknown'}</strong><small>${online?'Cluster workloads run independently of VIP ownership':'Waiting for fresh node telemetry'}</small></div></div>`;
+ const connections=[['MQTT',finite(n.mqtt)?`${n.mqtt} client${n.mqtt===1?'':'s'}`:'Unknown'],['Core',finite(n.core)?`${n.core} conversation${n.core===1?'':'s'}`:'Unknown']];
+ const stages=['asr','llm','tts'].map(k=>{const count=n.activity[k];const active=finite(count)&&count>0;return `<div class="dc-stage ${active?'active':''}">${icon({asr:'mic',llm:'sparkles',tts:'volume'}[k])}<span>${workerName(k)}</span><span class="dc-stage-status">${!finite(count)?'Unknown':active?`${count} active`:'Idle'}</span></div>`;}).join('');
+ const configs=['xiaozhi','dns','monitoring'].map(k=>{const s=n.configuration[k]||{state:'unknown'};const synced=s.state==='synced';return `<div class="dc-sync-row"><div>${{xiaozhi:'Xiaozhi',dns:'DNS',monitoring:'Monitoring'}[k]}<br><small>${finite(s.revision)?`revision ${s.revision}`:'Revision unavailable'}</small></div><span class="dc-sync-state ${synced?'':'unknown'}">${icon(synced?'check':'clock')}${esc({synced:'Synced',pending:'Pending',failed:'Needs attention',unknown:'Unknown'}[s.state]||'Unknown')}</span></div>`;}).join('');
+ const s=n.configuration.xiaozhi||{};const runtime=`Worker ${finite(s.worker_revision)?s.worker_revision:'—'} · Core ${finite(s.core_revision)?s.core_revision:'—'}`;
+ const sessions=Object.entries(n.sessions||{}).filter(([,v])=>v>0).map(([k,v])=>`${v} ${k.replaceAll('_',' ')}`).join(' · ');
+ const healthy=n.components.dns==='ready';const protection=n.dns_protection===true?'protection enabled':n.dns_protection===false?'protection disabled':'protection unknown';
+ return `<section class="dc-detail" aria-label="${esc(n.id)} details"><header class="dc-detail-title"><div class="dc-detail-identity"><span class="dc-detail-emblem">${icon('server')}</span><div><h2>${esc(n.id)}</h2><div class="dc-detail-subtitle">Node details · ${online?'telemetry current':'telemetry unavailable'}</div></div></div><div class="dc-detail-actions"><span class="dc-online">${online?'<i class="dc-dot"></i>Online':'Unavailable'}</span><button type="button" class="dc-close" aria-label="Close node details">${icon('x')}</button></div></header><div class="dc-detail-grid"><section class="dc-detail-col"><h3 class="dc-detail-heading">Ownership & connections</h3>${ownerHTML}${connections.map(([key,value])=>`<div class="dc-connection-row"><span>${key}</span><b>${esc(value)}</b></div>`).join('')}</section><section class="dc-detail-col"><h3 class="dc-detail-heading">Voice workers</h3>${stages}<div class="dc-work-note">${esc(sessions||'No active core conversation')}<br>${esc(runtime)}</div></section><section class="dc-detail-col"><h3 class="dc-detail-heading">Configuration & health</h3><div class="dc-sync-rows">${configs}</div></section></div><footer class="dc-detail-footer"><span>${online?`AdGuard ${healthy?'responding':'unavailable'} · ${protection}`:'Current service health unknown'}</span><div class="dc-detail-links"><a class="dc-detail-link" href="/monitor/">Open monitoring ${icon('arrow')}</a>${nodeControlEnabled?`<button type="button" class="dc-reboot" data-reboot="${esc(n.id)}" ${canReboot()?'':'disabled'} title="${canReboot()?'Reboot this node with confirmation':'Three healthy, synced nodes and no active reboot required'}">${icon('sync')}Reboot node</button>`:''}</div></footer></section>`;
+}
+function render(){
+ const previousFocus=document.activeElement;const focusedNode=previousFocus?.dataset.node;const closeFocused=previousFocus?.classList.contains('dc-close');
+ const nodes=(state.snapshot?.nodes||membership.map(blank)).map(live);
+ const online=nodes.filter(fresh).length;document.getElementById('online').innerHTML=`<i class="dc-dot"></i>${online} / 3 nodes responding`;
+ const sync=configSummary(nodes,'xiaozhi');const dnsReady=nodes.filter(n=>fresh(n)&&n.components.dns==='ready').length;const voice=nodes.reduce((sum,n)=>sum+(finite(n.core)?n.core:0),0);
+ document.getElementById('summary').innerHTML=`<span>${icon('shield')}DNS <b>${dnsReady} / 3 responding</b></span><span>${icon('sync')}Config <b>${sync.ready} / 3 applied</b></span><span>${icon('activity')}Voice <b>${voice} conversation${voice===1?'':'s'}</b></span>`;
+ document.getElementById('nodes').innerHTML=nodes.map(nodeMarkup).join('');
+ const detail=document.getElementById('details');detail.hidden=!state.selected;if(state.selected){const n=nodes.find(n=>n.id===state.selected);detail.innerHTML=n?detailMarkup(n):'';}
+ if(focusedNode)root.querySelector(`[data-node="${focusedNode}"]`)?.focus({preventScroll:true});else if(closeFocused)root.querySelector('.dc-close')?.focus({preventScroll:true});
+ renderClient();renderEvents();const stamp=state.snapshot?.observed_at;document.getElementById('updated').textContent=state.unavailable?'Cluster status unavailable':stamp?`Updated ${new Date(stamp).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'})}`:'Connecting to cluster…';
+}
+function renderClient(){
+ const firmware=state.snapshot?.firmware;const current=firmware&&!state.unavailable&&Date.now()-Date.parse(firmware.observed_at)<=30000;
+ const online=current&&firmware.state==='online';let href=null;
+ try{const u=new URL(firmware?.url);if(u.protocol==='http:'&&u.href===firmwareURL&&u.port==='8080'&&u.pathname==='/'&&!u.search&&!u.hash&&!u.username&&!u.password)href=u.href;}catch{}
+ const enabled=online&&href!==null;const label=enabled?'Online':current?'Offline':'Unavailable';
+ const content=`<div class="dc-service-title">${icon('bot')}Xiaozhi Client</div><p>Desk Robot · Web Control</p><div class="dc-service-bottom"><span>${enabled?esc(new URL(href).host):'Client is off or unreachable'}</span><span class="dc-client-status">${enabled?'<i class="dc-dot"></i>':''}${label}</span></div>`;
+ document.getElementById('client-service').innerHTML=enabled?`<a class="dc-service" href="${esc(href)}" target="_blank" rel="noopener">${content}</a>`:`<button type="button" class="dc-service dc-client-disabled" disabled aria-disabled="true">${content}</button>`;
+}
+function renderEvents(){
+ const rows=state.snapshot?.events||[];const button=document.getElementById('event-toggle');button.hidden=rows.length<=6;button.textContent=state.showAll?'Show recent':'View all';button.setAttribute('aria-expanded',String(state.showAll));
+ document.getElementById('events').innerHTML=rows.length?(state.showAll?rows:rows.slice(0,6)).map(e=>`<div class="dc-event"><span class="dc-event-icon">${icon({ownership:'crown',configuration:'sync',node:'server',service:'activity'}[e.kind]||'clock')}</span><div class="dc-event-content"><span>${esc(e.message)}</span><small>${esc(e.node)}</small></div><time datetime="${esc(e.at)}">${esc(new Date(e.at).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}))}</time></div>`).join(''):`<p class="dc-empty">${state.snapshot?'No changes observed since dashboard startup.':'Waiting for cluster status…'}</p>`;
+}
+root.addEventListener('click',event=>{const button=event.target.closest('[data-node]');if(button){state.selected=state.selected===button.dataset.node?null:button.dataset.node;render();}if(event.target.closest('.dc-close')){const previousSelection=state.selected;state.selected=null;render();if(previousSelection)root.querySelector(`[data-node="${previousSelection}"]`)?.focus();}if(event.target.closest('#event-toggle')){state.showAll=!state.showAll;renderEvents();}});
+
+document.getElementById('address').textContent=location.host;root.querySelectorAll('[data-icon]').forEach(el=>{el.innerHTML=icon(el.dataset.icon);});
+let timer=null,activeRequest=null;
+async function poll(){
+ if(document.hidden)return;
+ activeRequest=new AbortController();const deadline=setTimeout(()=>activeRequest?.abort(),4000);
+ try{const res=await fetch('/api/cluster/status',{signal:activeRequest.signal,cache:'no-store',credentials:'same-origin'});if(!res.ok)throw Error();const s=await res.json();if(s.protocol!=='desk-cluster-status-v1'||!Array.isArray(s.nodes)||s.nodes.length!==3||s.nodes.some((n,i)=>n.id!==membership[i].id)||!Array.isArray(s.events)||s.events.length>64)throw Error();state.snapshot=s;state.unavailable=Date.now()-Date.parse(s.observed_at)>20000;}
+ catch{state.unavailable=true;}
+ finally{clearTimeout(deadline);activeRequest=null;render();if(!document.hidden)timer=setTimeout(poll,5000);}
+}
+document.addEventListener('visibilitychange',()=>{clearTimeout(timer);if(document.hidden){activeRequest?.abort();}else if(!activeRequest){render();poll();}});
+
+const operationState={busy:false,latest:null,timer:null,loading:false,prompt:null,expiry:null};
+function canReboot(){const nodes=state.snapshot?.nodes||[];return nodeControlEnabled&&!operationState.busy&&nodes.length===3&&nodes.every(n=>fresh(n)&&['worker','core','mqtt','dns'].every(k=>n.components[k]==='ready')&&['xiaozhi','dns','monitoring'].every(k=>n.configuration[k]?.state==='synced'));}
+async function nodeAction(path,body){const controller=new AbortController();const timer=setTimeout(()=>controller.abort(),23000);try{const res=await fetch('/api/cluster/operations'+path,{method:body===undefined?'GET':'POST',headers:body===undefined?{}:{'Content-Type':'application/json','X-Desk-Action':'confirm-node-operation'},body:body===undefined?undefined:JSON.stringify(body),signal:controller.signal,cache:'no-store',credentials:'same-origin'});const value=await res.json();if(!res.ok){const error=Error(typeof value.error==='string'?value.error:'Node operation unavailable');error.status=res.status;throw error;}return value;}finally{clearTimeout(timer);}}
+function showOperation(message){const el=document.getElementById('node-operation');el.hidden=!message;el.textContent=message||'';}
+async function pollOperation(){if(!nodeControlEnabled||document.hidden||operationState.loading)return;operationState.loading=true;clearTimeout(operationState.timer);try{const value=await nodeAction('');if(value.protocol!=='desk-node-operation-v1')throw Error();const op=value.operation;if(op){if(!membership.some(n=>n.id===op.node)||!['accepted','offline','starting','rejoined','needs_attention'].includes(op.state))throw Error();operationState.latest=op;operationState.busy=op.state!=='rejoined'&&op.expires*1000>Date.now();const labels={accepted:'Reboot requested · waiting for shutdown',offline:'Offline · waiting for boot',starting:'Boot detected · waiting for services and config sync',rejoined:'Recovered · services ready and node rejoined',needs_attention:'Recovery not confirmed · manual attention required; no reboot retry'};showOperation(`${op.node} — ${labels[op.state]}`);}else{if(operationState.latest?.state==='rejoined'){operationState.busy=false;}else if(operationState.busy){showOperation('Reboot tracking unavailable. Check node status before another action.');}else{showOperation('');}}render();}catch{if(operationState.busy)showOperation('Reboot tracking unavailable. No automatic retry; waiting for cluster status.');}finally{operationState.loading=false;if(!document.hidden)operationState.timer=setTimeout(pollOperation,operationState.busy?5000:30000);}}
+async function prepareReboot(node){if(!canReboot())return;const dialog=document.getElementById('reboot-dialog');const description=document.getElementById('reboot-description');const confirm=document.getElementById('reboot-confirm');operationState.prompt=null;confirm.disabled=true;description.textContent='Checking fresh readiness of all three nodes…';dialog.showModal();try{const value=await nodeAction('/prepare',{node});if(!dialog.open)return;const member=membership.find(m=>m.id===node);if(value.node!==node||value.ip!==member.management||typeof value.token!=='string'||value.token.length>2048||!finite(value.expires))throw Error('Invalid confirmation response');operationState.prompt=value;const meta=value.metadata||{};const owners=[meta.vip?.xiaozhi?'Xiaozhi VIP':null,meta.vip?.dns?'DNS VIP':null].filter(Boolean).join(' · ')||'No VIP assigned';const jobs=['asr','llm','tts'].map(k=>`${workerName(k)}: ${finite(meta.activity?.[k])?meta.activity[k]:'unknown'}`).join(' · ');description.innerHTML=`<p><strong>${esc(node)}</strong> · ${esc(member.management)}</p><p>${esc(owners)}</p><p>${esc(jobs)}</p><p>${finite(meta.core)?meta.core:'Unknown'} active core conversation(s).</p>`;confirm.disabled=false;clearTimeout(operationState.expiry);operationState.expiry=setTimeout(()=>{confirm.disabled=true;description.textContent='Confirmation expired. Close and prepare again.';operationState.prompt=null;},Math.max(0,value.expires*1000-Date.now()));}catch(error){description.textContent=error.message||'Could not verify node readiness.';}}
+document.getElementById('reboot-cancel').addEventListener('click',()=>document.getElementById('reboot-dialog').close());
+document.getElementById('reboot-dialog').addEventListener('close',()=>{operationState.prompt=null;clearTimeout(operationState.expiry);});
+document.getElementById('reboot-confirm').addEventListener('click',async()=>{const prompt=operationState.prompt;if(!prompt)return;const confirm=document.getElementById('reboot-confirm');confirm.disabled=true;operationState.busy=true;render();try{const value=await nodeAction('/reboot',{token:prompt.token});if(value.accepted!==true||value.node!==prompt.node)throw Error('Reboot acknowledgement unavailable');document.getElementById('reboot-dialog').close();operationState.latest={node:value.node,id:value.id,state:'accepted'};showOperation(`${value.node} — Reboot requested · tracking recovery`);pollOperation();}catch(error){if(error.status)operationState.busy=false;document.getElementById('reboot-description').textContent=error.message||'Reboot acknowledgement unavailable. No automatic retry.';showOperation('Checking whether the reboot was accepted. No automatic retry.');pollOperation();}});
+root.addEventListener('click',event=>{const button=event.target.closest('[data-reboot]');if(button&&!button.disabled)prepareReboot(button.dataset.reboot);});
+document.addEventListener('visibilitychange',()=>{clearTimeout(operationState.timer);if(!document.hidden)pollOperation();});
+if(nodeControlEnabled)pollOperation();
+
+render();poll();
+{% endraw %}
+</script></body></html>
+
+{% else %}
 <!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Desk Cluster</title><style>
 :root{color-scheme:dark}*{box-sizing:border-box}body{margin:0;background:#100d08;color:#f3ead8;font:16px system-ui,sans-serif;min-height:100vh;display:grid;place-items:center}main{width:min(850px,100%);padding:32px}small{color:#d5a85e;letter-spacing:.15em;text-transform:uppercase}h1{font-size:clamp(30px,5vw,44px);margin:12px 0}p{color:#b9ac95;line-height:1.6}nav{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:16px;margin-top:28px}a{display:block;border:1px solid #40321f;border-radius:18px;padding:24px;background:#1b160e;color:inherit;text-decoration:none}a:hover,a:focus-visible{border-color:#d5a85e;background:#251e12}h2{margin:0 0 12px;font-size:22px}a p{margin:0;font-size:14px}</style></head><body><main><small>Desk Cluster</small><h1>Cluster services</h1><p>Xiaozhi, DNS and monitoring.</p><nav><a href="/xiaozhi/"><h2>Xiaozhi</h2><p>Shared settings, providers, memory and voice logs.</p></a><a href="/dns/"><h2>DNS</h2><p>AdGuard Home · Filtering policies and query logs.</p></a><a href="/monitor/"><h2>Monitoring</h2><p>Beszel · CPU, memory, temperature and service health across three nodes.</p></a></nav><p>Trusted LAN access · no sign-in required</p></main></body></html>
+
+{% endif %}

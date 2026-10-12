@@ -7,6 +7,9 @@
         path: /etc/desk-ui
         state: directory
         mode: '0755'
+    - name: Install the optional dashboard collector before its UI
+      ansible.builtin.include_role:
+        name: desk_dashboard
     - name: Install the small cluster landing page
       ansible.builtin.template:
         src: index.html.j2

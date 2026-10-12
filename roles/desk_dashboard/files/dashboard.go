@@ -1,0 +1,816 @@
+// Read-only cluster overview. Standard library only; no database or packet path.
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"math"
+	"net"
+	"net/http"
+	"net/url"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
+	"sync"
+	"syscall"
+	"time"
+)
+
+const protocol = "desk-cluster-status-v1"
+const interval = 5 * time.Second
+const staleAfter = 20 * time.Second
+
+type Member struct {
+	ID         string `json:"id"`
+	Private    string `json:"private"`
+	Management string `json:"management"`
+}
+type Config struct {
+	Node      string   `json:"node"`
+	Port      int      `json:"port"`
+	Members   []Member `json:"members"`
+	ClientURL string   `json:"client_url,omitempty"`
+}
+type Firmware struct {
+	URL       string    `json:"url"`
+	State     string    `json:"state"`
+	At        time.Time `json:"observed_at"`
+	Connected *bool     `json:"server_connected,omitempty"`
+}
+type SyncStatus struct {
+	State          string `json:"state"`
+	Revision       *int   `json:"revision"`
+	WorkerRevision *int   `json:"worker_revision,omitempty"`
+	CoreRevision   *int   `json:"core_revision,omitempty"`
+}
+type Node struct {
+	Protocol   string                `json:"protocol"`
+	ID         string                `json:"id"`
+	IP         string                `json:"ip"`
+	Boot       string                `json:"boot_id"`
+	At         time.Time             `json:"observed_at"`
+	Online     bool                  `json:"online"`
+	VIP        map[string]*bool      `json:"vip"`
+	MQTT       *int                  `json:"mqtt"`
+	Core       *int                  `json:"core"`
+	Sessions   map[string]int        `json:"sessions"`
+	Activity   map[string]*int       `json:"activity"`
+	CPU        *float64              `json:"cpu"`
+	Memory     *float64              `json:"memory"`
+	Temp       *float64              `json:"temperature"`
+	Uptime     *float64              `json:"uptime_seconds"`
+	DNSRate    *float64              `json:"dns_queries_per_second"`
+	Protection *bool                 `json:"dns_protection"`
+	Components map[string]string     `json:"components"`
+	Config     map[string]SyncStatus `json:"configuration"`
+	Events     []Event               `json:"events,omitempty"`
+}
+type Event struct {
+	ID      string    `json:"id"`
+	At      time.Time `json:"at"`
+	Node    string    `json:"node"`
+	Kind    string    `json:"kind"`
+	Message string    `json:"message"`
+}
+type Snapshot struct {
+	Protocol     string    `json:"protocol"`
+	At           time.Time `json:"observed_at"`
+	Nodes        []Node    `json:"nodes"`
+	Events       []Event   `json:"events"`
+	Observer     string    `json:"observer"`
+	HistorySince time.Time `json:"history_since"`
+	Firmware     Firmware  `json:"firmware"`
+}
+type cpuSample struct{ total, idle uint64 }
+type Dashboard struct {
+	config      Config
+	member      Member
+	client      *http.Client
+	mu          sync.RWMutex
+	local       Node
+	snapshot    Snapshot
+	cpu         cpuSample
+	dnsInstance string
+	dnsCount    int64
+	dnsAt       float64
+	slowAt      time.Time
+	slowConfig  map[string]SyncStatus
+	events      []Event
+	sequence    int
+	started     time.Time
+	firmware    Firmware
+}
+
+func unknown(member Member) Node {
+	return Node{Protocol: protocol, ID: member.ID, IP: member.Management, VIP: map[string]*bool{"xiaozhi": nil, "dns": nil}, Activity: map[string]*int{"asr": nil, "llm": nil, "tts": nil}, Components: map[string]string{}, Config: map[string]SyncStatus{}, Sessions: map[string]int{}}
+}
+func number(v any) *int {
+	n, ok := v.(float64)
+	if !ok || math.IsNaN(n) || math.IsInf(n, 0) || n < 0 || n > 1e9 || n != math.Trunc(n) {
+		return nil
+	}
+	p := int(n)
+	return &p
+}
+func boolean(v any) *bool {
+	b, ok := v.(bool)
+	if !ok {
+		return nil
+	}
+	return &b
+}
+func object(v any) map[string]any { m, _ := v.(map[string]any); return m }
+func listHas(v any, id string) bool {
+	a, _ := v.([]any)
+	for _, x := range a {
+		if x == id {
+			return true
+		}
+	}
+	return false
+}
+func readJSON(path string, limit int64) map[string]any {
+	f, e := os.Open(path)
+	if e != nil {
+		return nil
+	}
+	defer f.Close()
+	raw, e := io.ReadAll(io.LimitReader(f, limit+1))
+	if e != nil || int64(len(raw)) > limit {
+		return nil
+	}
+	var value map[string]any
+	if json.Unmarshal(raw, &value) != nil {
+		return nil
+	}
+	return value
+}
+func (d *Dashboard) get(ctx context.Context, url string) map[string]any {
+	req, e := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if e != nil {
+		return nil
+	}
+	res, e := d.client.Do(req)
+	if e != nil {
+		return nil
+	}
+	defer res.Body.Close()
+	if res.StatusCode != 200 {
+		return nil
+	}
+	raw, e := io.ReadAll(io.LimitReader(res.Body, 65537))
+	if e != nil || len(raw) > 65536 {
+		return nil
+	}
+	var value map[string]any
+	if json.Unmarshal(raw, &value) != nil {
+		return nil
+	}
+	return value
+}
+func parallelGets(ctx context.Context, d *Dashboard, urls []string) []map[string]any {
+	result := make([]map[string]any, len(urls))
+	var wg sync.WaitGroup
+	for i, url := range urls {
+		wg.Add(1)
+		go func(i int, url string) { defer wg.Done(); result[i] = d.get(ctx, url) }(i, url)
+	}
+	wg.Wait()
+	return result
+}
+func vipOwner(path string, addresses map[string]bool) *bool {
+	v := readJSON(path, 65536)
+	ip, _ := v["vip"].(string)
+	if net.ParseIP(ip) == nil || addresses == nil {
+		return nil
+	}
+	owned := addresses[ip]
+	return &owned
+}
+func localAddresses() map[string]bool {
+	addresses, e := net.InterfaceAddrs()
+	if e != nil {
+		return nil
+	}
+	result := map[string]bool{}
+	for _, a := range addresses {
+		ip, _, e := net.ParseCIDR(a.String())
+		if e == nil {
+			result[ip.String()] = true
+		}
+	}
+	return result
+}
+func uptime() float64 {
+	raw, _ := os.ReadFile("/proc/uptime")
+	f := strings.Fields(string(raw))
+	if len(f) == 0 {
+		return -1
+	}
+	v, e := strconv.ParseFloat(f[0], 64)
+	if e != nil {
+		return -1
+	}
+	return v
+}
+func parseCPU(raw string) cpuSample {
+	var s cpuSample
+	lines := strings.Split(raw, "\n")
+	if len(lines) == 0 {
+		return s
+	}
+	f := strings.Fields(lines[0])
+	if len(f) < 9 || f[0] != "cpu" {
+		return s
+	}
+	for i := 1; i <= 8; i++ {
+		v, e := strconv.ParseUint(f[i], 10, 64)
+		if e != nil {
+			return cpuSample{}
+		}
+		s.total += v
+		if i == 4 || i == 5 {
+			s.idle += v
+		}
+	}
+	return s
+}
+func cpuPercent(previous, current cpuSample) *float64 {
+	if previous.total == 0 || current.total <= previous.total || current.idle < previous.idle {
+		return nil
+	}
+	total := current.total - previous.total
+	idle := current.idle - previous.idle
+	if idle > total {
+		return nil
+	}
+	v := math.Round((1-float64(idle)/float64(total))*1000) / 10
+	return &v
+}
+func memoryPercent(raw string) *float64 {
+	values := map[string]float64{}
+	for _, line := range strings.Split(raw, "\n") {
+		f := strings.Fields(line)
+		if len(f) > 1 {
+			v, e := strconv.ParseFloat(f[1], 64)
+			if e == nil {
+				values[strings.TrimSuffix(f[0], ":")] = v
+			}
+		}
+	}
+	total, avail := values["MemTotal"], values["MemAvailable"]
+	if total <= 0 || avail <= 0 || avail > total {
+		return nil
+	}
+	v := math.Round((1-avail/total)*1000) / 10
+	return &v
+}
+func temperature() *float64 {
+	paths, _ := filepath.Glob("/sys/class/thermal/thermal_zone*/temp")
+	for _, p := range paths {
+		raw, e := os.ReadFile(p)
+		if e != nil {
+			continue
+		}
+		v, e := strconv.ParseFloat(strings.TrimSpace(string(raw)), 64)
+		if e == nil && v > 0 && v < 150000 {
+			v = math.Round(v/100) / 10
+			return &v
+		}
+	}
+	return nil
+}
+func freshActivity(v map[string]any, boot, node, p string, maxAge, now float64) bool {
+	stamp, ok := v["monotonic"].(float64)
+	instance, _ := v["instance"].(string)
+	idKey := "worker_id"
+	if p == "desk-dns-activity-v1" {
+		idKey = "node_id"
+	}
+	return ok && boot != "" && v["boot_id"] == boot && v[idKey] == node && v["protocol"] == p && len(instance) == 32 && now+0.1 >= stamp && now-stamp <= maxAge
+}
+func (d *Dashboard) slow(ctx context.Context) {
+	if time.Since(d.slowAt) < 30*time.Second {
+		return
+	}
+	d.slowAt = time.Now()
+	ip := d.member.Private
+	values := parallelGets(ctx, d, []string{"http://" + ip + ":8004/api/cluster", "http://127.0.0.1:3003/control/desk_policy", "http://" + ip + ":8092/api/desk-config/status", "http://" + ip + ":8004/api/settings/runtime"})
+	result := map[string]SyncStatus{}
+	cp := values[0]
+	state := SyncStatus{State: "unknown"}
+	if cp["protocol"] == "xiaozhi-control-plane-v1" && cp["node_id"] == d.config.Node {
+		source := object(cp["configuration"])
+		state.Revision = number(source["desired_revision"])
+		state.State = "pending"
+		if object(cp["reconciliation"])["state"] == "ready" && source["sync_status"] == "synced" {
+			state.State = "synced"
+		} else if object(cp["reconciliation"])["error_code"] != nil {
+			state.State = "failed"
+		}
+	}
+	result["xiaozhi"] = state
+	if values[3]["protocol"] == "xiaozhi-runtime-apply-v1" {
+		rows, _ := values[3]["nodes"].([]any)
+		for _, item := range rows {
+			row := object(item)
+			if row["node_id"] == d.config.Node {
+				s := result["xiaozhi"]
+				s.WorkerRevision, s.CoreRevision = number(row["worker_revision"]), number(row["core_revision"])
+				if s.State == "synced" && row["ready"] != true {
+					s.State = "pending"
+				}
+				result["xiaozhi"] = s
+			}
+		}
+	}
+	dns := values[1]
+	state = SyncStatus{State: "unknown"}
+	if rev := number(dns["revision"]); rev != nil {
+		state.Revision = rev
+		state.State = "pending"
+		if listHas(dns["ready"], d.config.Node) {
+			state.State = "synced"
+		}
+		if dns["error"] != nil {
+			state.State = "failed"
+		}
+	}
+	result["dns"] = state
+	monitor := values[2]
+	state = SyncStatus{State: "unknown"}
+	if rev := number(monitor["revision"]); rev != nil {
+		state.Revision = rev
+		state.State = "pending"
+		applied := number(monitor["applied_revision"])
+		if applied != nil && *applied == *rev && listHas(monitor["ready_nodes"], d.config.Node) {
+			state.State = "synced"
+		}
+		if monitor["apply_error"] != nil {
+			state.State = "failed"
+		}
+	}
+	result["monitoring"] = state
+	d.slowConfig = result
+}
+func (d *Dashboard) collect(ctx context.Context) {
+	n := unknown(d.member)
+	n.Online = true
+	n.At = time.Now().UTC()
+	boot, _ := os.ReadFile("/proc/sys/kernel/random/boot_id")
+	n.Boot = strings.TrimSpace(string(boot))
+	up := uptime()
+	if up >= 0 {
+		n.Uptime = &up
+	}
+	addresses := localAddresses()
+	n.VIP["xiaozhi"] = vipOwner("/etc/xiaozhi-ingress.json", addresses)
+	n.VIP["dns"] = vipOwner("/etc/desk-dns/vip.json", addresses)
+	raw, _ := os.ReadFile("/proc/stat")
+	current := parseCPU(string(raw))
+	n.CPU = cpuPercent(d.cpu, current)
+	d.cpu = current
+	raw, _ = os.ReadFile("/proc/meminfo")
+	n.Memory = memoryPercent(string(raw))
+	n.Temp = temperature()
+	activity := readJSON("/run/xiaozhi-worker/activity.json", 65536)
+	if freshActivity(activity, n.Boot, n.ID, "xiaozhi-worker-activity-v1", 3, up) {
+		for _, key := range []string{"asr", "llm", "tts"} {
+			v := number(activity[key])
+			if v != nil && *v <= 2 {
+				n.Activity[key] = v
+			}
+		}
+		n.Components["worker"] = "ready"
+	} else {
+		n.Components["worker"] = "unavailable"
+	}
+	dns := readJSON("/run/desk-dns/activity.json", 65536)
+	if freshActivity(dns, n.Boot, n.ID, "desk-dns-activity-v1", 3, up) {
+		count, ok := dns["queries"].(float64)
+		stamp, _ := dns["monotonic"].(float64)
+		instance, _ := dns["instance"].(string)
+		if ok && count >= 0 && count < 1<<53 {
+			if instance == d.dnsInstance && stamp > d.dnsAt && int64(count) >= d.dnsCount {
+				rate := math.Round((count-float64(d.dnsCount))/(stamp-d.dnsAt)*10) / 10
+				n.DNSRate = &rate
+			}
+			d.dnsCount, d.dnsInstance, d.dnsAt = int64(count), instance, stamp
+		}
+	} else {
+		d.dnsInstance = ""
+	}
+	ip := d.member.Private
+	urls := []string{"http://" + ip + ":8007/status", "http://" + ip + ":8000/status", "http://" + ip + ":8000/diagnostics", "http://127.0.0.1:3001/control/status"}
+	probeClient := d.config.ClientURL != "" && time.Since(d.firmware.At) >= 15*time.Second
+	if probeClient {
+		urls = append(urls, d.config.ClientURL+"api/status/system")
+	}
+	values := parallelGets(ctx, d, urls)
+	gateway, core, voice, adguard := values[0], values[1], values[2], values[3]
+	n.Components["mqtt"] = "unavailable"
+	if gateway["gateway_id"] == n.ID && gateway["status"] == "ready" {
+		n.MQTT = number(gateway["active_mqtt_connections"])
+		if n.MQTT != nil {
+			n.Components["mqtt"] = "ready"
+		}
+	}
+	n.Components["core"] = "unavailable"
+	if core["protocol"] == "xiaozhi-core-transport-v1" && core["core_id"] == n.ID && core["status"] == "ready" {
+		n.Core = number(core["active_sessions"])
+		if n.Core != nil {
+			n.Components["core"] = "ready"
+		}
+	}
+	if voice["protocol"] == "xiaozhi-voice-diagnostics-v1" && voice["node_id"] == n.ID {
+		for _, key := range []string{"idle", "asr", "asr_restarting", "llm", "tts", "done", "error", "aborted"} {
+			if count := number(object(voice["sessions"])[key]); count != nil && *count <= 128 {
+				n.Sessions[key] = *count
+			}
+		}
+	}
+	n.Components["dns"] = "unavailable"
+	n.Protection = boolean(adguard["protection_enabled"])
+	if n.Protection != nil {
+		n.Components["dns"] = "ready"
+	}
+	d.slow(ctx)
+	if probeClient {
+		status := Firmware{URL: d.config.ClientURL, State: "offline", At: time.Now().UTC()}
+		if status.URL == "" {
+			status.State = "disabled"
+		} else {
+			value := values[4]
+			parsed, _ := url.Parse(status.URL)
+			version, ok := value["version"].(string)
+			if ok && len(version) > 0 && len(version) <= 128 && value["ip"] == parsed.Hostname() && number(value["uptime_sec"]) != nil {
+				status.State = "online"
+				status.Connected = boolean(value["server_connected"])
+			}
+		}
+		d.firmware = status
+	}
+	for key, s := range d.slowConfig {
+		n.Config[key] = s
+	}
+	s := n.Config["xiaozhi"]
+	if n.Components["worker"] != "ready" {
+		s.WorkerRevision = nil
+	}
+	if n.Components["core"] == "ready" {
+		s.CoreRevision = number(object(core["tts"])["revision"])
+	}
+	if s.State == "synced" && (s.Revision == nil || s.WorkerRevision == nil || s.CoreRevision == nil || *s.Revision != *s.WorkerRevision || *s.Revision != *s.CoreRevision) {
+		s.State = "pending"
+	}
+	n.Config["xiaozhi"] = s
+	d.mu.Lock()
+	n.Events = append([]Event{}, d.local.Events...)
+	d.local = n
+	d.mu.Unlock()
+}
+func (d *Dashboard) event(n Node, kind, message string) {
+	d.sequence++
+	d.events = append(d.events, Event{ID: fmt.Sprintf("%s-%d-%d", d.config.Node, d.started.UnixNano(), d.sequence), At: time.Now().UTC(), Node: n.ID, Kind: kind, Message: message})
+	if len(d.events) > 64 {
+		d.events = d.events[len(d.events)-64:]
+	}
+}
+func (d *Dashboard) observe(previous, current Node) {
+	if previous.ID == "" {
+		return
+	}
+	if previous.Online != current.Online {
+		message := "Node telemetry unavailable"
+		if current.Online {
+			message = "Node telemetry restored"
+		}
+		d.event(current, "node", message)
+	}
+	if !previous.Online || !current.Online {
+		return
+	}
+	if previous.Boot != "" && current.Boot != "" && previous.Boot != current.Boot {
+		d.event(current, "node", "Node reboot detected")
+	}
+	// Role, config and service transitions are emitted by the node that owns them.
+	// Cached event rings are shared in /local; no journal or duplicate probe is needed.
+	if current.ID != d.config.Node {
+		return
+	}
+	for _, key := range []string{"xiaozhi", "dns"} {
+		a, b := previous.VIP[key], current.VIP[key]
+		if a != nil && b != nil && *a != *b {
+			label := "Xiaozhi VIP"
+			if key == "dns" {
+				label = "DNS VIP"
+			}
+			verb := "released"
+			if *b {
+				verb = "acquired"
+			}
+			d.event(current, "ownership", label+" "+verb)
+		}
+	}
+	for _, key := range []string{"xiaozhi", "dns", "monitoring"} {
+		a, b := previous.Config[key], current.Config[key]
+		if b.State != "unknown" && a.State != "" && a.State != "unknown" && (a.State != b.State || (a.Revision != nil && b.Revision != nil && *a.Revision != *b.Revision)) {
+			revision := ""
+			if b.Revision != nil {
+				revision = fmt.Sprintf(" · revision %d", *b.Revision)
+			}
+			d.event(current, "configuration", key+" config "+b.State+revision)
+		}
+	}
+	for _, key := range []string{"mqtt", "core", "worker", "dns"} {
+		a, b := previous.Components[key], current.Components[key]
+		if a != "" && b != "" && a != b {
+			d.event(current, "service", key+" service "+b)
+		}
+	}
+}
+func validateNode(n Node, m Member, now time.Time) bool {
+	if n.Protocol != protocol || n.ID != m.ID || n.IP != m.Management || !n.Online || n.At.IsZero() || now.Sub(n.At) > staleAfter || n.At.Sub(now) > 5*time.Second {
+		return false
+	}
+	for _, v := range []*float64{n.CPU, n.Memory, n.Temp, n.DNSRate, n.Uptime} {
+		if v != nil && (math.IsNaN(*v) || math.IsInf(*v, 0) || *v < 0) {
+			return false
+		}
+	}
+	if n.CPU != nil && *n.CPU > 100 || n.Memory != nil && *n.Memory > 100 {
+		return false
+	}
+	for _, v := range []*int{n.MQTT, n.Core} {
+		if v != nil && (*v < 0 || *v > 1024) {
+			return false
+		}
+	}
+	for key, v := range n.Activity {
+		if key != "asr" && key != "llm" && key != "tts" || v != nil && (*v < 0 || *v > 2) {
+			return false
+		}
+	}
+	for key, value := range n.Config {
+		if key != "xiaozhi" && key != "dns" && key != "monitoring" {
+			return false
+		}
+		if value.State != "synced" && value.State != "pending" && value.State != "failed" && value.State != "unknown" {
+			return false
+		}
+	}
+	for key, value := range n.Components {
+		if key != "mqtt" && key != "core" && key != "worker" && key != "dns" {
+			return false
+		}
+		if value != "ready" && value != "unavailable" {
+			return false
+		}
+	}
+	for key, count := range n.Sessions {
+		switch key {
+		case "idle", "asr", "asr_restarting", "llm", "tts", "done", "error", "aborted":
+		default:
+			return false
+		}
+		if count < 0 || count > 128 {
+			return false
+		}
+	}
+	if len(n.Events) > 64 {
+		return false
+	}
+	for _, event := range n.Events {
+		if len(event.ID) > 192 || len(event.Message) > 256 || len(event.Node) > 32 || event.At.IsZero() {
+			return false
+		}
+	}
+	return true
+}
+func (d *Dashboard) aggregate(ctx context.Context) {
+	d.mu.RLock()
+	local, previous := d.local, d.snapshot
+	d.mu.RUnlock()
+	nodes := make([]Node, len(d.config.Members))
+	var wg sync.WaitGroup
+	for i, m := range d.config.Members {
+		wg.Add(1)
+		go func(i int, m Member) {
+			defer wg.Done()
+			n := unknown(m)
+			if m.ID == d.config.Node {
+				n = local
+			} else {
+				raw := d.get(ctx, "http://"+net.JoinHostPort(m.Private, strconv.Itoa(d.config.Port))+"/local")
+				encoded, e := json.Marshal(raw)
+				if e == nil {
+					_ = json.Unmarshal(encoded, &n)
+				}
+			}
+			if !validateNode(n, m, time.Now()) {
+				n = unknown(m)
+				for _, old := range previous.Nodes {
+					if old.ID == m.ID {
+						n.At = old.At
+						break
+					}
+				}
+			}
+			nodes[i] = n
+		}(i, m)
+	}
+	wg.Wait()
+	old := map[string]Node{}
+	for _, n := range previous.Nodes {
+		old[n.ID] = n
+	}
+	for _, n := range nodes {
+		d.observe(old[n.ID], n)
+	}
+	events := append(append([]Event{}, previous.Events...), d.events...)
+	for i, node := range nodes {
+		events = append(events, node.Events...)
+		nodes[i].Events = nil
+	}
+	events = mergeEvents(events, time.Now())
+	d.mu.Lock()
+	d.local.Events = append([]Event{}, events...)
+	d.snapshot = Snapshot{Protocol: protocol, At: time.Now().UTC(), Nodes: nodes, Events: events, Observer: d.config.Node, HistorySince: d.started, Firmware: d.firmware}
+	d.mu.Unlock()
+}
+func mergeEvents(events []Event, now time.Time) []Event {
+	sort.Slice(events, func(i, j int) bool { return events[i].At.After(events[j].At) })
+	seen := map[string]bool{}
+	result := []Event{}
+	for _, event := range events {
+		if seen[event.ID] || now.Sub(event.At) > 6*time.Hour || event.At.Sub(now) > 5*time.Second {
+			continue
+		}
+		seen[event.ID] = true
+		duplicate := false
+		if event.Kind == "node" {
+			for _, kept := range result {
+				if kept.Kind == event.Kind && kept.Node == event.Node && kept.Message == event.Message && kept.At.Sub(event.At) < 15*time.Second {
+					duplicate = true
+					break
+				}
+			}
+		}
+		if !duplicate {
+			result = append(result, event)
+		}
+		if len(result) == 64 {
+			break
+		}
+	}
+	return result
+}
+func (d *Dashboard) allowed(req *http.Request) bool {
+	host, _, e := net.SplitHostPort(req.RemoteAddr)
+	if e != nil {
+		return false
+	}
+	if host == "127.0.0.1" {
+		return true
+	}
+	for _, m := range d.config.Members {
+		if host == m.Private {
+			return true
+		}
+	}
+	return false
+}
+func (d *Dashboard) handle(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	if !d.allowed(r) {
+		http.Error(w, "Forbidden", 403)
+		return
+	}
+	if r.Method != "GET" {
+		w.Header().Set("Allow", "GET")
+		http.Error(w, "Read-only API", 405)
+		return
+	}
+	if r.URL.RawQuery != "" {
+		http.Error(w, "Query not supported", 400)
+		return
+	}
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	var value any
+	switch r.URL.Path {
+	case "/":
+		// A normal backend response avoids HAProxy's small inline-return buffer.
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		http.ServeFile(w, r, "/etc/desk-ui/index.html")
+		return
+	case "/health":
+		ready := len(d.snapshot.Nodes) == len(d.config.Members) && time.Since(d.snapshot.At) < staleAfter
+		if !ready {
+			w.WriteHeader(http.StatusServiceUnavailable)
+		}
+		value = map[string]bool{"ready": ready}
+	case "/local":
+		value = d.local
+	case "/api/cluster/status":
+		value = d.snapshot
+	default:
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(value)
+}
+func loadConfig(path string) (Config, error) {
+	var c Config
+	raw, e := os.ReadFile(path)
+	if e != nil {
+		return c, e
+	}
+	if len(raw) > 16384 || json.Unmarshal(raw, &c) != nil || c.Port < 1024 || c.Port > 65535 || len(c.Members) != 3 {
+		return c, errors.New("invalid configuration")
+	}
+	ids, ips := map[string]bool{}, map[string]bool{}
+	found := false
+	for _, m := range c.Members {
+		if m.ID != "deskb1x" && m.ID != "deskb2x" && m.ID != "deskb3x" || ids[m.ID] || ips[m.Private] || net.ParseIP(m.Private) == nil || !net.ParseIP(m.Private).IsPrivate() || net.ParseIP(m.Management) == nil || !net.ParseIP(m.Management).IsPrivate() {
+			return c, errors.New("invalid member")
+		}
+		ids[m.ID] = true
+		ips[m.Private] = true
+		if m.ID == c.Node {
+			found = true
+		}
+	}
+	if !found {
+		return c, errors.New("invalid local member")
+	}
+	if c.ClientURL != "" {
+		u, e := url.Parse(c.ClientURL)
+		if e != nil || u.Scheme != "http" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.Path != "/" || u.Port() != "8080" {
+			return c, errors.New("invalid client URL")
+		}
+		ip := net.ParseIP(u.Hostname())
+		if ip == nil || !ip.IsPrivate() || ip.To4() == nil {
+			return c, errors.New("invalid client address")
+		}
+	}
+	return c, nil
+}
+func main() {
+	path := "/etc/desk-dashboard/config.json"
+	if len(os.Args) == 3 && os.Args[1] == "--config" {
+		path = os.Args[2]
+	}
+	config, e := loadConfig(path)
+	if e != nil {
+		fmt.Fprintln(os.Stderr, "Dashboard configuration unavailable")
+		os.Exit(1)
+	}
+	d := &Dashboard{config: config, started: time.Now().UTC(), slowConfig: map[string]SyncStatus{}, client: &http.Client{Timeout: 1800 * time.Millisecond, Transport: &http.Transport{Proxy: nil, MaxIdleConns: 16, MaxIdleConnsPerHost: 2, IdleConnTimeout: 45 * time.Second}, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
+	for _, m := range config.Members {
+		if m.ID == config.Node {
+			d.member = m
+		}
+	}
+	d.local = unknown(d.member)
+	d.snapshot = Snapshot{Protocol: protocol, Nodes: []Node{}, Events: []Event{}}
+	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
+	defer cancel()
+	// One bounded collector per node. Browser polls are cached and cannot multiply probes.
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			sample, cancelSample := context.WithTimeout(ctx, 4*time.Second)
+			d.collect(sample)
+			cancelSample()
+			peers, cancelPeers := context.WithTimeout(ctx, 2*time.Second)
+			d.aggregate(peers)
+			cancelPeers()
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
+		}
+	}()
+	server := &http.Server{Addr: net.JoinHostPort(d.member.Private, strconv.Itoa(config.Port)), Handler: http.HandlerFunc(d.handle), ReadHeaderTimeout: 2 * time.Second, ReadTimeout: 3 * time.Second, WriteTimeout: 3 * time.Second, IdleTimeout: 15 * time.Second, MaxHeaderBytes: 8192}
+	go func() {
+		<-ctx.Done()
+		stop, finish := context.WithTimeout(context.Background(), 3*time.Second)
+		defer finish()
+		_ = server.Shutdown(stop)
+	}()
+	if e := server.ListenAndServe(); e != nil && e != http.ErrServerClosed {
+		fmt.Fprintln(os.Stderr, "Dashboard listener unavailable")
+		os.Exit(1)
+	}
+}

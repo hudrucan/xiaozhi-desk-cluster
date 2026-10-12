@@ -1,0 +1,89 @@
+---
+- name: Add node overview without restarting protected services
+  hosts: deskboxes
+  become: true
+  gather_facts: false
+  serial: 1
+  any_errors_fatal: true
+  tasks:
+    - name: Freeze protected voice, DNS and VIP state
+      ansible.builtin.command:
+        argv: [/usr/bin/python3, '-c', "{{ lookup('ansible.builtin.file', 'roles/desk_ui/files/ui_guard.py') }}", freeze]
+      register: dashboard_before
+      changed_when: false
+      no_log: true
+    - name: Install the independent read-only collector
+      ansible.builtin.include_role:
+        name: desk_dashboard
+    - name: Require an existing shared UI deployment
+      ansible.builtin.stat:
+        path: /etc/desk-ui/backend.cfg
+      register: dashboard_ui_backend
+    - name: Require the existing UI before route changes
+      ansible.builtin.assert:
+        that: dashboard_ui_backend.stat.exists
+    - name: Preserve prior root page for rollback
+      ansible.builtin.slurp:
+        src: /etc/desk-ui/index.html
+      register: dashboard_old_page
+      no_log: true
+    - name: Install and validate the dashboard root page
+      block:
+        - name: Install the node cards and detail workspace
+          ansible.builtin.template:
+            src: roles/desk_ui/templates/index.html.j2
+            dest: /etc/desk-ui/index.html
+            mode: '0644'
+          register: dashboard_page
+        - name: Install the complete route validator
+          ansible.builtin.copy:
+            src: roles/desk_monitoring/files/install_proxy.py
+            dest: /usr/local/libexec/desk-monitoring/install-proxy.py
+            mode: '0755'
+        - name: Validate HTTP and MQTT and gracefully reload HAProxy
+          ansible.builtin.command:
+            argv: "{{ ['/usr/bin/python3','/usr/local/libexec/desk-monitoring/install-proxy.py','--backend','/etc/desk-monitoring/backend.cfg','--dns-backend','/etc/desk-ui/backend.cfg','--dashboard-backend','/etc/desk-dashboard/backend.cfg'] + (['--reload-page'] if dashboard_page.changed else []) }}"
+          changed_when: dashboard_page.changed
+        - name: Verify unchanged protected services and configuration
+          ansible.builtin.command:
+            argv: [/usr/bin/python3, '-c', "{{ lookup('ansible.builtin.file', 'roles/desk_ui/files/ui_guard.py') }}", guard]
+            stdin: "{{ dashboard_before.stdout }}"
+          changed_when: false
+      rescue:
+        - name: Restore the previous root page
+          ansible.builtin.copy:
+            content: "{{ dashboard_old_page.content | b64decode }}"
+            dest: /etc/desk-ui/index.html
+            mode: '0644'
+          no_log: true
+        - name: Reload the restored static page
+          ansible.builtin.systemd_service:
+            name: haproxy
+            state: reloaded
+        - name: Stop for review of dashboard rollout failure
+          ansible.builtin.fail:
+            msg: Dashboard rollout failed; prior root page restored. Inspect safe diagnostics before retrying.
+
+- name: Verify overview through the existing management VIP
+  hosts: deskboxes
+  become: true
+  gather_facts: false
+  run_once: true
+  tasks:
+    - name: Require three fresh and correctly identified nodes
+      ansible.builtin.uri:
+        url: "http://{{ (dashboard_before.stdout | from_json).vip }}/api/cluster/status"
+        use_proxy: false
+        timeout: 5
+      register: dashboard_public
+      until: dashboard_public.status == 200 and dashboard_public.json.nodes | selectattr('online') | list | length == 3
+      retries: 8
+      delay: 2
+      changed_when: false
+    - name: Require the existing applications to remain reachable
+      ansible.builtin.uri:
+        url: "http://{{ (dashboard_before.stdout | from_json).vip }}{{ item }}"
+        use_proxy: false
+        timeout: 10
+      loop: [/xiaozhi/, /dns/, /monitor/]
+      changed_when: false

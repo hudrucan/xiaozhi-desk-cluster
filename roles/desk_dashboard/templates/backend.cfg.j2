@@ -1,0 +1,20 @@
+backend desk_dashboard
+    balance roundrobin
+    timeout server 5s
+    option httpchk
+    http-check send meth GET uri /health ver HTTP/1.1 hdr Host localhost
+    http-check expect status 200
+{% for node in groups['deskboxes'] | sort %}
+    server {{ node }} {{ hostvars[node].cluster_ip }}:{{ desk_dashboard_port | default(8010) }} check inter 5s fall 2 rise 2
+{% endfor %}
+{% if desk_node_control_enabled | default(false) %}
+backend desk_node_control
+    balance roundrobin
+    timeout server 25s
+    option httpchk
+    http-check send meth GET uri /health ver HTTP/1.1 hdr Host localhost
+    http-check expect status 200
+{% for node in groups['deskboxes'] | sort %}
+    server {{ node }} {{ hostvars[node].cluster_ip }}:{{ desk_node_control_port | default(8011) }} check inter 5s fall 2 rise 2
+{% endfor %}
+{% endif %}

@@ -27,7 +27,12 @@ DNS_ROUTE = r'''# BEGIN DESK DNS UI ROUTE
 '''
 
 
-def candidate(current, backend, dns_backend=None):
+def candidate(current, backend, dns_backend=None, dashboard_backend=None):
+    if dashboard_backend is None:
+        retained = re.search(r'^# BEGIN DESK DASHBOARD BACKEND\n(.*?)^# END DESK DASHBOARD BACKEND\n', current, flags=re.MULTILINE | re.DOTALL)
+        if retained:
+            dashboard_backend = retained.group(1)
+    current = re.sub(r'^# BEGIN DESK DASHBOARD BACKEND\n.*?^# END DESK DASHBOARD BACKEND\n', '', current, flags=re.MULTILINE | re.DOTALL)
     if dns_backend is None:
         retained = re.search(r'^# BEGIN DESK DNS UI BACKEND\n(.*?)^# END DESK DNS UI BACKEND\n', current, flags=re.MULTILINE | re.DOTALL)
         if retained:
@@ -43,17 +48,27 @@ def candidate(current, backend, dns_backend=None):
     anchor = '    default_backend xiaozhi_control_planes\n'
     # Insert monitoring after an existing DNS block; preserve it on monitoring-only reruns.
     route = ROUTE.replace('    http-request redirect location /monitor/ code 302 if { path /monitor }\n', '') if dns_backend is not None else ROUTE
-    updated = current.replace(anchor, (DNS_ROUTE if dns_backend is not None else '') + route + anchor) + (
+    dns_route = DNS_ROUTE
+    if dashboard_backend is not None:
+        dns_route = dns_route.replace('!{ path_beg /dns /monitor }', '!{ path_beg /dns /monitor /api/cluster/status /api/cluster/operations }')
+        dns_route = dns_route.replace('    http-request return status 200 content-type text/html file /etc/desk-ui/index.html if { path / }\n', '')
+        dns_route = dns_route.replace('    use_backend desk_adguard_ui', '    use_backend desk_dashboard if { path / /api/cluster/status }\n    use_backend desk_adguard_ui')
+    if dashboard_backend is not None and 'backend desk_node_control\n' in dashboard_backend:
+        dns_route = dns_route.replace('    use_backend desk_dashboard',
+            '    use_backend desk_node_control if { path /api/cluster/operations /api/cluster/operations/prepare /api/cluster/operations/reboot }\n    use_backend desk_dashboard')
+    updated = current.replace(anchor, (dns_route if dns_backend is not None else '') + route + anchor) + (
         '# BEGIN DESK MONITORING BACKEND\n' + backend.rstrip() + '\n# END DESK MONITORING BACKEND\n')
     if dns_backend is not None:
         updated += '# BEGIN DESK DNS UI BACKEND\n' + dns_backend.rstrip() + '\n# END DESK DNS UI BACKEND\n'
+    if dashboard_backend is not None:
+        updated += '# BEGIN DESK DASHBOARD BACKEND\n' + dashboard_backend.rstrip() + '\n# END DESK DASHBOARD BACKEND\n'
     return updated
 
 
-def install(backend, dns_backend=None, reload_page=False):
+def install(backend, dns_backend=None, reload_page=False, dashboard_backend=None):
     path = Path('/etc/haproxy/haproxy.cfg')
     current = path.read_text()
-    updated = candidate(current, backend, dns_backend)
+    updated = candidate(current, backend, dns_backend, dashboard_backend)
     if current == updated and not reload_page:
         return False
     # This cluster already runs MQTT through the same master. Never validate only HTTP.
@@ -88,9 +103,10 @@ if __name__ == '__main__':
     parser.add_argument('--backend', required=True)
     parser.add_argument('--dns-backend')
     parser.add_argument('--reload-page', action='store_true')
+    parser.add_argument('--dashboard-backend')
     args = parser.parse_args()
     try:
-        changed = install(Path(args.backend).read_text(), Path(args.dns_backend).read_text() if args.dns_backend else None, args.reload_page)
+        changed = install(Path(args.backend).read_text(), Path(args.dns_backend).read_text() if args.dns_backend else None, args.reload_page, Path(args.dashboard_backend).read_text() if args.dashboard_backend else None)
         print('changed' if changed else 'unchanged')
     except Exception:
         raise SystemExit('Monitoring HAProxy candidate failed; existing routing retained')

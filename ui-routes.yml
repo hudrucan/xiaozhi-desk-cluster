@@ -23,6 +23,10 @@
       changed_when: false
       no_log: true
 
+    - name: Install optional dashboard metadata before the root page
+      ansible.builtin.include_role:
+        name: desk_dashboard
+
     - name: Install the consistently named landing page
       ansible.builtin.template:
         src: roles/desk_ui/templates/index.html.j2

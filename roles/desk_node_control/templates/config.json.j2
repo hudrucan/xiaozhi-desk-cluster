@@ -1,0 +1,1 @@
+{{ {'node': inventory_hostname, 'port': desk_node_control_port, 'members': dashboard_members, 'key': node_control_key, 'public_host': node_control_public_host.stdout, 'dashboard_port': desk_dashboard_port, 'dns_port': desk_dns_test_port | default(5353), 'nats_port': nats_monitor_port | default(8222)} | to_nice_json }}

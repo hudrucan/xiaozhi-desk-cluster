@@ -20,14 +20,22 @@ frontend xiaozhi_settings
     http-request deny deny_status 404 if { path_beg /internal/ }
 {% if xiaozhi_ingress_unified_ui_enabled | default(false) %}
 # BEGIN DESK DNS UI ROUTE
-    http-request deny unless { src 192.168.1.0/24 127.0.0.1 } or !{ path_beg /dns /monitor } !{ path / }
+    http-request deny unless { src 192.168.1.0/24 127.0.0.1 } or !{ path_beg /dns /monitor{% if desk_dashboard_enabled | default(false) %} /api/cluster/status /api/cluster/operations{% endif %} } !{ path / }
+{% if not (desk_dashboard_enabled | default(false)) %}
     http-request return status 200 content-type text/html file /etc/desk-ui/index.html if { path / }
+{% endif %}
     http-request redirect location /xiaozhi/ code 302 if { path /xiaozhi /settings /settings/ }
     # Bootstrap /xiaozhi/ota/ keeps its existing public transport path.
     http-request replace-path ^/xiaozhi/(.*)$ /settings/\1 if { path_beg /xiaozhi/ } !{ path_beg /xiaozhi/ota }
     http-request redirect location /dns/ code 302 if { path /dns }
 {% if xiaozhi_ingress_monitoring_enabled | default(false) %}
     http-request redirect location /monitor/ code 302 if { path /monitor }
+{% endif %}
+{% if desk_dashboard_enabled | default(false) %}
+{% if desk_node_control_enabled | default(false) %}
+    use_backend desk_node_control if { path /api/cluster/operations /api/cluster/operations/prepare /api/cluster/operations/reboot }
+{% endif %}
+    use_backend desk_dashboard if { path / /api/cluster/status }
 {% endif %}
     use_backend desk_adguard_ui if { path_beg /dns/ }
 # END DESK DNS UI ROUTE
@@ -78,4 +86,28 @@ backend desk_adguard_ui
     http-response replace-header Set-Cookie (.*[Pp]ath=)/([^;]*)(.*) \1/dns/\2\3
     server dns_vip {{ desk_dns_vip }}:3001 check inter 5s fall 2 rise 2
 # END DESK DNS UI BACKEND
+{% endif %}
+{% if xiaozhi_ingress_unified_ui_enabled | default(false) and desk_dashboard_enabled | default(false) %}
+# BEGIN DESK DASHBOARD BACKEND
+backend desk_dashboard
+    balance roundrobin
+    timeout server 5s
+    option httpchk
+    http-check send meth GET uri /health ver HTTP/1.1 hdr Host localhost
+    http-check expect status 200
+{% for node in groups['deskboxes'] | sort %}
+    server {{ node }} {{ hostvars[node].cluster_ip }}:{{ desk_dashboard_port | default(8010) }} check inter 5s fall 2 rise 2
+{% endfor %}
+{% if desk_node_control_enabled | default(false) %}
+backend desk_node_control
+    balance roundrobin
+    timeout server 25s
+    option httpchk
+    http-check send meth GET uri /health ver HTTP/1.1 hdr Host localhost
+    http-check expect status 200
+{% for node in groups['deskboxes'] | sort %}
+    server {{ node }} {{ hostvars[node].cluster_ip }}:{{ desk_node_control_port | default(8011) }} check inter 5s fall 2 rise 2
+{% endfor %}
+{% endif %}
+# END DESK DASHBOARD BACKEND
 {% endif %}

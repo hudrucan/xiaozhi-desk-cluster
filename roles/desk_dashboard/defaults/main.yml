@@ -1,0 +1,4 @@
+---
+desk_dashboard_enabled: false
+desk_dashboard_port: 8010
+desk_dashboard_client_url: ''

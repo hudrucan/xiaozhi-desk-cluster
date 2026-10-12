@@ -1,0 +1,97 @@
+---
+- name: Install the optional read-only dashboard on symmetric existing nodes
+  when: desk_dashboard_enabled | default(false) | bool and not ansible_check_mode
+  block:
+    - name: Require explicit three-node membership and private bind addresses
+      ansible.builtin.assert:
+        that:
+          - groups['deskboxes'] | sort == ['deskb1x', 'deskb2x', 'deskb3x']
+          - desk_dashboard_port | int >= 1024
+          - desk_dashboard_port | int <= 65535
+    - name: Build deployment-owned dashboard membership
+      ansible.builtin.set_fact:
+        dashboard_members: []
+    - name: Add each configured peer to the overview
+      ansible.builtin.set_fact:
+        dashboard_members: "{{ dashboard_members + [{'id': item, 'private': hostvars[item].cluster_ip, 'management': hostvars[item].ansible_host}] }}"
+      loop: "{{ groups['deskboxes'] | sort }}"
+    - name: Resolve the source-addressed native dashboard artifact
+      ansible.builtin.set_fact:
+        dashboard_artifact: "/private/tmp/desk-dashboard-build/{{ lookup('ansible.builtin.file', role_path + '/files/dashboard.go') | hash('sha256') }}/desk-dashboard"
+    - name: Create the controller artifact cache
+      ansible.builtin.file:
+        path: "{{ dashboard_artifact | dirname }}"
+        state: directory
+        mode: '0755'
+      delegate_to: localhost
+      become: false
+    - name: Build the standard-library-only ARM64 dashboard on the controller
+      ansible.builtin.command:
+        argv: [go, build, -trimpath, -ldflags, '-s -w -buildid=', -o, "{{ dashboard_artifact }}", "{{ role_path }}/files/dashboard.go"]
+        creates: "{{ dashboard_artifact }}"
+      environment:
+        GOOS: linux
+        GOARCH: arm64
+        CGO_ENABLED: '0'
+        GO111MODULE: 'off'
+        GOTOOLCHAIN: local
+        GOCACHE: /private/tmp/desk-dashboard-go-cache
+      delegate_to: localhost
+      become: false
+    - name: Create public dashboard metadata directory
+      ansible.builtin.file:
+        path: /etc/desk-dashboard
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+    - name: Install read-only dashboard binary
+      ansible.builtin.copy:
+        src: "{{ dashboard_artifact }}"
+        dest: /usr/local/libexec/desk-dashboard
+        owner: root
+        group: root
+        mode: '0755'
+      register: dashboard_binary
+    - name: Install only public membership metadata
+      ansible.builtin.template:
+        src: config.json.j2
+        dest: /etc/desk-dashboard/config.json
+        owner: root
+        group: root
+        mode: '0644'
+      register: dashboard_config
+    - name: Install the bounded and isolated dashboard service
+      ansible.builtin.template:
+        src: desk-dashboard.service.j2
+        dest: /etc/systemd/system/desk-dashboard.service
+        owner: root
+        group: root
+        mode: '0644'
+      register: dashboard_unit
+    - name: Start or refresh only the dashboard collector
+      ansible.builtin.systemd_service:
+        name: desk-dashboard
+        enabled: true
+        daemon_reload: "{{ dashboard_unit.changed }}"
+        state: "{{ 'restarted' if dashboard_binary.changed or dashboard_config.changed or dashboard_unit.changed else 'started' }}"
+    - name: Require fresh dashboard API readiness
+      ansible.builtin.uri:
+        url: "http://{{ cluster_ip }}:{{ desk_dashboard_port }}/health"
+        use_proxy: false
+        timeout: 3
+      register: dashboard_ready
+      until: dashboard_ready.status == 200 and dashboard_ready.json.ready | default(false)
+      retries: 10
+      delay: 1
+      changed_when: false
+    - name: Install the optional fixed-action agent separately from telemetry
+      ansible.builtin.include_role:
+        name: desk_node_control
+    - name: Render the private dashboard backend
+      ansible.builtin.template:
+        src: backend.cfg.j2
+        dest: /etc/desk-dashboard/backend.cfg
+        owner: root
+        group: root
+        mode: '0644'

@@ -28,3 +28,11 @@ desk_monitoring_sync_source: deskb1x
 
 # Native readiness probes retain the existing checks and VRRP timing.
 desk_healthcheck_native_enabled: true
+
+# Read-only overview at the shared management VIP; metadata stays in RAM.
+desk_dashboard_enabled: true
+desk_dashboard_client_url: http://192.168.1.128:8080/
+
+# Explicit same-origin, confirmed per-node reboot actions; telemetry stays read-only.
+desk_node_control_enabled: true
+desk_node_control_port: 8011

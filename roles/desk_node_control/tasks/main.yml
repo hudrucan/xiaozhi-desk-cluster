@@ -1,0 +1,69 @@
+---
+- name: Install only explicitly enabled node reboot control
+  when: desk_node_control_enabled | default(false) | bool and not ansible_check_mode
+  block:
+    - name: Create ignored controller action-key directory
+      ansible.builtin.file:
+        path: "{{ playbook_dir }}/secret"
+        state: directory
+        mode: '0700'
+      delegate_to: localhost
+      become: false
+    - name: Resolve a dedicated shared peer action key
+      ansible.builtin.set_fact:
+        node_control_key: "{{ lookup('ansible.builtin.password', playbook_dir + '/secret/desk-node-control.key', length=64, chars=['hexdigits']) }}"
+      no_log: true
+    - name: Use the applied ingress VIP as the allowed public origin
+      ansible.builtin.command:
+        argv: [/usr/bin/python3, '-c', "import json; print(json.load(open('/etc/xiaozhi-ingress.json'))['vip'])"]
+      register: node_control_public_host
+      changed_when: false
+    - name: Create the isolated control directories
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "{{ item.mode }}"
+      loop:
+        - {path: /etc/desk-node-control, mode: '0700'}
+        - {path: /usr/local/libexec/desk-node-control, mode: '0755'}
+    - name: Install the fixed-action node controller
+      ansible.builtin.copy:
+        src: node_control.py
+        dest: /usr/local/libexec/desk-node-control/node-control.py
+        owner: root
+        group: root
+        mode: '0755'
+      register: node_control_source
+    - name: Install private peer action credentials
+      ansible.builtin.template:
+        src: config.json.j2
+        dest: /etc/desk-node-control/config.json
+        owner: root
+        group: root
+        mode: '0600'
+      register: node_control_config
+      no_log: true
+    - name: Install the fixed-action service boundary
+      ansible.builtin.template:
+        src: desk-node-control.service.j2
+        dest: /etc/systemd/system/desk-node-control.service
+        mode: '0644'
+      register: node_control_unit
+    - name: Start only the node action agent
+      ansible.builtin.systemd_service:
+        name: desk-node-control
+        enabled: true
+        daemon_reload: "{{ node_control_unit.changed }}"
+        state: "{{ 'restarted' if node_control_source.changed or node_control_config.changed or node_control_unit.changed else 'started' }}"
+    - name: Require node action agent readiness without scheduling any action
+      ansible.builtin.uri:
+        url: "http://{{ cluster_ip }}:{{ desk_node_control_port }}/health"
+        use_proxy: false
+        timeout: 3
+      register: node_control_ready
+      until: node_control_ready.status == 200
+      retries: 30
+      delay: 2
+      changed_when: false
