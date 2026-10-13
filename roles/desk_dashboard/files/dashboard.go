@@ -894,6 +894,244 @@ func mergeEvents(events []Event, now time.Time) []Event {
 	}
 	return result
 }
+
+// Panel is a bounded projection of cached telemetry for small touch displays.
+// It never performs probes, exposes peer endpoints, or accepts control actions.
+const panelProtocol = "desk-cluster-panel-v1"
+const panelMaxBytes = 8192
+
+type PanelOwner struct {
+	State string  `json:"state"`
+	Node  *string `json:"node"`
+}
+type PanelJobs struct {
+	ASR    *int `json:"asr"`
+	LLMVLM *int `json:"llm_vlm"`
+	TTS    *int `json:"tts"`
+}
+type PanelSync struct {
+	State    string `json:"state"`
+	Revision *int   `json:"revision"`
+}
+type PanelNode struct {
+	ID          string               `json:"id"`
+	IP          string               `json:"ip"`
+	Online      bool                 `json:"online"`
+	AgeMS       *int64               `json:"age_ms"`
+	CPU         *float64             `json:"cpu_percent"`
+	Memory      *float64             `json:"memory_percent"`
+	Temperature *float64             `json:"temperature_c"`
+	VIP         map[string]*bool     `json:"vip"`
+	Jobs        PanelJobs            `json:"jobs"`
+	MQTT        *int                 `json:"mqtt_clients"`
+	Core        *int                 `json:"conversations"`
+	DNS         *bool                `json:"dns_eligible"`
+	DNSRate     *float64             `json:"dns_queries_per_second"`
+	Admission   map[string]*bool     `json:"admission_paused"`
+	Components  map[string]string    `json:"components"`
+	Config      map[string]PanelSync `json:"configuration"`
+}
+type PanelDNS struct {
+	Mode     string   `json:"mode"`
+	Eligible []string `json:"eligible"`
+	Resolver *string  `json:"fallback_resolver"`
+}
+type PanelEvent struct {
+	At      time.Time `json:"at"`
+	Node    string    `json:"node"`
+	Kind    string    `json:"kind"`
+	Message string    `json:"message"`
+}
+type PanelClient struct {
+	State     string `json:"state"`
+	Connected *bool  `json:"server_connected"`
+}
+type Panel struct {
+	Protocol string                `json:"protocol"`
+	State    string                `json:"state"`
+	At       *time.Time            `json:"observed_at"`
+	AgeMS    *int64                `json:"age_ms"`
+	PollMS   int                   `json:"poll_after_ms"`
+	StaleMS  int                   `json:"stale_after_ms"`
+	Owners   map[string]PanelOwner `json:"owners"`
+	DNS      PanelDNS              `json:"dns"`
+	Nodes    []PanelNode           `json:"nodes"`
+	Client   PanelClient           `json:"client"`
+	Events   []PanelEvent          `json:"events"`
+}
+
+func panelAge(at, now time.Time) *int64 {
+	if at.IsZero() {
+		return nil
+	}
+	age := now.Sub(at).Milliseconds()
+	if age < 0 {
+		age = 0
+	}
+	return &age
+}
+func panelFresh(at, now time.Time, maximum time.Duration) bool {
+	return !at.IsZero() && now.Sub(at) <= maximum && at.Sub(now) <= 5*time.Second
+}
+func panelMetric(value *float64) *float64 {
+	if value == nil {
+		return nil
+	}
+	v := *value
+	if math.Abs(v) <= math.MaxFloat64/10 {
+		v = math.Round(v*10) / 10
+	}
+	return &v
+}
+func panelSnapshot(snapshot Snapshot, members []Member, now time.Time) Panel {
+	p := Panel{Protocol: panelProtocol, State: "unavailable", AgeMS: panelAge(snapshot.At, now), PollMS: int(interval / time.Millisecond), StaleMS: int(staleAfter / time.Millisecond),
+		Owners: map[string]PanelOwner{"xiaozhi": {State: "unknown"}, "dns": {State: "unknown"}}, DNS: PanelDNS{Mode: "unknown", Eligible: []string{}}, Nodes: []PanelNode{}, Client: PanelClient{State: "unknown"}, Events: []PanelEvent{}}
+	if !snapshot.At.IsZero() {
+		at := snapshot.At
+		p.At = &at
+	}
+	current := snapshot.Protocol == protocol && panelFresh(snapshot.At, now, staleAfter) && len(snapshot.Nodes) == len(members)
+	fresh := map[string]Node{}
+	if current {
+		for _, m := range members {
+			for _, n := range snapshot.Nodes {
+				if validateNode(n, m, now) {
+					fresh[m.ID] = n
+					break
+				}
+			}
+		}
+	}
+	if current {
+		p.State = "degraded"
+		if len(fresh) == len(members) {
+			p.State = "ready"
+		}
+	}
+	for _, key := range []string{"xiaozhi", "dns"} {
+		owners := []string{}
+		for _, m := range members {
+			if n, ok := fresh[m.ID]; ok && n.VIP[key] != nil && *n.VIP[key] {
+				owners = append(owners, m.ID)
+			}
+		}
+		if len(owners) == 1 {
+			id := owners[0]
+			p.Owners[key] = PanelOwner{State: "known", Node: &id}
+		} else if len(owners) > 1 {
+			p.Owners[key] = PanelOwner{State: "conflict"}
+			p.State = "degraded"
+		}
+		if len(owners) == 0 && current {
+			p.State = "degraded"
+		}
+	}
+	if owner := p.Owners["dns"]; owner.Node != nil {
+		health := fresh[*owner.Node].DNSHealth
+		if panelFresh(health.At, now, 30*time.Second) {
+			switch health.Mode {
+			case "adguard":
+				p.DNS.Mode = "adguard"
+				for _, m := range members {
+					for _, id := range health.Backends {
+						if id == m.ID {
+							if _, ok := fresh[id]; ok {
+								p.DNS.Eligible = append(p.DNS.Eligible, id)
+							}
+							break
+						}
+					}
+				}
+			case "fallback":
+				p.DNS.Mode = "fallback"
+				if health.Resolver == "1.1.1.1" {
+					value := health.Resolver
+					p.DNS.Resolver = &value
+				}
+			case "unavailable":
+				p.DNS.Mode = "unavailable"
+			}
+		}
+	}
+	if current && (p.DNS.Mode != "adguard" || len(p.DNS.Eligible) != len(members)) {
+		p.State = "degraded"
+	}
+	for _, m := range members {
+		n := PanelNode{ID: m.ID, IP: m.Management, VIP: map[string]*bool{"xiaozhi": nil, "dns": nil}, Admission: map[string]*bool{"worker": nil, "core": nil, "mqtt": nil}, Components: map[string]string{}, Config: map[string]PanelSync{}}
+		for _, old := range snapshot.Nodes {
+			if old.ID == m.ID {
+				n.AgeMS = panelAge(old.At, now)
+				break
+			}
+		}
+		for _, key := range []string{"worker", "core", "mqtt", "dns"} {
+			n.Components[key] = "unknown"
+		}
+		for _, key := range []string{"xiaozhi", "dns", "monitoring"} {
+			n.Config[key] = PanelSync{State: "unknown"}
+		}
+		if value, ok := fresh[m.ID]; ok {
+			n.Online = true
+			n.CPU = panelMetric(value.CPU)
+			n.Memory = panelMetric(value.Memory)
+			n.Temperature = panelMetric(value.Temp)
+			n.DNSRate = panelMetric(value.DNSRate)
+			n.Jobs = PanelJobs{ASR: value.Activity["asr"], LLMVLM: value.Activity["llm"], TTS: value.Activity["tts"]}
+			n.MQTT = value.MQTT
+			n.Core = value.Core
+			for _, key := range []string{"xiaozhi", "dns"} {
+				n.VIP[key] = value.VIP[key]
+			}
+			for _, key := range []string{"worker", "core", "mqtt"} {
+				n.Admission[key] = value.Admission[key]
+			}
+			for _, key := range []string{"worker", "core", "mqtt", "dns"} {
+				if s := value.Components[key]; s != "" {
+					n.Components[key] = s
+				}
+				if n.Components[key] != "ready" && current {
+					p.State = "degraded"
+				}
+			}
+			for _, key := range []string{"xiaozhi", "dns", "monitoring"} {
+				if s, ok := value.Config[key]; ok {
+					n.Config[key] = PanelSync{State: s.State, Revision: s.Revision}
+				}
+			}
+			if p.DNS.Mode != "unknown" {
+				eligible := false
+				for _, id := range p.DNS.Eligible {
+					if id == m.ID {
+						eligible = true
+					}
+				}
+				n.DNS = &eligible
+			}
+		}
+		p.Nodes = append(p.Nodes, n)
+	}
+	if current && panelFresh(snapshot.Firmware.At, now, 30*time.Second) {
+		p.Client = PanelClient{State: snapshot.Firmware.State, Connected: snapshot.Firmware.Connected}
+	}
+	if current {
+		for _, event := range snapshot.Events {
+			if len(p.Events) == 3 {
+				break
+			}
+			if !panelFresh(event.At, now, 6*time.Hour) || len(event.Message) > 256 || len(event.Node) > 32 {
+				continue
+			}
+			switch event.Kind {
+			case "ownership", "configuration", "node", "service":
+			default:
+				continue
+			}
+			p.Events = append(p.Events, PanelEvent{At: event.At, Node: event.Node, Kind: event.Kind, Message: event.Message})
+		}
+	}
+	return p
+}
+
 func (d *Dashboard) allowed(req *http.Request) bool {
 	host, _, e := net.SplitHostPort(req.RemoteAddr)
 	if e != nil {
@@ -944,6 +1182,21 @@ func (d *Dashboard) handle(w http.ResponseWriter, r *http.Request) {
 		value = d.local
 	case "/api/cluster/status":
 		value = d.snapshot
+	case "/api/cluster/panel":
+		panel := panelSnapshot(d.snapshot, d.config.Members, time.Now())
+		raw, err := json.Marshal(panel)
+		if err != nil || len(raw) > panelMaxBytes {
+			http.Error(w, "Panel projection unavailable", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Retry-After", "5")
+		w.Header().Set("Content-Length", strconv.Itoa(len(raw)))
+		if panel.State == "unavailable" {
+			w.WriteHeader(http.StatusServiceUnavailable)
+		}
+		_, _ = w.Write(raw)
+		return
 	default:
 		http.NotFound(w, r)
 		return

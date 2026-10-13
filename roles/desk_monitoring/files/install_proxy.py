@@ -50,9 +50,9 @@ def candidate(current, backend, dns_backend=None, dashboard_backend=None):
     route = ROUTE.replace('    http-request redirect location /monitor/ code 302 if { path /monitor }\n', '') if dns_backend is not None else ROUTE
     dns_route = DNS_ROUTE
     if dashboard_backend is not None:
-        dns_route = dns_route.replace('!{ path_beg /dns /monitor }', '!{ path_beg /dns /monitor /api/cluster/status /api/cluster/operations }')
+        dns_route = dns_route.replace('!{ path_beg /dns /monitor }', '!{ path_beg /dns /monitor /api/cluster/status /api/cluster/panel /api/cluster/operations }')
         dns_route = dns_route.replace('    http-request return status 200 content-type text/html file /etc/desk-ui/index.html if { path / }\n', '')
-        dns_route = dns_route.replace('    use_backend desk_adguard_ui', '    use_backend desk_dashboard if { path / /api/cluster/status }\n    use_backend desk_adguard_ui')
+        dns_route = dns_route.replace('    use_backend desk_adguard_ui', '    use_backend desk_dashboard if { path / /api/cluster/status /api/cluster/panel }\n    use_backend desk_adguard_ui')
     if dashboard_backend is not None and 'backend desk_node_control\n' in dashboard_backend:
         dns_route = dns_route.replace('    use_backend desk_dashboard',
             '    use_backend desk_node_control if { path /api/cluster/operations /api/cluster/operations/prepare /api/cluster/operations/reboot /api/cluster/operations/resume }\n    use_backend desk_dashboard')

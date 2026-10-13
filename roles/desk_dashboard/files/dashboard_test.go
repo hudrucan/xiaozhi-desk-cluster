@@ -1,7 +1,11 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
+	"math"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -119,5 +123,147 @@ func TestRefreshingDesiredStateStillRequiresAValidatedSnapshot(t *testing.T) {
 	r["error_code"] = "cloud_refresh_failed"
 	if desiredSync(cp, "deskb3x").State != "failed" {
 		t.Fatal("failed refresh accepted")
+	}
+}
+
+func panelFixture(now time.Time) (Snapshot, []Member) {
+	members := []Member{{ID: "deskb1x", Management: "192.168.1.101"}, {ID: "deskb2x", Management: "192.168.1.102"}, {ID: "deskb3x", Management: "192.168.1.103"}}
+	zero, one := 0, 1
+	yes, no := true, false
+	cpu := 11.12345
+	s := Snapshot{Protocol: protocol, At: now, Events: []Event{}, Firmware: Firmware{At: now, State: "offline"}}
+	for i, m := range members {
+		n := unknown(m)
+		n.Online = true
+		n.At = now
+		n.Boot = "not-for-panel"
+		n.CPU = &cpu
+		n.VIP["xiaozhi"] = &no
+		n.VIP["dns"] = &no
+		if i == 0 {
+			n.VIP["xiaozhi"] = &yes
+		}
+		if i == 1 {
+			n.VIP["dns"] = &yes
+		}
+		n.Activity = map[string]*int{"asr": &zero, "llm": &zero, "tts": &one}
+		n.Core = &zero
+		n.MQTT = &zero
+		n.Components = map[string]string{"worker": "ready", "core": "ready", "mqtt": "ready", "dns": "ready"}
+		n.DNSHealth = DNSHealth{At: now, Mode: "adguard", Backends: []string{"deskb1x", "deskb2x", "deskb3x"}}
+		s.Nodes = append(s.Nodes, n)
+	}
+	return s, members
+}
+func TestPanelUsesCachedBoundedProjectionWithoutPrivateMetadata(t *testing.T) {
+	now := time.Now()
+	s, members := panelFixture(now)
+	for i := 0; i < 64; i++ {
+		s.Events = append(s.Events, Event{At: now, Node: "deskb1x", Kind: "node", Message: strings.Repeat("x", 256)})
+	}
+	p := panelSnapshot(s, members, now)
+	if p.State != "ready" || p.Protocol != panelProtocol || len(p.Nodes) != 3 || len(p.Events) != 3 || *p.Owners["dns"].Node != "deskb2x" {
+		t.Fatalf("invalid compact projection: %+v", p)
+	}
+	if *p.Nodes[0].CPU != 11.1 || *p.Nodes[0].Jobs.TTS != 1 {
+		t.Fatal("metrics or actual job count lost")
+	}
+	raw, e := json.Marshal(p)
+	if e != nil || len(raw) > panelMaxBytes {
+		t.Fatal("panel exceeds device buffer")
+	}
+	for _, secret := range []string{"not-for-panel", "history_since", "observer", "worker_revision", "private", "client_url"} {
+		if bytes.Contains(raw, []byte(secret)) {
+			t.Fatalf("unnecessary private metadata %s", secret)
+		}
+	}
+	// No HTTP client is provided: endpoint must not launch probes or peer reads.
+	d := &Dashboard{config: Config{Members: members}, snapshot: s}
+	r := httptest.NewRequest("GET", "/api/cluster/panel", nil)
+	r.RemoteAddr = "127.0.0.1:1"
+	w := httptest.NewRecorder()
+	d.handle(w, r)
+	if w.Code != 200 || w.Header().Get("Content-Type") != "application/json" || w.Header().Get("Cache-Control") != "no-store" || len(w.Body.Bytes()) > panelMaxBytes {
+		t.Fatal("invalid cached panel response")
+	}
+}
+func TestPanelStaleSnapshotClearsAllLiveClaims(t *testing.T) {
+	now := time.Now()
+	s, members := panelFixture(now.Add(-21 * time.Second))
+	p := panelSnapshot(s, members, now)
+	if p.State != "unavailable" || p.Owners["dns"].Node != nil || len(p.DNS.Eligible) != 0 || len(p.Events) != 0 {
+		t.Fatal("stale global snapshot claims routing")
+	}
+	for _, n := range p.Nodes {
+		if n.Online || n.CPU != nil || n.Jobs.TTS != nil || n.DNS != nil || n.VIP["xiaozhi"] != nil {
+			t.Fatal("stale node values retained")
+		}
+	}
+	d := &Dashboard{config: Config{Members: members}, snapshot: s}
+	r := httptest.NewRequest("GET", "/api/cluster/panel", nil)
+	r.RemoteAddr = "127.0.0.1:1"
+	w := httptest.NewRecorder()
+	d.handle(w, r)
+	if w.Code != 503 || !strings.Contains(w.Body.String(), panelProtocol) {
+		t.Fatal("stale response must be structured 503")
+	}
+}
+func TestPanelPartialFailureAndConflictDoNotInventOwners(t *testing.T) {
+	now := time.Now()
+	s, members := panelFixture(now)
+	s.Nodes[1].At = now.Add(-21 * time.Second)
+	p := panelSnapshot(s, members, now)
+	if p.State != "degraded" || p.Nodes[1].Online || p.Nodes[1].DNS != nil || p.Owners["dns"].State != "unknown" || p.DNS.Mode != "unknown" {
+		t.Fatal("unavailable DNS owner retained")
+	}
+	s, members = panelFixture(now)
+	yes := true
+	s.Nodes[2].VIP["dns"] = &yes
+	p = panelSnapshot(s, members, now)
+	if p.Owners["dns"].State != "conflict" || p.Owners["dns"].Node != nil || len(p.DNS.Eligible) != 0 {
+		t.Fatal("duplicate owners silently selected")
+	}
+}
+func TestPanelDNSFallbackAndStaleHealth(t *testing.T) {
+	now := time.Now()
+	s, members := panelFixture(now)
+	s.Nodes[1].DNSHealth.Mode = "fallback"
+	s.Nodes[1].DNSHealth.Resolver = "1.1.1.1"
+	p := panelSnapshot(s, members, now)
+	if p.DNS.Mode != "fallback" || p.State != "degraded" || len(p.DNS.Eligible) != 0 || p.DNS.Resolver == nil {
+		t.Fatal("fallback not explicit")
+	}
+	for _, n := range p.Nodes {
+		if n.DNS == nil || *n.DNS {
+			t.Fatal("fallback falsely shows filtering backends")
+		}
+	}
+	s.Nodes[1].DNSHealth.At = now.Add(-31 * time.Second)
+	p = panelSnapshot(s, members, now)
+	if p.DNS.Mode != "unknown" || p.DNS.Resolver != nil {
+		t.Fatal("stale DNS health retained")
+	}
+}
+func TestPanelRouteRejectsWritesQueriesAndOtherClients(t *testing.T) {
+	d := &Dashboard{}
+	for _, f := range []struct {
+		method, path, remote string
+		code                 int
+	}{{"POST", "/api/cluster/panel", "127.0.0.1:1", 405}, {"GET", "/api/cluster/panel?node=deskb1x", "127.0.0.1:1", 400}, {"GET", "/api/cluster/panel", "192.168.1.23:1", 403}, {"GET", "/api/cluster/panel/extra", "127.0.0.1:1", 404}} {
+		r := httptest.NewRequest(f.method, f.path, nil)
+		r.RemoteAddr = f.remote
+		w := httptest.NewRecorder()
+		d.handle(w, r)
+		if w.Code != f.code {
+			t.Fatalf("%s %s got %d", f.method, f.path, w.Code)
+		}
+	}
+}
+
+func TestPanelMetricRoundingCannotOverflow(t *testing.T) {
+	value := math.MaxFloat64
+	got := panelMetric(&value)
+	if got == nil || math.IsInf(*got, 0) || math.IsNaN(*got) {
+		t.Fatal("finite source must remain serializable")
 	}
 }

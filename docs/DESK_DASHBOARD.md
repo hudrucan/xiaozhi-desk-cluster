@@ -4,11 +4,14 @@ The management VIP serves a read-only overview at `/`. Xiaozhi, DNS and Monitori
 retain `/xiaozhi/`, `/dns/` and `/monitor/`. `/api/cluster/status` is the same bounded
 JSON contract a future front-mounted ESP32 display can consume.
 
+For the future touch display, use the bounded, versioned
+[Front-panel API](CLUSTER_PANEL_API.md) at `/api/cluster/panel`.
+
 ## Data and ownership
 
 Three identical `desk-dashboard` services bind only to their existing private IPs
 on port 8010. Only configured private peers may read their HTTP endpoints. The
-management proxy exposes exactly `/api/cluster/status`; `/local` stays private.
+management proxy exposes exactly `/api/cluster/status` and `/api/cluster/panel`; `/local` stays private.
 No endpoint accepts writes or a caller-supplied upstream address.
 
 Each collector samples every five seconds. Browser requests return cached data,

@@ -1,0 +1,114 @@
+---
+- name: Add the compact read-only panel endpoint without voice or DNS changes
+  hosts: deskboxes
+  become: true
+  gather_facts: false
+  serial: 1
+  any_errors_fatal: true
+  tasks:
+    - ansible.builtin.assert:
+        that: desk_dashboard_enabled | default(false) | bool
+    - name: Freeze protected runtime and configuration
+      ansible.builtin.command:
+        argv: [/usr/bin/python3, '-c', "{{ lookup('ansible.builtin.file', 'roles/desk_ui/files/ui_guard.py') }}", freeze]
+      register: panel_before
+      changed_when: false
+      no_log: true
+    - name: Resolve the controller build cache
+      ansible.builtin.set_fact:
+        panel_artifact: "/private/tmp/desk-dashboard-build/{{ lookup('ansible.builtin.file', 'roles/desk_dashboard/files/dashboard.go') | hash('sha256') }}/desk-dashboard"
+    - ansible.builtin.file:
+        path: "{{ panel_artifact | dirname }}"
+        state: directory
+        mode: '0755'
+      delegate_to: localhost
+      become: false
+    - name: Compile only the dashboard collector on the controller
+      ansible.builtin.command:
+        argv: [go, build, -trimpath, -ldflags, '-s -w -buildid=', -o, "{{ panel_artifact }}", "{{ playbook_dir }}/roles/desk_dashboard/files/dashboard.go"]
+        creates: "{{ panel_artifact }}"
+      environment:
+        GOOS: linux
+        GOARCH: arm64
+        CGO_ENABLED: '0'
+        GO111MODULE: 'off'
+        GOTOOLCHAIN: local
+        GOCACHE: /private/tmp/desk-dashboard-go-cache
+      delegate_to: localhost
+      become: false
+    - name: Allocate RAM-only rollback staging
+      ansible.builtin.tempfile:
+        state: directory
+        path: /run
+        prefix: desk-panel-rollout-
+      register: panel_backup
+    - name: Retain the installed binary and route validator
+      ansible.builtin.command:
+        argv: [/usr/bin/cp, --preserve=mode, "{{ item }}", "{{ panel_backup.path }}/"]
+      loop: [/usr/local/libexec/desk-dashboard, /usr/local/libexec/desk-monitoring/install-proxy.py]
+      changed_when: false
+    - name: Retain the installed proxy composition
+      ansible.builtin.copy:
+        src: /etc/haproxy/haproxy.cfg
+        dest: "{{ panel_backup.path }}/haproxy.cfg"
+        remote_src: true
+        mode: '0600'
+      no_log: true
+    - block:
+        - name: Install the projection in the existing collector
+          ansible.builtin.copy:
+            src: "{{ panel_artifact }}"
+            dest: /usr/local/libexec/desk-dashboard
+            mode: '0755'
+          register: panel_binary
+        - ansible.builtin.systemd_service:
+            name: desk-dashboard
+            state: "{{ 'restarted' if panel_binary.changed else 'started' }}"
+        - name: Wait for the compact cached snapshot
+          ansible.builtin.uri:
+            url: "http://{{ cluster_ip }}:8010/api/cluster/panel"
+            use_proxy: false
+            timeout: 5
+          register: panel_ready
+          until: panel_ready.status == 200 and panel_ready.json.protocol | default('') == 'desk-cluster-panel-v1' and panel_ready.json.nodes | default([]) | length == 3
+          retries: 15
+          delay: 2
+          changed_when: false
+        - name: Install the exact public route validator
+          ansible.builtin.copy:
+            src: roles/desk_monitoring/files/install_proxy.py
+            dest: /usr/local/libexec/desk-monitoring/install-proxy.py
+            mode: '0755'
+        - name: Validate HTTP and MQTT and gracefully reload the route
+          ansible.builtin.command:
+            argv: [/usr/bin/python3, /usr/local/libexec/desk-monitoring/install-proxy.py, --backend, /etc/desk-monitoring/backend.cfg, --dns-backend, /etc/desk-ui/backend.cfg, --dashboard-backend, /etc/desk-dashboard/backend.cfg]
+        - name: Verify protected service and policy isolation
+          ansible.builtin.command:
+            argv: [/usr/bin/python3, '-c', "{{ lookup('ansible.builtin.file', 'roles/desk_ui/files/ui_guard.py') }}", guard]
+            stdin: "{{ panel_before.stdout }}"
+          changed_when: false
+      rescue:
+        - ansible.builtin.copy:
+            src: "{{ panel_backup.path }}/desk-dashboard"
+            dest: /usr/local/libexec/desk-dashboard
+            remote_src: true
+            mode: '0755'
+        - ansible.builtin.copy:
+            src: "{{ panel_backup.path }}/install-proxy.py"
+            dest: /usr/local/libexec/desk-monitoring/install-proxy.py
+            remote_src: true
+            mode: '0755'
+        - ansible.builtin.copy:
+            src: "{{ panel_backup.path }}/haproxy.cfg"
+            dest: /etc/haproxy/haproxy.cfg
+            remote_src: true
+            mode: '0644'
+            validate: /usr/sbin/haproxy -c -f %s -f /etc/haproxy/xiaozhi-mqtt.cfg
+          no_log: true
+        - ansible.builtin.systemd_service: {name: desk-dashboard, state: restarted}
+        - ansible.builtin.systemd_service: {name: haproxy, state: reloaded}
+        - ansible.builtin.fail: {msg: Panel API rollout failed; original binary and routes restored.}
+      always:
+        - ansible.builtin.file:
+            path: "{{ panel_backup.path }}"
+            state: absent
