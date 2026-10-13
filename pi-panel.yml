@@ -1,0 +1,7 @@
+---
+- name: Install the external Raspberry Pi LCD dashboard only
+  hosts: pi_panels
+  become: true
+  gather_facts: false
+  roles:
+    - desk_pi_panel

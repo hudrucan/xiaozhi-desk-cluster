@@ -1,0 +1,41 @@
+[Unit]
+Description=Desk Cluster LCD panel (read-only)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User={{ desk_pi_panel_user }}
+SupplementaryGroups=video input
+ExecStartPre=+/usr/bin/python3 /usr/local/libexec/desk-cluster-panel/console.py graphics
+ExecStopPost=+/usr/bin/python3 /usr/local/libexec/desk-cluster-panel/console.py text
+ExecStart=/usr/bin/python3 /usr/local/libexec/desk-cluster-panel/panel.py --config /etc/desk-cluster-panel/config.json
+Environment=PYTHONDONTWRITEBYTECODE=1
+Restart=on-failure
+RestartSec=5
+Nice=10
+CPUWeight=10
+CPUQuota=30%
+MemoryMax=64M
+TasksMax=16
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+StateDirectory=desk-cluster-panel
+StateDirectoryMode=0700
+CapabilityBoundingSet=CAP_SYS_TTY_CONFIG
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+LockPersonality=true
+DevicePolicy=closed
+DeviceAllow={{ desk_pi_panel_framebuffer }} rw
+DeviceAllow=char-input r
+DeviceAllow=/dev/tty1 w
+TimeoutStopSec=5
+
+[Install]
+WantedBy=multi-user.target

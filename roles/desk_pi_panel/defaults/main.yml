@@ -1,0 +1,11 @@
+---
+desk_pi_panel_enabled: false
+desk_pi_panel_user: pi
+desk_pi_panel_url: http://192.168.1.186/api/cluster/panel
+desk_pi_panel_framebuffer: /dev/fb1
+desk_pi_panel_touch: /dev/input/by-path/platform-20204000.spi-cs-1-event
+desk_pi_panel_swap_axes: false
+desk_pi_panel_invert_x: false
+desk_pi_panel_invert_y: false
+desk_pi_panel_rotation: 0
+desk_pi_panel_touch_transform: null

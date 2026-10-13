@@ -2,3 +2,7 @@
 *.retry
 
 secret/
+
+# Local Python bytecode
+__pycache__/
+*.pyc

@@ -1,0 +1,71 @@
+---
+- name: Install only the explicitly enabled external LCD client
+  when: desk_pi_panel_enabled | bool
+  block:
+    - name: Install official framebuffer renderer and input dependencies
+      ansible.builtin.apt:
+        name: [python3-pil, python3-evdev, gcc, fonts-dejavu-core]
+        state: present
+        install_recommends: false
+    - name: Create isolated display client paths
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop: [/etc/desk-cluster-panel, /usr/local/libexec/desk-cluster-panel]
+    - name: Install native RGB565 packing source
+      ansible.builtin.copy:
+        src: rgb565.c
+        dest: /usr/local/libexec/desk-cluster-panel/rgb565.c
+        mode: '0644'
+      register: packer_source
+    - ansible.builtin.stat:
+        path: /usr/local/libexec/desk-cluster-panel/rgb565.so
+      register: packer_binary
+    - name: Build the small packing helper for this Pi architecture
+      ansible.builtin.command:
+        argv: [gcc, -O2, -shared, -fPIC, -o, /usr/local/libexec/desk-cluster-panel/rgb565.so, /usr/local/libexec/desk-cluster-panel/rgb565.c]
+      when: packer_source.changed or not packer_binary.stat.exists
+      register: packer_build
+    - name: Install the read-only display client
+      ansible.builtin.copy:
+        src: panel.py
+        dest: /usr/local/libexec/desk-cluster-panel/panel.py
+        mode: '0755'
+        validate: /usr/bin/python3 -c "import ast,sys; ast.parse(open(sys.argv[1]).read())" %s
+      register: panel_source
+    - name: Install the local calibration UI
+      ansible.builtin.copy:
+        src: calibration_ui.py
+        dest: /usr/local/libexec/desk-cluster-panel/calibration_ui.py
+        mode: '0644'
+      register: panel_calibration_ui
+    - name: Install the fixed console mode helper
+      ansible.builtin.copy:
+        src: console.py
+        dest: /usr/local/libexec/desk-cluster-panel/console.py
+        mode: '0755'
+      register: panel_console
+    - name: Install the optional four-point touch calibration helper
+      ansible.builtin.copy:
+        src: calibrate.py
+        dest: /usr/local/libexec/desk-cluster-panel/calibrate.py
+        mode: '0755'
+    - name: Configure the existing LCD and input device without changing drivers
+      ansible.builtin.template:
+        src: config.json.j2
+        dest: /etc/desk-cluster-panel/config.json
+        mode: '0644'
+      register: panel_config
+    - name: Install the display service
+      ansible.builtin.template:
+        src: desk-cluster-panel.service.j2
+        dest: /etc/systemd/system/desk-cluster-panel.service
+        mode: '0644'
+      register: panel_unit
+    - name: Start the external panel
+      ansible.builtin.systemd_service:
+        name: desk-cluster-panel
+        enabled: true
+        daemon_reload: "{{ panel_unit.changed }}"
+        state: "{{ 'restarted' if panel_source.changed or panel_calibration_ui.changed or panel_console.changed or panel_config.changed or panel_unit.changed or packer_build.changed | default(false) else 'started' }}"
