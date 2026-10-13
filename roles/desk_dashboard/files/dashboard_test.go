@@ -267,3 +267,84 @@ func TestPanelMetricRoundingCannotOverflow(t *testing.T) {
 		t.Fatal("finite source must remain serializable")
 	}
 }
+
+func TestTimelineSuppressesTransientPendingAndServiceFlaps(t *testing.T) {
+	now := time.Now()
+	s, _ := panelFixture(now)
+	a := s.Nodes[0]
+	revision := 11
+	a.Config["xiaozhi"] = SyncStatus{State: "synced", Revision: &revision}
+	d := &Dashboard{config: Config{Node: a.ID}, started: now}
+	b := a
+	b.At = now.Add(5 * time.Second)
+	b.Config = map[string]SyncStatus{"xiaozhi": {State: "pending", Revision: &revision}}
+	b.Components = map[string]string{"worker": "unavailable"}
+	d.observe(a, b)
+	c := a
+	c.At = now.Add(10 * time.Second)
+	d.observe(b, c)
+	if len(d.events) != 0 {
+		t.Fatalf("transient refresh/health created noise: %+v", d.events)
+	}
+	b.At = now.Add(15 * time.Second)
+	d.observe(c, b)
+	b.At = now.Add(45 * time.Second)
+	d.observe(b, b)
+	if len(d.events) != 2 {
+		t.Fatalf("persistent failures must be logged: %+v", d.events)
+	}
+	for _, e := range d.events {
+		if e.From == "" || e.To == "" || e.Subject == "" {
+			t.Fatal("transition missing context")
+		}
+	}
+	c.At = now.Add(50 * time.Second)
+	d.observe(b, c)
+	if len(d.events) != 4 {
+		t.Fatal("recovery must follow published failures")
+	}
+}
+func TestTimelineNewRevisionAndFailureAreImmediate(t *testing.T) {
+	now := time.Now()
+	s, _ := panelFixture(now)
+	a := s.Nodes[0]
+	one, two := 11, 12
+	a.Config["xiaozhi"] = SyncStatus{State: "synced", Revision: &one}
+	b := a
+	b.Config = map[string]SyncStatus{"xiaozhi": {State: "pending", Revision: &two}}
+	d := &Dashboard{config: Config{Node: a.ID}, started: now}
+	d.observe(a, b)
+	if len(d.events) != 1 || !strings.Contains(d.events[0].From, "revision 11") || !strings.Contains(d.events[0].To, "revision 12") {
+		t.Fatal("new revision missing")
+	}
+	c := b
+	c.Config = map[string]SyncStatus{"xiaozhi": {State: "failed", Revision: &two}}
+	d.observe(b, c)
+	if len(d.events) != 2 {
+		t.Fatal("explicit apply failure must be immediate")
+	}
+}
+func TestTimelineDetectsRebootAfterUnavailableSample(t *testing.T) {
+	now := time.Now()
+	s, m := panelFixture(now)
+	a := s.Nodes[0]
+	d := &Dashboard{config: Config{Node: a.ID}, started: now}
+	d.observe(Node{}, a)
+	offline := unknown(m[0])
+	d.observe(a, offline)
+	b := a
+	b.Boot = "different-boot"
+	d.observe(offline, b)
+	reboot := 0
+	for _, e := range d.events {
+		if e.Message == "Node reboot detected" {
+			reboot++
+			if strings.Contains(e.From, a.Boot) || strings.Contains(e.To, b.Boot) {
+				t.Fatal("boot identities leaked")
+			}
+		}
+	}
+	if reboot != 1 {
+		t.Fatal("reboot lost across telemetry interruption")
+	}
+}

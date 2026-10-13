@@ -51,7 +51,7 @@ class DashboardTests(unittest.TestCase):
         template = env.from_string(ROOT.joinpath('roles/desk_ui/templates/index.html.j2').read_text())
         members = [{'id':f'deskb{i}x', 'private':f'10.10.10.{i+10}', 'management':f'192.168.1.{i+100}'} for i in (1,2,3)]
         page = template.render(desk_dashboard_enabled=True, dashboard_members=members)
-        self.assertIn('Recent events', page)
+        self.assertIn('Cluster timeline', page)
         self.assertIn('Ownership & connections', page)
         self.assertIn("fetch('/api/cluster/status'", page)
         self.assertIn('document.hidden', page)

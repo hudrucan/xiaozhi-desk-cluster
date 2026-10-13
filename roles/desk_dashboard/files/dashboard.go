@@ -241,6 +241,9 @@ type Event struct {
 	Node    string    `json:"node"`
 	Kind    string    `json:"kind"`
 	Message string    `json:"message"`
+	Subject string    `json:"subject,omitempty"`
+	From    string    `json:"from,omitempty"`
+	To      string    `json:"to,omitempty"`
 }
 type Snapshot struct {
 	Protocol     string    `json:"protocol"`
@@ -269,6 +272,8 @@ type Dashboard struct {
 	events      []Event
 	sequence    int
 	started     time.Time
+	transitions map[string]eventTransition
+	boots       map[string]string
 	firmware    Firmware
 }
 
@@ -668,30 +673,111 @@ func (d *Dashboard) event(n Node, kind, message string) {
 		d.events = d.events[len(d.events)-64:]
 	}
 }
+
+type eventTransition struct {
+	confirmed string
+	candidate string
+	since     time.Time
+}
+
+func (d *Dashboard) change(n Node, kind, subject, before, after, message string) {
+	d.event(n, kind, message)
+	i := len(d.events) - 1
+	d.events[i].Subject = subject
+	d.events[i].From = before
+	d.events[i].To = after
+}
+func (d *Dashboard) transition(n Node, kind, subject, before, after, message string, delay time.Duration) {
+	if d.transitions == nil {
+		d.transitions = map[string]eventTransition{}
+	}
+	t, ok := d.transitions[subject]
+	if !ok {
+		if before == "" || before == "unknown" {
+			d.transitions[subject] = eventTransition{confirmed: after}
+			return
+		}
+		t.confirmed = before
+	}
+	if after == t.confirmed {
+		t.candidate = ""
+		d.transitions[subject] = t
+		return
+	}
+	now := n.At
+	if now.IsZero() {
+		now = time.Now()
+	}
+	if t.candidate != after {
+		t.candidate = after
+		t.since = now
+	}
+	if now.Sub(t.since) >= delay {
+		d.change(n, kind, subject, t.confirmed, after, message)
+		t.confirmed = after
+		t.candidate = ""
+	}
+	d.transitions[subject] = t
+}
+func (d *Dashboard) resetCandidate(subject string) {
+	if t, ok := d.transitions[subject]; ok {
+		t.candidate = ""
+		d.transitions[subject] = t
+	}
+}
+func configEventValue(s SyncStatus) string {
+	if s.State == "" || s.State == "unknown" {
+		return "unknown"
+	}
+	value := s.State
+	if s.Revision != nil {
+		value += fmt.Sprintf(" · revision %d", *s.Revision)
+	}
+	return value
+}
 func (d *Dashboard) observe(previous, current Node) {
+	// Retain only three safe boot identities in RAM so reboot detection survives
+	// an intervening unavailable sample. Never publish the boot identities.
+	if d.boots == nil {
+		d.boots = map[string]string{}
+	}
+	if current.Online && current.Boot != "" {
+		old := d.boots[current.ID]
+		if old == "" {
+			old = previous.Boot
+		}
+		if old != "" && old != current.Boot {
+			d.change(current, "node", "node", "Previous boot", "New boot", "Node reboot detected")
+		}
+		d.boots[current.ID] = current.Boot
+	}
 	if previous.ID == "" {
 		return
 	}
 	if previous.Online != current.Online {
-		message := "Node telemetry unavailable"
+		message, from, to := "Node telemetry unavailable", "Online", "Unavailable"
 		if current.Online {
-			message = "Node telemetry restored"
+			message, from, to = "Node telemetry restored", "Unavailable", "Online"
 		}
-		d.event(current, "node", message)
+		d.change(current, "node", "node", from, to, message)
 	}
 	if !previous.Online || !current.Online {
+		if current.ID == d.config.Node {
+			for key := range d.transitions {
+				d.resetCandidate(key)
+			}
+		}
 		return
 	}
-	if previous.Boot != "" && current.Boot != "" && previous.Boot != current.Boot {
-		d.event(current, "node", "Node reboot detected")
-	}
-	if previous.DNSHealth.Mode != "" && current.DNSHealth.Mode != previous.DNSHealth.Mode && current.ID == d.config.Node {
-		d.event(current, "service", "DNS routing "+current.DNSHealth.Mode)
-	}
-	// Role, config and service transitions are emitted by the node that owns them.
-	// Cached event rings are shared in /local; no journal or duplicate probe is needed.
+	// Local state changes are emitted by their owning observer only.
 	if current.ID != d.config.Node {
 		return
+	}
+	mode := current.DNSHealth.Mode
+	if mode == "adguard" || mode == "fallback" || mode == "unavailable" {
+		d.transition(current, "service", "dns_routing", previous.DNSHealth.Mode, mode, "DNS routing "+mode, 0)
+	} else {
+		d.resetCandidate("dns_routing")
 	}
 	for _, key := range []string{"xiaozhi", "dns"} {
 		a, b := previous.VIP[key], current.VIP[key]
@@ -700,30 +786,43 @@ func (d *Dashboard) observe(previous, current Node) {
 			if key == "dns" {
 				label = "DNS VIP"
 			}
-			verb := "released"
+			verb, from, to := "released", "Owner", "Standby"
 			if *b {
-				verb = "acquired"
+				verb, from, to = "acquired", "Standby", "Owner"
 			}
-			d.event(current, "ownership", label+" "+verb)
+			d.change(current, "ownership", key, from, to, label+" "+verb)
 		}
 	}
 	for _, key := range []string{"xiaozhi", "dns", "monitoring"} {
 		a, b := previous.Config[key], current.Config[key]
-		if b.State != "unknown" && a.State != "" && a.State != "unknown" && (a.State != b.State || (a.Revision != nil && b.Revision != nil && *a.Revision != *b.Revision)) {
-			revision := ""
-			if b.Revision != nil {
-				revision = fmt.Sprintf(" · revision %d", *b.Revision)
-			}
-			d.event(current, "configuration", key+" config "+b.State+revision)
+		subject := "config_" + key
+		if b.State == "" || b.State == "unknown" {
+			d.resetCandidate(subject)
+			continue
 		}
+		delay := time.Duration(0)
+		// A new revision or explicit failure is useful immediately. Same-revision
+		// pending must persist for 30 seconds; transient refreshes stay quiet.
+		if b.State == "pending" && (a.Revision == nil || b.Revision == nil || *a.Revision == *b.Revision) {
+			delay = 30 * time.Second
+		}
+		d.transition(current, "configuration", subject, configEventValue(a), configEventValue(b), key+" config "+configEventValue(b), delay)
 	}
 	for _, key := range []string{"mqtt", "core", "worker", "dns"} {
 		a, b := previous.Components[key], current.Components[key]
-		if a != "" && b != "" && a != b {
-			d.event(current, "service", key+" service "+b)
+		subject := "service_" + key
+		if b != "ready" && b != "unavailable" {
+			d.resetCandidate(subject)
+			continue
 		}
+		delay := time.Duration(0)
+		if b == "unavailable" {
+			delay = 15 * time.Second
+		}
+		d.transition(current, "service", subject, a, b, key+" service "+b, delay)
 	}
 }
+
 func validateNode(n Node, m Member, now time.Time) bool {
 	if n.Protocol != protocol || n.ID != m.ID || n.IP != m.Management || !n.Online || n.At.IsZero() || now.Sub(n.At) > staleAfter || n.At.Sub(now) > 5*time.Second {
 		return false
@@ -810,7 +909,7 @@ func validateNode(n Node, m Member, now time.Time) bool {
 		return false
 	}
 	for _, event := range n.Events {
-		if len(event.ID) > 192 || len(event.Message) > 256 || len(event.Node) > 32 || event.At.IsZero() {
+		if len(event.ID) > 192 || len(event.Message) > 256 || len(event.Node) > 32 || event.At.IsZero() || len(event.Subject) > 32 || len(event.From) > 96 || len(event.To) > 96 {
 			return false
 		}
 	}

@@ -145,6 +145,38 @@ body{margin:0;background:#100d08;color:#f3ead8;font-family:Inter,ui-sans-serif,s
 @media(prefers-reduced-motion:reduce){ #desk-cluster .dc-worker-active .dc-task>svg{animation:none}}
 #desk-cluster[data-paused="true"] .dc-worker-active .dc-task>svg{animation-play-state:paused}
 @media(max-width:540px){ #desk-cluster .dc-topology-endpoints{gap:10px}#desk-cluster .dc-endpoint{padding:12px 10px;gap:7px}#desk-cluster .dc-endpoint>[data-icon]{width:14px;height:14px}#desk-cluster .dc-endpoint p{font-size:11px}#desk-cluster .dc-endpoint-owner{font-size:11px}#desk-cluster .dc-topology .dc-nodes{margin-top:38px;padding-left:22px}#desk-cluster .dc-node-dns{padding:9px 13px}#desk-cluster .dc-dns summary{align-items:flex-start;flex-wrap:wrap}#desk-cluster .dc-topology-legend{gap:9px 14px}}
+#desk-cluster .dc-timeline .dc-events-head{align-items:flex-start}
+#desk-cluster .dc-events-scroll{max-height:340px;overflow-y:auto;overscroll-behavior:contain;scrollbar-gutter:stable;scrollbar-width:thin;scrollbar-color:var(--dc-border) transparent}
+#desk-cluster .dc-episode{border-bottom:1px solid var(--dc-border)}
+#desk-cluster .dc-episode:last-child{border-bottom:0}
+#desk-cluster .dc-episode>summary{display:flex;align-items:center;gap:12px;padding:14px 22px;min-height:68px;list-style:none;cursor:pointer}
+#desk-cluster .dc-episode>summary::-webkit-details-marker{display:none}
+#desk-cluster .dc-episode>summary:hover{background:var(--dc-hover)}
+#desk-cluster .dc-episode .dc-event-content>span{font-weight:500}
+#desk-cluster .dc-episode time{font-size:11px;color:var(--dc-faint);font-variant-numeric:tabular-nums;white-space:nowrap}
+#desk-cluster .dc-event-icon.good{color:var(--dc-green)}
+#desk-cluster .dc-event-icon.warning{color:var(--dc-red)}
+#desk-cluster .dc-event-chevron{display:flex;color:var(--dc-faint)}
+#desk-cluster .dc-event-chevron svg{width:12px;height:12px}
+#desk-cluster .dc-episode[open]>summary .dc-event-chevron{transform:rotate(90deg)}
+#desk-cluster .dc-episode-steps{padding:0 22px 17px 47px}
+#desk-cluster .dc-episode-step{position:relative;display:flex;gap:12px;padding:9px 0;font-size:12px}
+#desk-cluster .dc-episode-step:not(:last-child)::before{content:'';position:absolute;left:4px;top:20px;bottom:-11px;width:1px;background:var(--dc-border)}
+#desk-cluster .dc-step-dot{position:relative;width:9px;height:9px;margin-top:5px;background:var(--dc-faint);border-radius:50%;flex-shrink:0}
+#desk-cluster .dc-episode-step.good .dc-step-dot{background:var(--dc-green)}
+#desk-cluster .dc-episode-step.warning .dc-step-dot{background:var(--dc-red)}
+#desk-cluster .dc-episode-step>div{min-width:0;overflow-wrap:anywhere}
+#desk-cluster .dc-step-change{display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin-top:5px;color:var(--dc-muted)}
+#desk-cluster .dc-step-change>span:first-child{color:var(--dc-faint)}
+#desk-cluster .dc-step-change svg{width:12px;height:12px;transform:rotate(45deg)}
+#desk-cluster .dc-step-meta,#desk-cluster .dc-step-source{display:block;font-size:11px;color:var(--dc-faint);margin-top:5px}
+#desk-cluster .dc-step-context{font-size:11px;color:var(--dc-muted);margin:6px 0 0}
+#desk-cluster .dc-event-day{padding:11px 22px 3px;font-size:10px;color:var(--dc-faint);text-transform:uppercase;letter-spacing:1px}
+#desk-cluster .dc-events-footer{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 22px;border-top:1px solid var(--dc-border)}
+#desk-cluster .dc-events-footer small,#desk-cluster .dc-event-latest{font-size:11px;color:var(--dc-faint)}
+#desk-cluster .dc-event-latest{padding:14px 22px}
+#desk-cluster .dc-timeline [hidden]{display:none}
+@media(max-width:540px){ #desk-cluster .dc-episode>summary{padding:13px 15px;flex-wrap:wrap;gap:8px}#desk-cluster .dc-episode .dc-event-content{flex-basis:calc(100% - 65px)}#desk-cluster .dc-episode>summary time{margin-left:24px;order:4}#desk-cluster .dc-episode-steps{padding:0 15px 16px 35px}#desk-cluster .dc-event-day,#desk-cluster .dc-events-footer,#desk-cluster .dc-event-latest{padding-left:15px;padding-right:15px}#desk-cluster .dc-events-scroll{max-height:320px}}
 </style></head><body><main id="desk-cluster" class="dc-app">
 <header class="dc-top"><a class="dc-brand" href="/" aria-label="Desk Cluster home"><span class="dc-mark" data-icon="layers"></span>Desk Cluster</a><span class="dc-address" id="address"></span></header>
 <div class="dc-intro"><div><div class="dc-eyebrow">Cluster overview</div><h1>Three nodes. One home.</h1><p>Ownership, activity and health at a glance.</p></div><span class="dc-online" id="online">Connecting…</span></div>
@@ -170,7 +202,7 @@ body{margin:0;background:#100d08;color:#f3ead8;font-family:Inter,ui-sans-serif,s
 </nav>
 
 <dialog id="reboot-dialog" aria-labelledby="reboot-title"><h2 id="reboot-title">Reboot node</h2><div id="reboot-description"></div><p class="dc-confirm-note">New jobs are paused. Existing jobs and conversations get up to four minutes to finish, then VIPs move to healthy peers. On timeout maintenance is cancelled without forcing a reboot. Maintenance expires after ten minutes; admission and VIP eligibility recover automatically.</p><div class="dc-confirm-actions"><button id="reboot-cancel" class="dc-reboot" type="button">Cancel</button><button id="reboot-confirm" class="dc-reboot dc-confirm-primary" type="button" disabled>Reboot node</button></div></dialog>
-<section class="dc-events" aria-label="Recent cluster events"><header class="dc-events-head"><div><h2>Recent events</h2><p>Ownership, service health and configuration changes.</p></div><button id="event-toggle" type="button" class="dc-events-toggle" hidden>View all</button></header><div id="events"><p class="dc-empty">Waiting for cluster status…</p></div></section>
+<section class="dc-events dc-timeline" aria-label="Cluster timeline"><header class="dc-events-head"><div><h2>Cluster timeline</h2><p id="event-subtitle">Ownership, availability and configuration changes.</p></div><button id="event-collapse" type="button" class="dc-events-toggle" aria-expanded="true" aria-controls="event-body">Collapse</button></header><div id="event-latest" class="dc-event-latest" hidden></div><div id="event-body"><div id="events" class="dc-events-scroll" role="region" aria-label="Scrollable cluster timeline"><p class="dc-empty">Waiting for cluster status…</p></div><footer class="dc-events-footer"><small id="event-count">Observed history</small><button id="event-toggle" type="button" class="dc-events-toggle" hidden>View all</button></footer></div></section>
 <footer class="dc-foot"><span>Trusted LAN access · One address for all services</span><span id="updated" role="status">Connecting to cluster…</span></footer>
 </main>
 <script>
@@ -180,7 +212,7 @@ const firmwareURL={{ desk_dashboard_client_url | default('') | to_json }};
 const nodeControlEnabled={{ desk_node_control_enabled | default(false) | to_json }};
 {% raw %}
 const root=document.getElementById('desk-cluster');
-const state={selected:null,showAll:false,snapshot:null,unavailable:false};
+const state={selected:null,showAll:false,eventsClosed:false,openEvents:new Set(),snapshot:null,unavailable:false};
 const iconPaths={layers:'M12 3 3 8l9 5 9-5-9-5ZM3 12l9 5 9-5M3 16l9 5 9-5',server:'M4 3h16v7H4zM4 14h16v7H4zM7 6h.01M7 17h.01',crown:'m3 6 4 4 5-7 5 7 4-4-2 14H5L3 6Z',sparkles:'m12 3 2.8 6.2L21 12l-6.2 2.8L12 21l-2.8-6.2L3 12l6.2-2.8L12 3Z',volume:'m11 5-6 4H2v6h3l6 4V5Zm4 3a6 6 0 0 1 0 8m3-11a10 10 0 0 1 0 14',mic:'M9 4a3 3 0 0 1 6 0v8a3 3 0 0 1-6 0V4Zm-3 7v1a6 6 0 0 0 12 0v-1M12 18v4M8 22h8',network:'M9 2h6v6H9zM2 16h6v6H2zM16 16h6v6h-6zM12 8v4M5 16v-4h14v4',pause:'M8 5v14M16 5v14',shield:'m12 2 8 3v6c0 5-8 11-8 11S4 16 4 11V5l8-3Zm-4 10 3 3 5-6',check:'m5 12 4 4L19 6',arrow:'M7 17 17 7M7 7h10v10',x:'m6 6 12 12M6 18 18 6',activity:'M2 12h4l3-9 6 18 3-9h4',bot:'M6 8h12a2 2 0 0 1 2 2v9H4v-9a2 2 0 0 1 2-2ZM12 8V3M9 12h.01M15 12h.01M9 16h6',sync:'M4 9a8 8 0 0 1 14-4l2 2M20 3v4h-4M20 15A8 8 0 0 1 6 20l-2-2M4 22v-4h4',alert:'m12 3 10 18H2L12 3ZM12 9v5M12 17h.01',clock:'M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20ZM12 6v6l4 2'};
 function icon(name){return `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${iconPaths[name]||iconPaths.server}"/></svg>`;}
 function esc(value){return String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
@@ -295,11 +327,69 @@ async function resumeMaintenance(node){
  try{await nodeAction('/resume',{node,id:op.id});operationState.busy=true;operationState.latest={...op,state:'recovering'};showOperation('Resume requested · restoring admission and VIP eligibility');pollOperation();}catch(error){showOperation(error.message||'Resume failed; recovery will retry automatically');}
 }
 
-function renderEvents(){
- const rows=state.snapshot?.events||[];const button=document.getElementById('event-toggle');button.hidden=rows.length<=6;button.textContent=state.showAll?'Show recent':'View all';button.setAttribute('aria-expanded',String(state.showAll));
- document.getElementById('events').innerHTML=rows.length?(state.showAll?rows:rows.slice(0,6)).map(e=>`<div class="dc-event"><span class="dc-event-icon">${icon({ownership:'crown',configuration:'sync',node:'server',service:'activity'}[e.kind]||'clock')}</span><div class="dc-event-content"><span>${esc(e.message)}</span><small>${esc(e.node)}</small></div><time datetime="${esc(e.at)}">${esc(new Date(e.at).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}))}</time></div>`).join(''):`<p class="dc-empty">${state.snapshot?'No changes observed since dashboard startup.':'Waiting for cluster status…'}</p>`;
+function timelineInfo(e){
+ const service={xiaozhi:'Xiaozhi',dns:'DNS',monitoring:'Monitoring',mqtt:'MQTT gateway',core:'Conversation core',worker:'Voice worker'};
+ const message=String(e.message||'');const subject=e.subject||'';
+ let key=`node:${e.node}`,title=`${e.node} · availability & services`,symbol='server',source='Node telemetry',tone='';
+ if(e.kind==='ownership'){
+  const name=subject==='dns'||message.startsWith('DNS')?'DNS':'Xiaozhi';key=`vip:${name}`;title=`${name} VIP ownership changes`;symbol='crown';source='Observed VIP ownership';
+ }else if(e.kind==='configuration'){
+  const name=subject.replace(/^config_/,'')||message.split(' ')[0];const revision=String(e.to||message).match(/revision (\d+)/)?.[1];key=`config:${name}:${revision||'unknown'}`;title=`${service[name]||'Shared'} configuration${revision?' · revision '+revision:''}`;symbol='sync';source='Observed configuration state';
+  if(/failed/.test(e.to||message))tone='warning';else if(/synced/.test(e.to||message))tone='good';
+ }else if(subject==='dns_routing'||message.startsWith('DNS routing ')){
+  key='dns:routing';title='DNS routing changes';symbol='shield';source='DNS pool eligibility';const mode=e.to||message.replace('DNS routing ','');tone=mode==='fallback'||mode==='unavailable'?'warning':mode==='adguard'?'good':'';
+ }else if(e.kind==='service'){
+  const name=subject.replace(/^service_/,'')||message.split(' ')[0];source=`${service[name]||'Service'} health`;tone=/unavailable/.test(e.to||message)?'warning':/ready/.test(e.to||message)?'good':'';
+ }else{tone=/unavailable/.test(message)?'warning':/restored/.test(message)?'good':'';}
+ const step=message.replace(/^xiaozhi config /,'Xiaozhi config ').replace(/^dns config /,'DNS config ').replace(/^monitoring config /,'Monitoring config ').replace(/^worker service /,'Voice worker ').replace(/^core service /,'Conversation core ').replace(/^mqtt service /,'MQTT gateway ').replace(/^dns service /,'AdGuard ');
+ const context=message==='Node telemetry unavailable'?'Telemetry became stale; power and Wi-Fi failure are not distinguished.':message==='Node reboot detected'?'Boot identity changed; the reboot trigger is not inferred.':source==='DNS pool eligibility'?'Pool state was observed; this is not a measurement of every client query.':'';
+ return {key,title,symbol,source,tone,step,context};
 }
-root.addEventListener('click',event=>{const button=event.target.closest('[data-node]');if(button){state.selected=state.selected===button.dataset.node?null:button.dataset.node;render();}if(event.target.closest('.dc-close')){const previousSelection=state.selected;state.selected=null;render();if(previousSelection)root.querySelector(`[data-node="${previousSelection}"]`)?.focus();}if(event.target.closest('#event-toggle')){state.showAll=!state.showAll;renderEvents();}});
+function timelineGroups(events){
+ const rows=events.filter(e=>e&&typeof e.id==='string'&&membership.some(m=>m.id===e.node)&&Number.isFinite(Date.parse(e.at))).slice(0,64).sort((a,b)=>Date.parse(a.at)-Date.parse(b.at));
+ const groups=[];const latest=new Map();
+ for(const e of rows){
+  const info=timelineInfo(e),at=Date.parse(e.at);let group=latest.get(info.key);
+  const windowMS=info.key.startsWith('vip:')?90000:300000;
+  if(!group||at-group.last>windowMS||at-group.first>windowMS){group={id:e.id,key:info.key,title:info.title,symbol:info.symbol,first:at,last:at,tone:info.tone,nodes:new Set(),steps:[],observations:0};groups.push(group);latest.set(info.key,group);}
+  group.last=at;group.tone=info.tone;group.nodes.add(e.node);group.observations++;
+  const signature=JSON.stringify([e.kind,e.subject||'',e.message,e.from||'',e.to||'']);
+  // Combine matching peer observations without claiming simultaneous application.
+  const duplicate=group.steps.find(s=>s.signature===signature&&at-s.at<=15000);
+  if(duplicate){duplicate.nodes.add(e.node);}
+  else group.steps.push({id:e.id,at,signature,nodes:new Set([e.node]),...info,from:e.from||'',to:e.to||''});
+ }
+ for(const group of groups){
+  if(!group.key.startsWith('node:'))continue;
+  const last=group.steps[group.steps.length-1];
+  if(group.steps.some(s=>s.step==='Node reboot detected'))group.title='Node restart observed';
+  else if(group.steps.some(s=>s.step.startsWith('Node telemetry')))group.title=last.step==='Node telemetry restored'?'Node telemetry recovered':last.step==='Node telemetry unavailable'?'Node telemetry unavailable':'Node availability & services';
+  else if(group.steps.every(s=>s.source===last.source))group.title=last.source.replace(/ health$/,'')+(last.tone==='good'?' recovered':last.tone==='warning'?' unavailable':' health changes');
+ }
+ return groups.sort((a,b)=>b.last-a.last);
+}
+function timelineTime(at){return new Date(at).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit',second:'2-digit'});}
+function timelineMarkup(group){
+ const nodes=[...group.nodes].join(' · ');const open=state.openEvents.has(group.id);
+ return `<details class="dc-episode" data-episode="${esc(group.id)}" ${open?'open':''}><summary><span class="dc-event-icon ${group.tone}">${icon(group.symbol)}</span><span class="dc-event-content"><span>${esc(group.title)}</span><small>${esc(nodes)} · ${group.steps.length} observed change${group.steps.length===1?'':'s'}</small></span><time datetime="${esc(new Date(group.last).toISOString())}">${esc(timelineTime(group.last))}</time><span class="dc-event-chevron">${icon('arrow')}</span></summary><div class="dc-episode-steps">${group.steps.map(step=>`<div class="dc-episode-step ${step.tone}"><i class="dc-step-dot" aria-hidden="true"></i><div><div class="dc-step-title">${esc(step.step)}</div>${step.from&&step.to?`<div class="dc-step-change"><span>${esc(step.from)}</span>${icon('arrow')}<span>${esc(step.to)}</span></div>`:''}<div class="dc-step-meta">${esc(timelineTime(step.at))} · ${esc([...step.nodes].join(' · '))}</div>${step.context?`<p class="dc-step-context">${esc(step.context)}</p>`:''}<small class="dc-step-source">${esc(step.source)}</small></div></div>`).join('')}</div></details>`;
+}
+function renderEvents(){
+ const groups=timelineGroups(state.snapshot?.events||[]),rows=state.showAll?groups:groups.slice(0,3);
+ const fold=document.getElementById('event-collapse');fold.textContent=state.eventsClosed?'Expand':'Collapse';fold.setAttribute('aria-expanded',String(!state.eventsClosed));
+ document.getElementById('event-body').hidden=state.eventsClosed;
+ document.getElementById('event-subtitle').textContent=state.unavailable?'Cached observations · telemetry unavailable':'Ownership, availability and configuration changes.';
+ const collapsed=document.getElementById('event-latest');collapsed.hidden=!state.eventsClosed;collapsed.textContent=groups.length?`${groups[0].title} · ${timelineTime(groups[0].last)}`:'No recent observations';
+ const validGroups=new Set(groups.map(g=>g.id));for(const id of state.openEvents){if(!validGroups.has(id))state.openEvents.delete(id);}
+ const button=document.getElementById('event-toggle');button.hidden=groups.length<=3;button.textContent=state.showAll?'Show latest 3':`View all ${groups.length}`;button.setAttribute('aria-expanded',String(state.showAll));
+ document.getElementById('event-count').textContent=`${groups.length?`${rows.length} of ${groups.length} groups`:'No changes'} · Observed history`;
+ const el=document.getElementById('events');const scroll=el.scrollTop;
+ const focus=document.activeElement?.closest('[data-episode]')?.dataset.episode;
+ let previousDay='';const markup=rows.map(group=>{const day=new Date(group.last).toLocaleDateString([],{day:'numeric',month:'short'});const heading=day!==previousDay?`<div class="dc-event-day">${esc(day)}</div>`:'';previousDay=day;return heading+timelineMarkup(group);}).join('')||`<p class="dc-empty">${state.snapshot?'No changes observed in the retained history.':'Waiting for cluster status…'}</p>`;
+ if(el._timelineMarkup!==markup){el._timelineMarkup=markup;el.innerHTML=markup;el.scrollTop=scroll;if(focus)el.querySelector(`[data-episode="${CSS.escape(focus)}"]>summary`)?.focus({preventScroll:true});}
+}
+root.addEventListener('toggle',event=>{const el=event.target;if(!el.matches?.('[data-episode]'))return;if(el.open)state.openEvents.add(el.dataset.episode);else state.openEvents.delete(el.dataset.episode);},true);
+
+root.addEventListener('click',event=>{const button=event.target.closest('[data-node]');if(button){state.selected=state.selected===button.dataset.node?null:button.dataset.node;render();}if(event.target.closest('.dc-close')){const previousSelection=state.selected;state.selected=null;render();if(previousSelection)root.querySelector(`[data-node="${previousSelection}"]`)?.focus();}if(event.target.closest('#event-collapse')){const history=document.getElementById('events');if(!state.eventsClosed)state.eventScroll=history.scrollTop;state.eventsClosed=!state.eventsClosed;renderEvents();if(!state.eventsClosed)history.scrollTop=state.eventScroll||0;}if(event.target.closest('#event-toggle')){state.showAll=!state.showAll;renderEvents();document.getElementById('events').scrollTop=0;}});
 
 document.getElementById('address').textContent=location.host;root.querySelectorAll('[data-icon]').forEach(el=>{el.innerHTML=icon(el.dataset.icon);});
 let timer=null,activeRequest=null;

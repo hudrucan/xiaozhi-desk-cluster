@@ -67,8 +67,38 @@ these cached rings; aggregate snapshots deduplicate IDs and nearby duplicate nod
 reachability observations. At most 64 events from the last six hours are returned.
 This is an observed event feed, not a complete durable audit log. Whole-cluster
 restarts clear it; changes faster than the sample interval may not be observed.
-Per-turn voice events stay in Xiaozhi voice logs. The root page shows six recent
-events, with an option to expand the retained history.
+Per-turn voice events stay in Xiaozhi voice logs. The root page shows the three
+latest observation groups, with View all and Collapse/Expand controls. Groups
+are native disclosures; expanded steps show timestamp, affected nodes, observed
+before/after values and source. The timeline scrolls inside a bounded 340 px
+region (320 px on mobile). Polling preserves open groups, focus and scroll;
+View all/Show latest resets the internal scroll to the top.
+
+Grouping is local to the browser: VIP changes within 90 seconds, and changes
+for the same node or same service/revision within five minutes, form a group.
+Matching peer observations within 15 seconds share a step with the observed
+node list. A group is not proof of a shared root cause, and a recovery icon
+reflects the last observation, not current health. Older event records without
+structured context remain readable; no previous state is invented for them.
+
+New event records add bounded optional `subject`, `from` and `to` fields. Same-
+revision pending must persist for 30 seconds before it is logged; an actual new
+revision or explicit failure is immediate. Native service unavailability must
+persist for 15 seconds; brief dips and their recoveries stay quiet. Dashboard
+health remains immediate; only event emission is delayed. Boot identity is kept
+in a three-node RAM map so a reboot can be recognized across an unavailable
+sample, without publishing boot IDs. No new probes, log scraping, disk history
+or daemon are introduced. The compact panel v1 projection stays compatible.
+
+Timeline acceptance on 2026-10-13: 17 Go checks and 8 dashboard/UI Python
+checks passed. Isolated UI checks covered peer grouping, legacy event records,
+disclosures, section Collapse/Expand, bounded internal scroll, focus/scroll
+retention across polls, and a 390 px viewport without overflow. Serial collector
+and page rollouts passed protected runtime/policy guards on all three nodes.
+Live event context and the deployed timeline were verified through the VIP;
+root, panel/status APIs and the three application routes returned HTTP 200.
+Only the read-only collector was restarted; no voice/DNS/VIP service, firmware
+or provider workload was changed. No physical outage was induced for this change.
 
 ## Deployment and isolation
 
