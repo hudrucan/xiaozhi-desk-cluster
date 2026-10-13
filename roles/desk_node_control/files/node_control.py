@@ -29,6 +29,15 @@ LEASE_SECONDS = 600
 CHALLENGE_SECONDS = 60
 DNS_QUIET_SECONDS = 10  # Current private DNS proxy timeout server: 10s.
 BOOT_PATH = '/proc/sys/kernel/random/boot_id'
+HISTORY_LIMIT = 4
+HISTORY_SECONDS = 6 * 3600
+HISTORY_STATES = frozenset(('accepted', 'draining', 'releasing_vips', 'maintenance',
+    'rebooting', 'offline', 'starting', 'services_ready', 'configuration_synced',
+    'recovering', 'rejoined', 'resumed', 'needs_attention'))
+HISTORY_TERMINAL = frozenset(('rejoined', 'resumed'))
+HISTORY_ORDER = ('accepted', 'draining', 'releasing_vips', 'maintenance', 'rebooting',
+    'offline', 'starting', 'services_ready', 'configuration_synced', 'recovering',
+    'needs_attention', 'resumed', 'rejoined')
 
 
 class Failure(Exception):
@@ -96,7 +105,7 @@ class Control:
         self.nonces = {}
         self.cached_health = (0, None)
         self.opener = build_opener(ProxyHandler({}))
-        self.state = {'lease': None, 'executed': None, 'completed': None, 'maintenance': None}
+        self.state = {'lease': None, 'executed': None, 'completed': None, 'maintenance': None, 'history': []}
         if self.path.exists():
             try:
                 value = json.loads(self.path.read_text())
@@ -105,9 +114,71 @@ class Control:
                 self.state.update(value)
             except (OSError, ValueError, TypeError):
                 raise RuntimeError('Node control state needs review') from None
+        self.state['history'] = self.merge_history([self.state['history']])
         self.reboot = reboot or self.system_reboot
 
+    def merge_history(self, sources):
+        """Sanitized display metadata only; never used to authorize an action."""
+        records = {}
+        now = int(time.time())
+        for source in sources:
+            if not isinstance(source, list): continue
+            for value in source[:HISTORY_LIMIT]:
+                if (not isinstance(value, dict) or not isinstance(value.get('node'), str) or value['node'] not in self.members
+                        or not isinstance(value.get('id'), str) or len(value['id']) != 32
+                        or any(c not in '0123456789abcdef' for c in value['id'])
+                        or value.get('action') not in ('maintenance', 'reboot')
+                        or type(value.get('started')) is not int
+                        or not now-HISTORY_SECONDS <= value['started'] <= now+5
+                        or not isinstance(value.get('events'), list)):
+                    continue
+                key = (value['id'], value['node'], value['started'])
+                record = records.setdefault(key, {k:value[k] for k in ('id','node','action','started')})
+                if value['action'] == 'reboot': record['action'] = 'reboot'
+                events = record.setdefault('events', {})
+                for event in value['events'][:len(HISTORY_STATES)]:
+                    if (not isinstance(event, dict) or not isinstance(event.get('state'), str) or event['state'] not in HISTORY_STATES
+                            or type(event.get('at')) is not int
+                            or not value['started'] <= event['at'] <= now+5):
+                        continue
+                    phase = event['state']
+                    # Several observers may see one milestone. Retain its first observation.
+                    events[phase] = min(events.get(phase, event['at']), event['at'])
+        output = []
+        for record in records.values():
+            steps = [{'state':state,'at':stamp} for state,stamp in record.pop('events').items()]
+            steps.sort(key=lambda e: (e['at'], list(HISTORY_ORDER).index(e['state'])))
+            if not steps: continue
+            terminals = [e for e in steps if e['state'] in HISTORY_TERMINAL]
+            last = terminals[-1] if terminals else steps[-1]
+            record.update(events=steps, state=last['state'])
+            if terminals: record['finished'] = last['at']
+            output.append(record)
+        return sorted(output, key=lambda r:r.get('finished', r['events'][-1]['at']), reverse=True)[:HISTORY_LIMIT]
+
+    def record_history(self, operation, state, at=None):
+        if not operation or state not in HISTORY_STATES: return False
+        with self.lock:
+            old = self.state['history']
+            existing = next((r for r in old if r['id'] == operation['id']), None)
+            if existing and ((existing['state'] in HISTORY_TERMINAL and state not in ('services_ready','configuration_synced')) or any(e['state']==state for e in existing['events'])):
+                return False
+            record = {k:operation[k] for k in ('id','node','started')}
+            record['action'] = operation.get('action', 'reboot')
+            record['events'] = [{'state':state, 'at':max(operation['started'], int(time.time() if at is None else at))}]
+            updated = self.merge_history([old, [record]])
+            if updated == old: return False
+            self.state['history'] = updated
+            return True
+
     def save(self):
+        # Piggyback durable lifecycle milestones on the existing state writes.
+        operation = self.state['maintenance'] or self.state['executed']
+        if operation:
+            self.record_history(operation, operation.get('state', 'accepted'))
+        completed = self.state['completed']
+        if completed:
+            self.record_history(completed, 'rejoined', completed['finished'])
         self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         temporary = self.path.with_suffix('.tmp')
         with temporary.open('w') as stream:
@@ -147,12 +218,20 @@ class Control:
             result['metadata'] = {k: value.get(k) for k in ('ip', 'vip', 'core', 'mqtt', 'activity', 'connections', 'admission', 'maintenance_supported', 'dns_health')}
             result['revisions'] = {k: configs.get(k, {}).get('revision') for k in ('xiaozhi', 'dns', 'monitoring')}
             valid = value.get('id') == self.node and value.get('boot_id') == result['boot_id'] and 0 <= age <= 15
+            if valid:
+                result['readiness'] = {
+                    'services':all(components.get(k) == 'ready' for k in ('worker','core','mqtt','dns')),
+                    'configuration':all(configs.get(k, {}).get('state') == 'synced' for k in ('xiaozhi','dns','monitoring')),
+                    'waiting':[k for k in ('worker','core','mqtt','dns') if components.get(k) != 'ready'] +
+                        [k+' config' for k in ('xiaozhi','dns','monitoring') if configs.get(k,{}).get('state') != 'synced']}
             valid &= all(components.get(k) == 'ready' for k in ('worker', 'core', 'mqtt', 'dns'))
             valid &= all(configs.get(k, {}).get('state') == 'synced' for k in ('xiaozhi', 'dns', 'monitoring'))
             if valid:
                 routes = self.get(f"http://{member['private']}:{self.config['nats_port']}/routez")
                 valid = routes.get('num_routes', 0) >= 2 and dns_ready(member['management'], self.config['dns_port'])
             result['ready'] = bool(valid)
+            if 'readiness' in result and not valid and not result['readiness']['waiting']:
+                result['readiness']['waiting'].append('cluster routing')
         except (OSError, ValueError, KeyError, TypeError):
             pass
         with self.lock:
@@ -302,7 +381,7 @@ class Control:
         if path == '/peer/state':
             if value != {}: raise Failure(400, 'Invalid state request')
             with self.lock: lease = self.state['lease']
-            return {**self.health(), 'lease': lease, 'completed': self.state['completed'], 'maintenance':self.state['maintenance'], 'executed':self.state['executed']}
+            return {**self.health(), 'lease': lease, 'completed': self.state['completed'], 'maintenance':self.state['maintenance'], 'executed':self.state['executed'], 'history':self.state['history']}
         if path == '/peer/reboot-ready':
             if set(value) != {'token'}: raise Failure(400, 'Invalid maintained reboot')
             token = self.validate_token(value['token'])
@@ -448,6 +527,8 @@ class Control:
         for service in value.get('services', []):
             self.vip_service(service, 'start')
         with self.lock:
+            if not changed_boot:
+                self.record_history(value, 'resumed')
             self.state['maintenance'] = None
             if not changed_boot: self.state['executed'] = None
             self.save()
@@ -549,6 +630,27 @@ class Control:
 
     def status(self):
         views = self.views()
+        result = self.operation_status(views)
+        operation = result.get('operation')
+        with self.lock:
+            changed = False
+            if operation:
+                target = views.get(operation['node'], {})
+                readiness = target.get('readiness')
+                if isinstance(readiness, dict):
+                    operation['readiness'] = readiness
+                    if operation['state'] in ('starting','rejoined') and 'finished' not in operation:
+                        for phase, key in (('services_ready','services'), ('configuration_synced','configuration')):
+                            if readiness.get(key) is True:
+                                changed |= self.record_history(operation, phase)
+                changed |= self.record_history(operation, operation['state'], operation.get('finished'))
+            if changed:
+                try: self.save()  # Newly observed milestones only; no writes on idle polls.
+                except OSError: pass  # Display history must not fail a status read.
+            result['history'] = self.merge_history([self.state['history']] + [v.get('history', []) for v in views.values()])
+        return result
+
+    def operation_status(self, views):
         leases = [v['lease'] for v in views.values() if v.get('lease')]
         if not leases:
             completed = [v['completed'] for v in views.values() if v.get('completed')
@@ -556,7 +658,7 @@ class Control:
             if not completed: return {'protocol': PROTOCOL, 'operation': None, 'idle_confirmed':all(v.get('ready') and not v.get('maintenance') for v in views.values())}
             result = max(completed,key=lambda value:value['finished'])
             return {'protocol':PROTOCOL, 'operation':{k:result[k] for k in
-                ('id','node','state','started','expires','finished')}}
+                ('id','node','state','started','expires','finished','action') if k in result}}
         active_leases = [v for v in leases if v['expires'] > time.time()]
         lease = min(active_leases or leases, key=lambda v: v['started'])
         target = views.get(lease['node'], {})
@@ -573,7 +675,7 @@ class Control:
                 try: self.peer(node, '/peer/complete', {'id': lease['id']})
                 except Failure: pass
         return {'protocol': PROTOCOL, 'operation': {'id': lease['id'], 'node': lease['node'],
-            'state': state, 'action':lease.get('action','reboot'), 'started': lease['started'], 'expires': lease['expires']}}
+            'state': state, 'action':maintenance.get('action',lease.get('action','reboot')) if maintenance else lease.get('action','reboot'), 'started': lease['started'], 'expires': lease['expires']}}
 
 
 class Handler(BaseHTTPRequestHandler):

@@ -177,6 +177,21 @@ body{margin:0;background:#100d08;color:#f3ead8;font-family:Inter,ui-sans-serif,s
 #desk-cluster .dc-event-latest{padding:14px 22px}
 #desk-cluster .dc-timeline [hidden]{display:none}
 @media(max-width:540px){ #desk-cluster .dc-episode>summary{padding:13px 15px;flex-wrap:wrap;gap:8px}#desk-cluster .dc-episode .dc-event-content{flex-basis:calc(100% - 65px)}#desk-cluster .dc-episode>summary time{margin-left:24px;order:4}#desk-cluster .dc-episode-steps{padding:0 15px 16px 35px}#desk-cluster .dc-event-day,#desk-cluster .dc-events-footer,#desk-cluster .dc-event-latest{padding-left:15px;padding-right:15px}#desk-cluster .dc-events-scroll{max-height:320px}}
+
+#desk-cluster .dc-ha-stages{display:flex;align-items:center;flex-wrap:wrap;gap:7px;padding:10px 0 8px}
+#desk-cluster .dc-ha-stage{display:inline-flex;align-items:center;gap:4px;font-size:11px;color:var(--dc-faint)}
+#desk-cluster .dc-ha-stage.done{color:var(--dc-green)}#desk-cluster .dc-ha-stage.current{color:var(--dc-gold)}
+#desk-cluster .dc-ha-stage svg{width:12px;height:12px}#desk-cluster .dc-ha-separator{color:var(--dc-faint);opacity:.6}
+#desk-cluster .dc-ha-milestones{list-style:none;margin:0;padding:0}
+#desk-cluster .dc-ha-milestones li{display:grid;grid-template-columns:72px 1fr;gap:12px;padding:7px 0;font-size:12px;overflow-wrap:anywhere}
+#desk-cluster .dc-ha-milestones time{color:var(--dc-faint);font-size:11px}
+#desk-cluster .dc-ha-source{display:block;font-size:11px;color:var(--dc-faint);border-top:1px solid var(--dc-border);margin-top:12px;padding-top:12px}
+#desk-cluster .dc-ha-note{margin:0 0 10px;color:var(--dc-muted);font-size:11px;overflow-wrap:anywhere}
+#desk-cluster .dc-ha-owners{display:flex;align-items:center;gap:15px;padding:9px 0 12px}
+#desk-cluster .dc-ha-owners>span{min-width:0}#desk-cluster .dc-ha-owners strong{font-size:12px;font-weight:500}
+#desk-cluster .dc-ha-owners small{display:block;font-size:11px;color:var(--dc-faint);margin-top:3px}
+#desk-cluster .dc-ha-owners>svg{width:14px;height:14px;transform:rotate(45deg)}
+#desk-cluster .dc-sr{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
 </style></head><body><main id="desk-cluster" class="dc-app">
 <header class="dc-top"><a class="dc-brand" href="/" aria-label="Desk Cluster home"><span class="dc-mark" data-icon="layers"></span>Desk Cluster</a><span class="dc-address" id="address"></span></header>
 <div class="dc-intro"><div><div class="dc-eyebrow">Cluster overview</div><h1>Three nodes. One home.</h1><p>Ownership, activity and health at a glance.</p></div><span class="dc-online" id="online">Connecting…</span></div>
@@ -202,7 +217,7 @@ body{margin:0;background:#100d08;color:#f3ead8;font-family:Inter,ui-sans-serif,s
 </nav>
 
 <dialog id="reboot-dialog" aria-labelledby="reboot-title"><h2 id="reboot-title">Reboot node</h2><div id="reboot-description"></div><p class="dc-confirm-note">New jobs are paused. Existing jobs and conversations get up to four minutes to finish, then VIPs move to healthy peers. On timeout maintenance is cancelled without forcing a reboot. Maintenance expires after ten minutes; admission and VIP eligibility recover automatically.</p><div class="dc-confirm-actions"><button id="reboot-cancel" class="dc-reboot" type="button">Cancel</button><button id="reboot-confirm" class="dc-reboot dc-confirm-primary" type="button" disabled>Reboot node</button></div></dialog>
-<section class="dc-events dc-timeline" aria-label="Cluster timeline"><header class="dc-events-head"><div><h2>Cluster timeline</h2><p id="event-subtitle">Ownership, availability and configuration changes.</p></div><button id="event-collapse" type="button" class="dc-events-toggle" aria-expanded="true" aria-controls="event-body">Collapse</button></header><div id="event-latest" class="dc-event-latest" hidden></div><div id="event-body"><div id="events" class="dc-events-scroll" role="region" aria-label="Scrollable cluster timeline"><p class="dc-empty">Waiting for cluster status…</p></div><footer class="dc-events-footer"><small id="event-count">Observed history</small><button id="event-toggle" type="button" class="dc-events-toggle" hidden>View all</button></footer></div></section>
+<section class="dc-events dc-timeline" aria-label="Cluster timeline"><header class="dc-events-head"><div><h2>Cluster timeline</h2><p id="event-subtitle">Ownership, maintenance and recovery.</p></div><button id="event-collapse" type="button" class="dc-events-toggle" aria-expanded="true" aria-controls="event-body">Collapse</button></header><div id="event-latest" class="dc-event-latest" hidden></div><div id="event-body"><div id="events" class="dc-events-scroll" role="region" aria-label="Scrollable cluster timeline"><p class="dc-empty">Waiting for cluster status…</p></div><footer class="dc-events-footer"><small id="event-count">Observed history</small><button id="event-toggle" type="button" class="dc-events-toggle" hidden>View all</button></footer></div></section>
 <footer class="dc-foot"><span>Trusted LAN access · One address for all services</span><span id="updated" role="status">Connecting to cluster…</span></footer>
 </main>
 <script>
@@ -357,7 +372,7 @@ function timelineGroups(events){
   group.last=at;group.tone=info.tone;group.nodes.add(e.node);group.observations++;
   const signature=JSON.stringify([e.kind,e.subject||'',e.message,e.from||'',e.to||'']);
   // Combine matching peer observations without claiming simultaneous application.
-  const duplicate=group.steps.find(s=>s.signature===signature&&at-s.at<=15000);
+  const duplicate=group.steps.find(s=>s.signature===signature&&at-s.at<=15000&&(e.kind!=='ownership'||s.nodes.has(e.node)));
   if(duplicate){duplicate.nodes.add(e.node);}
   else group.steps.push({id:e.id,at,signature,nodes:new Set([e.node]),...info,from:e.from||'',to:e.to||''});
  }
@@ -370,16 +385,92 @@ function timelineGroups(events){
  }
  return groups.sort((a,b)=>b.last-a.last);
 }
+const operationPhases={accepted:'Operation accepted',draining:'New jobs paused; existing work draining',releasing_vips:'Drain complete; releasing VIP ownership',maintenance:'VIP handoff complete; node in maintenance',rebooting:'Reboot requested',offline:'Node telemetry unavailable during recovery',starting:'New boot observed; waiting for readiness',services_ready:'Worker, core, MQTT and DNS services ready',configuration_synced:'Xiaozhi, DNS and Monitoring configuration synced',recovering:'Restoring admission and VIP eligibility',rejoined:'Node controller confirmed recovery',resumed:'Maintenance ended; resume completed',needs_attention:'Recovery not confirmed; attention required'};
+function operationHistory(value){
+ if(!Array.isArray(value))return [];
+ const now=Date.now()/1000;
+ return value.slice(0,4).filter(r=>r&&typeof r.id==='string'&&/^[a-f0-9]{32}$/.test(r.id)&&membership.some(m=>m.id===r.node)&&['maintenance','reboot'].includes(r.action)&&Number.isInteger(r.started)&&now-r.started<=21600&&r.started<=now+5&&Array.isArray(r.events)).map(r=>{
+  const seen=new Set();const events=r.events.slice(0,13).filter(e=>e&&Object.hasOwn(operationPhases,e.state)&&Number.isInteger(e.at)&&e.at>=r.started&&e.at<=now+5&&!seen.has(e.state)&&(seen.add(e.state),true)).sort((a,b)=>a.at-b.at);
+  const terminal=events.filter(e=>['rejoined','resumed'].includes(e.state)).at(-1);
+  return {...r,events,state:terminal?.state||events.at(-1)?.state,finished:terminal?.at};
+ }).filter(r=>r.events.length);
+}
+function elapsedText(ms){const seconds=Math.max(0,Math.round(ms/1000));return seconds<60?`${seconds}s`:`${Math.floor(seconds/60)}m ${seconds%60}s`;}
+function operationTimelineGroups(){
+ const history=[...operationState.history];const latest=operationState.latest;
+ if(latest&&/^[a-f0-9]{32}$/.test(latest.id)&&Number.isInteger(latest.started)&&Date.now()/1000-latest.started<=21600&&!history.some(r=>r.id===latest.id)){
+  // Older controllers supply the latest state only. Preserve that observation, without inventing intermediate stages.
+  history.push({id:latest.id,node:latest.node,action:latest.action||'reboot',started:latest.started,finished:latest.state==='rejoined'?latest.finished:undefined,state:latest.state,events:[{state:latest.state,at:latest.finished||Math.floor(operationState.observedAt/1000)}]});
+ }
+ return history.map(r=>{
+  const terminal=['rejoined','resumed'].includes(r.state),same=latest?.id===r.id;
+  const cached=operationState.unavailable||Date.now()-operationState.observedAt>40000;
+  const phase=!terminal&&same?latest.state:r.state;
+  const active=!terminal&&same&&!cached&&latest.expires*1000>Date.now();
+  const title=phase==='rejoined'?`${r.node} rejoined the cluster`:phase==='resumed'?`${r.node} maintenance ended`:phase==='maintenance'?`${r.node} in maintenance`:phase==='needs_attention'?`${r.node} recovery needs attention`:`${r.node} ${r.action==='maintenance'?'entering maintenance':'maintenance & reboot'}`;
+  const last=Math.max(...r.events.map(e=>e.at))*1000,finished=terminal&&Number.isInteger(r.finished)?r.finished*1000:null;
+  const duration=finished!==null?`completed in ${elapsedText(finished-r.started*1000)}`:active?`${elapsedText(Date.now()-r.started*1000)} elapsed`:'completion unconfirmed';
+  const tone=phase==='rejoined'?'good':phase==='needs_attention'?'warning':'';
+  return {id:`operation:${r.id}`,key:`operation:${r.id}`,title,symbol:terminal?'check':'server',tone,nodes:new Set([r.node]),first:r.started*1000,last,active,
+   subtitle:`${r.action==='maintenance'?'Maintenance':'Maintenance & reboot'} · ${duration}`,operation:{...r,phase,cached,readiness:same&&!cached?latest.readiness:null},
+   steps:r.events.map(e=>({id:`${r.id}:${e.state}`,at:e.at*1000,nodes:new Set([r.node]),step:operationPhases[e.state],source:'Node controller milestone',tone:e.state==='needs_attention'?'warning':e.state==='rejoined'?'good':'',from:'',to:''}))};
+ });
+}
+function operationStageMarkup(group){
+ const op=group.operation,seen=new Set(op.events.map(e=>e.state));
+ const stages=op.action==='maintenance'?[
+  ['Drain',seen.has('releasing_vips'),op.phase==='draining'],['Handoff',seen.has('maintenance'),op.phase==='releasing_vips'],['Maintenance',seen.has('maintenance'),op.phase==='maintenance'],['Resume',seen.has('resumed'),op.phase==='recovering']
+ ]:[
+  ['Drain',seen.has('releasing_vips'),op.phase==='draining'],['Handoff',seen.has('maintenance'),op.phase==='releasing_vips'],['Reboot',seen.has('starting'),['rebooting','offline'].includes(op.phase)],['Ready',seen.has('services_ready'),op.phase==='starting'&&!seen.has('services_ready')],['Sync',seen.has('configuration_synced'),(op.phase==='starting'&&seen.has('services_ready')||op.phase==='needs_attention'&&op.readiness?.services===true)&&!seen.has('configuration_synced')],['Rejoin',seen.has('rejoined'),op.phase==='recovering']
+ ];
+ const labels={worker:'Voice worker',core:'Conversation core',mqtt:'MQTT gateway',dns:'DNS', 'xiaozhi config':'Xiaozhi config','dns config':'DNS config','monitoring config':'Monitoring config','cluster routing':'Cluster routing'};
+ const waiting=Array.isArray(op.readiness?.waiting)?op.readiness.waiting.filter(k=>Object.hasOwn(labels,k)).map(k=>labels[k]):[];
+ const note=op.cached?'Cached operation observations; current progress unconfirmed.':['starting','needs_attention','recovering'].includes(op.phase)&&waiting.length?`${op.phase==='needs_attention'?'Recovery unconfirmed · ':''}Waiting for ${waiting.join(', ')}.`:op.phase==='rejoined'?'Recovery confirmed by the node controller.':operationPhases[op.phase]||'Progress unconfirmed';
+ return `<div class="dc-ha-stages" aria-label="Operation stages">${stages.map(([name,done,current],i)=>`${i?'<span class="dc-ha-separator" aria-hidden="true">›</span>':''}<span class="dc-ha-stage ${done?'done':current&&!op.cached?'current':''}">${done?icon('check'):''}${esc(name)}<span class="dc-sr"> · ${done?'observed complete':current&&!op.cached?'in progress':'not separately observed'}</span></span>`).join('')}</div><p class="dc-ha-note">${esc(note)}</p>`;
+}
+function vipHandover(group){
+ if(!group.key.startsWith('vip:'))return null;
+ const acquire=group.steps.filter(s=>s.to==='Owner'||s.step.endsWith('VIP acquired'));
+ const newest=acquire.at(-1);if(!newest||newest.nodes.size!==1)return null;
+ const next=[...newest.nodes][0];
+ const release=group.steps.filter(s=>(s.to==='Standby'||s.step.endsWith('VIP released'))&&s.at<=newest.at&&s.nodes.size===1&&![...s.nodes].includes(next)).at(-1);
+ if(!release)return null;
+ // Conflicting acquisitions without a corresponding release do not establish a handover.
+ const prior=acquire.at(-2);
+ if(prior&&prior.at>release.at&&![...prior.nodes].includes(next))return null;
+ return {from:[...release.nodes][0],to:next,interval:newest.at-release.at};
+}
+function vipHandoverMarkup(group){
+ const handover=group.handover;if(!handover)return '';
+ const node=id=>`<span><strong>${esc(id)}</strong><small>${esc(membership.find(m=>m.id===id)?.management||'')}</small></span>`;
+ return `<div class="dc-ha-owners">${node(handover.from)}${icon('arrow')}${node(handover.to)}</div><p class="dc-ha-note">Observed handover interval: ${esc(elapsedText(handover.interval))}.</p>`;
+}
+function clusterTimelineGroups(){
+ const operations=operationTimelineGroups();
+ const raw=state.snapshot?.events||[];
+ const events=raw.filter(e=>!operations.some(g=>{
+  if(!g.nodes.has(e.node)||e.kind!=='node'||Date.parse(e.at)<g.first||Date.parse(e.at)>g.last+15000)return false;
+  const seen=new Set(g.operation.events.map(s=>s.state));
+  return e.message==='Node telemetry unavailable'&&seen.has('offline')||e.message==='Node reboot detected'&&seen.has('starting')||e.message==='Node telemetry restored'&&seen.has('starting');
+ }));
+ const groups=timelineGroups(events);
+ for(const group of groups){const handover=vipHandover(group);if(handover){group.handover=handover;group.title=`${group.key.slice(4)} owner changed`;group.subtitle=`${handover.from} → ${handover.to} · observed handover`;}}
+ return [...operations,...groups].sort((a,b)=>Number(b.active||false)-Number(a.active||false)||b.last-a.last);
+}
+
 function timelineTime(at){return new Date(at).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit',second:'2-digit'});}
+function operationMilestonesMarkup(group){
+ return `<ol class="dc-ha-milestones">${group.steps.map(step=>`<li class="${step.tone}"><time datetime="${esc(new Date(step.at).toISOString())}">${esc(timelineTime(step.at))}</time><span>${esc(step.step)}</span></li>`).join('')}</ol><small class="dc-ha-source">Node-controller milestones · Unmarked stages were not separately observed.</small>`;
+}
 function timelineMarkup(group){
  const nodes=[...group.nodes].join(' · ');const open=state.openEvents.has(group.id);
- return `<details class="dc-episode" data-episode="${esc(group.id)}" ${open?'open':''}><summary><span class="dc-event-icon ${group.tone}">${icon(group.symbol)}</span><span class="dc-event-content"><span>${esc(group.title)}</span><small>${esc(nodes)} · ${group.steps.length} observed change${group.steps.length===1?'':'s'}</small></span><time datetime="${esc(new Date(group.last).toISOString())}">${esc(timelineTime(group.last))}</time><span class="dc-event-chevron">${icon('arrow')}</span></summary><div class="dc-episode-steps">${group.steps.map(step=>`<div class="dc-episode-step ${step.tone}"><i class="dc-step-dot" aria-hidden="true"></i><div><div class="dc-step-title">${esc(step.step)}</div>${step.from&&step.to?`<div class="dc-step-change"><span>${esc(step.from)}</span>${icon('arrow')}<span>${esc(step.to)}</span></div>`:''}<div class="dc-step-meta">${esc(timelineTime(step.at))} · ${esc([...step.nodes].join(' · '))}</div>${step.context?`<p class="dc-step-context">${esc(step.context)}</p>`:''}<small class="dc-step-source">${esc(step.source)}</small></div></div>`).join('')}</div></details>`;
+ return `<details class="dc-episode" data-episode="${esc(group.id)}" ${open?'open':''}><summary><span class="dc-event-icon ${group.tone}">${icon(group.symbol)}</span><span class="dc-event-content"><span>${esc(group.title)}</span><small>${esc(group.subtitle||`${nodes} · ${group.steps.length} observed change${group.steps.length===1?'':'s'}`)}</small></span><time datetime="${esc(new Date(group.last).toISOString())}">${esc(timelineTime(group.last))}</time><span class="dc-event-chevron">${icon('arrow')}</span></summary><div class="dc-episode-steps">${group.operation?operationStageMarkup(group):vipHandoverMarkup(group)}${group.operation?operationMilestonesMarkup(group):group.steps.map(step=>`<div class="dc-episode-step ${step.tone}"><i class="dc-step-dot" aria-hidden="true"></i><div><div class="dc-step-title">${esc(step.step)}</div>${step.from&&step.to?`<div class="dc-step-change"><span>${esc(step.from)}</span>${icon('arrow')}<span>${esc(step.to)}</span></div>`:''}<div class="dc-step-meta">${esc(timelineTime(step.at))} · ${esc([...step.nodes].join(' · '))}</div>${step.context?`<p class="dc-step-context">${esc(step.context)}</p>`:''}<small class="dc-step-source">${esc(step.source)}</small></div></div>`).join('')}</div></details>`;
 }
 function renderEvents(){
- const groups=timelineGroups(state.snapshot?.events||[]),rows=state.showAll?groups:groups.slice(0,3);
+ const groups=clusterTimelineGroups(),rows=state.showAll?groups:groups.slice(0,3);
  const fold=document.getElementById('event-collapse');fold.textContent=state.eventsClosed?'Expand':'Collapse';fold.setAttribute('aria-expanded',String(!state.eventsClosed));
  document.getElementById('event-body').hidden=state.eventsClosed;
- document.getElementById('event-subtitle').textContent=state.unavailable?'Cached observations · telemetry unavailable':'Ownership, availability and configuration changes.';
+ document.getElementById('event-subtitle').textContent=state.unavailable?'Cached observations · telemetry unavailable':'Ownership, maintenance and recovery.';
  const collapsed=document.getElementById('event-latest');collapsed.hidden=!state.eventsClosed;collapsed.textContent=groups.length?`${groups[0].title} · ${timelineTime(groups[0].last)}`:'No recent observations';
  const validGroups=new Set(groups.map(g=>g.id));for(const id of state.openEvents){if(!validGroups.has(id))state.openEvents.delete(id);}
  const button=document.getElementById('event-toggle');button.hidden=groups.length<=3;button.textContent=state.showAll?'Show latest 3':`View all ${groups.length}`;button.setAttribute('aria-expanded',String(state.showAll));
@@ -404,11 +495,11 @@ async function poll(){
 }
 document.addEventListener('visibilitychange',()=>{clearTimeout(timer);root.dataset.paused=String(document.hidden);if(document.hidden){activeRequest?.abort();}else if(!activeRequest){render();poll();}});
 
-const operationState={busy:false,latest:null,timer:null,loading:false,prompt:null,expiry:null};
+const operationState={busy:false,latest:null,history:[],observedAt:0,unavailable:false,timer:null,loading:false,prompt:null,expiry:null};
 function canReboot(){const nodes=state.snapshot?.nodes||[];return nodeControlEnabled&&!operationState.busy&&nodes.length===3&&nodes.every(n=>fresh(n)&&n.maintenance_supported===true&&['worker','core','mqtt','dns'].every(k=>n.components[k]==='ready')&&['xiaozhi','dns','monitoring'].every(k=>n.configuration[k]?.state==='synced'));}
 async function nodeAction(path,body){const controller=new AbortController();const timer=setTimeout(()=>controller.abort(),23000);try{const res=await fetch('/api/cluster/operations'+path,{method:body===undefined?'GET':'POST',headers:body===undefined?{}:{'Content-Type':'application/json','X-Desk-Action':'confirm-node-operation'},body:body===undefined?undefined:JSON.stringify(body),signal:controller.signal,cache:'no-store',credentials:'same-origin'});const value=await res.json();if(!res.ok){const error=Error(typeof value.error==='string'?value.error:'Node operation unavailable');error.status=res.status;throw error;}return value;}finally{clearTimeout(timer);}}
-function showOperation(message){const el=document.getElementById('node-operation');el.hidden=!message;el.textContent=message||'';}
-async function pollOperation(){if(!nodeControlEnabled||document.hidden||operationState.loading)return;operationState.loading=true;clearTimeout(operationState.timer);try{const value=await nodeAction('');if(value.protocol!=='desk-node-operation-v1')throw Error();const op=value.operation;if(op){if(!membership.some(n=>n.id===op.node)||!['accepted','offline','starting','rejoined','needs_attention','draining','releasing_vips','maintenance','rebooting','recovering'].includes(op.state))throw Error();operationState.latest=op;operationState.busy=op.state!=='rejoined'&&op.expires*1000>Date.now();const labels={draining:'Maintenance · waiting for existing jobs and conversations',releasing_vips:'Maintenance · handing VIPs to healthy peers',maintenance:'Maintenance ready · admission paused, VIPs released',rebooting:'Drain complete · reboot requested',recovering:'Restoring admission and VIP eligibility',accepted:'Reboot requested · waiting for shutdown',offline:'Offline · waiting for boot',starting:'Boot detected · waiting for services and config sync',rejoined:'Recovered · services ready and node rejoined',needs_attention:'Recovery not confirmed · manual attention required; no reboot retry'};showOperation(`${op.node} — ${labels[op.state]}`);}else{if(value.idle_confirmed===true){operationState.busy=false;operationState.latest=null;showOperation('');}else if(operationState.latest?.state==='rejoined'){operationState.busy=false;}else if(operationState.busy){showOperation('Reboot tracking unavailable. Check node status before another action.');}else{showOperation('');}}render();}catch{if(operationState.busy)showOperation('Reboot tracking unavailable. No automatic retry; waiting for cluster status.');}finally{operationState.loading=false;if(!document.hidden)operationState.timer=setTimeout(pollOperation,operationState.busy?5000:30000);}}
+function showOperation(message,progress=false){const el=document.getElementById('node-operation');const covered=progress&&operationState.history.some(r=>r.id===operationState.latest?.id)&&!operationState.unavailable;el.hidden=!message||covered;el.textContent=message||'';}
+async function pollOperation(){if(!nodeControlEnabled||document.hidden||operationState.loading)return;operationState.loading=true;clearTimeout(operationState.timer);try{const value=await nodeAction('');if(value.protocol!=='desk-node-operation-v1')throw Error();operationState.history=operationHistory(value.history);operationState.observedAt=Date.now();operationState.unavailable=false;const op=value.operation;if(op){if(!membership.some(n=>n.id===op.node)||!['accepted','offline','starting','rejoined','needs_attention','draining','releasing_vips','maintenance','rebooting','recovering'].includes(op.state))throw Error();if(!/^[a-f0-9]{32}$/.test(op.id)||!Number.isInteger(op.started)||!Number.isInteger(op.expires))throw Error();operationState.latest=op;operationState.busy=op.state!=='rejoined'&&op.expires*1000>Date.now();const labels={draining:'Maintenance · waiting for existing jobs and conversations',releasing_vips:'Maintenance · handing VIPs to healthy peers',maintenance:'Maintenance ready · admission paused, VIPs released',rebooting:'Drain complete · reboot requested',recovering:'Restoring admission and VIP eligibility',accepted:'Reboot requested · waiting for shutdown',offline:'Offline · waiting for boot',starting:'Boot detected · waiting for services and config sync',rejoined:'Recovered · services ready and node rejoined',needs_attention:'Recovery not confirmed · manual attention required; no reboot retry'};showOperation(`${op.node} — ${labels[op.state]}`,true);}else{if(value.idle_confirmed===true){operationState.busy=false;operationState.latest=null;showOperation('');}else if(operationState.latest?.state==='rejoined'){operationState.busy=false;}else if(operationState.busy){showOperation('Reboot tracking unavailable. Check node status before another action.');}else{showOperation('');}}render();}catch{operationState.unavailable=true;renderEvents();if(operationState.busy)showOperation('Reboot tracking unavailable. No automatic retry; waiting for cluster status.');}finally{operationState.loading=false;if(!document.hidden)operationState.timer=setTimeout(pollOperation,operationState.busy?5000:30000);}}
 async function prepareReboot(node,action='reboot'){const maintained=action==='reboot'&&operationState.latest?.node===node&&operationState.latest?.state==='maintenance';if(!canReboot()&&!maintained)return;const dialog=document.getElementById('reboot-dialog');const description=document.getElementById('reboot-description');const confirm=document.getElementById('reboot-confirm');operationState.prompt=null;confirm.disabled=true;description.textContent='Checking fresh readiness of all three nodes…';dialog.showModal();try{const value=await nodeAction('/prepare',{node,action});if(!dialog.open)return;const member=membership.find(m=>m.id===node);if(value.node!==node||value.ip!==member.management||typeof value.token!=='string'||value.token.length>2048||!finite(value.expires))throw Error('Invalid confirmation response');operationState.prompt=value;document.getElementById('reboot-title').textContent=action==='maintenance'?'Enter maintenance':'Maintenance and reboot';confirm.textContent=action==='maintenance'?'Enter maintenance':'Drain and reboot';const meta=value.metadata||{};const owners=[meta.vip?.xiaozhi?'Xiaozhi VIP':null,meta.vip?.dns?'DNS VIP':null].filter(Boolean).join(' · ')||'No VIP assigned';const jobs=['asr','llm','tts'].map(k=>`${workerName(k)}: ${finite(meta.activity?.[k])?meta.activity[k]:'unknown'}`).join(' · ');description.innerHTML=`<p><strong>${esc(node)}</strong> · ${esc(member.management)}</p><p>${esc(owners)}</p><p>${esc(jobs)}</p><p>${finite(meta.core)?meta.core:'Unknown'} active core conversation(s).</p>`;confirm.disabled=false;clearTimeout(operationState.expiry);operationState.expiry=setTimeout(()=>{confirm.disabled=true;description.textContent='Confirmation expired. Close and prepare again.';operationState.prompt=null;},Math.max(0,value.expires*1000-Date.now()));}catch(error){description.textContent=error.message||'Could not verify node readiness.';}}
 document.getElementById('reboot-cancel').addEventListener('click',()=>document.getElementById('reboot-dialog').close());
 document.getElementById('reboot-dialog').addEventListener('close',()=>{operationState.prompt=null;clearTimeout(operationState.expiry);});

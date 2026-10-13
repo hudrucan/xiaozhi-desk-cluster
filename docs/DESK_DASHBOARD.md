@@ -119,6 +119,57 @@ processes and policies remained unchanged. No node reboot or provider workload
 was triggered. Historical events from the previous collector remain until normal
 six-hour retention expires.
 
+### HA operation timelines
+
+The existing Cluster timeline also shows confirmed maintenance/reboot operations
+from `/api/cluster/operations`. One disclosure contains the observed milestones,
+request-to-completion duration, and Drain/Handoff/Reboot/Ready/Sync/Rejoin stages.
+Maintenance-only actions use Maintenance/Resume instead of reboot stages. An
+active operation is placed first. Fresh readiness metadata identifies the service,
+configuration or routing dependency still pending. Cached progress is explicitly
+unconfirmed; missing stages remain unmarked. Generic reboot/telemetry rows are
+folded only when the same node's operation has the corresponding observed phase
+in its time window. Raw collector events remain available in the status API.
+
+VIP history shows an old-owner/new-owner pair and both management IPs only when
+a release and subsequent acquisition are observed. Partial or conflicting
+acquisitions do not establish a handover. The displayed interval is between
+observations, not a measurement of DNS downtime or the failover trigger.
+
+Node controllers retain at most four operations from the last six hours, each
+with one first observation for each whitelisted milestone. Existing signed peer
+state exchanges carry this bounded display history; no new daemon, JetStream,
+probe, endpoint or polling loop is added. Lifecycle milestones share existing
+state writes; newly observed recovery milestones cause at most one additional
+write per status transition. Repeated/idle reads do not write. History write
+failure cannot fail a status read. This metadata never authorizes an action.
+History from reachable peers is merged by operation ID/node/start time; it is a
+bounded observation history, not a complete audit log or consensus store.
+
+The private state file has an additive `history` field. Legacy state migrates
+without changing lease/execution/maintenance records. `ha-timeline.yml` updates
+only the existing controller when no operation is active, checks bounded history
+and protects Voice/DNS/VIP services and policy. On rollback it restores the old
+source and removes only the additive history field for legacy-reader compatibility.
+Apply `dashboard-ui.yml` afterward to update the page. Normal role provisioning
+also installs the new controller and page. Authentication, confirmation,
+exclusive leases, drain deadlines and reboot execution remain unchanged.
+
+Offline acceptance: 29 node-controller tests, 11 timeline JavaScript checks and
+8 dashboard/UI Python checks passed. UI fixtures cover recovered/needs-attention
+states, dependency hints, disclosure and Collapse/Expand retention, bounded
+scroll and a 390 px viewport with no horizontal overflow. No real node reboot
+or maintenance operation is issued during metadata/page deployment.
+
+Live acceptance on 2026-10-13: controller canary node 3, remaining controllers
+and all three pages passed protected runtime/policy guards. Installed controller
+hashes match source on 3/3 nodes. The operations API returns bounded empty history
+with no scheduled operation; newly observed operations will populate it. All three
+nodes have fresh, ready metadata, and root/panel/operations/Xiaozhi/DNS/Monitoring
+routes return HTTP 200. Browser inspection verified the deployed timeline and
+fixture scroll/open retention across polling. A real HA reboot is NOT RUN for
+this presentation change.
+
 ## Deployment and isolation
 
 ```sh

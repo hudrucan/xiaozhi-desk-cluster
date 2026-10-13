@@ -260,5 +260,113 @@ class ControlTests(unittest.TestCase):
         with self.assertRaises(nc.Failure): self.controls['deskb1x'].peer_action('/peer/shell',{'command':'reboot'})
         self.assertFalse(self.callbacks)
 
+    def test_history_is_display_only_bounded_and_excludes_credentials(self):
+        c=self.controls['deskb1x']; now=int(time.time())
+        records=[]
+        for i in range(8):
+            records.append({'id':f'{i:032x}','node':'deskb3x','action':'reboot',
+                'started':now-100+i,'events':[{'state':'rejoined','at':now-50+i}],
+                'boot_id':'private-boot','key':'secret','token':'confirmation'})
+        history=c.merge_history([records[:4],records[4:]])
+        self.assertEqual(len(history),nc.HISTORY_LIMIT)
+        self.assertNotIn('private-boot',json.dumps(history)); self.assertNotIn('secret',json.dumps(history))
+        dirty=[{'id':'a'*32,'node':[],'action':'reboot','started':now,'events':[]},
+            {'id':'b'*32,'node':'deskb3x','action':'reboot','started':now,
+             'events':[{'state':[],'at':now},{'state':'rejoined','at':now+60}]}]
+        self.assertEqual(c.merge_history([dirty]),[])
+        # A display record never acquires a lease or executes an action.
+        self.assertIsNone(c.active()); self.assertFalse(self.callbacks)
+
+    def test_history_survives_target_restart_and_merges_peer_milestones(self):
+        one,target=self.controls['deskb1x'],self.controls['deskb3x']
+        one.confirm(self.challenge()); self.callbacks[0]()
+        record=target.state['history'][0]
+        self.assertEqual(record['state'],'rebooting')
+        self.assertEqual([e['state'] for e in record['events']],
+                         ['accepted','draining','releasing_vips','maintenance','rebooting'])
+        restored=nc.Control(target.config,target.path,reboot=Mock())
+        self.assertEqual(restored.state['history'],target.state['history'])
+        self.health['deskb3x']={'node':'deskb3x','ready':False}
+        self.assertEqual(one.status()['operation']['state'],'offline')
+        self.health['deskb3x']={'node':'deskb3x','boot_id':'new-boot','ready':True,
+            'revisions':{'xiaozhi':11,'dns':5,'monitoring':4},
+            'readiness':{'services':True,'configuration':True,'waiting':[]}}
+        result=one.status()
+        self.assertEqual(result['operation']['state'],'rejoined')
+        events=result['history'][0]['events']
+        states={e['state'] for e in events}
+        self.assertTrue({'draining','rebooting','offline','services_ready','configuration_synced','rejoined'}<=states)
+        self.assertNotIn('starting',states) # Missed observations are not fabricated.
+        self.assertEqual(self.controls['deskb2x'].status()['history'],result['history'])
+        self.assertEqual(len(self.callbacks),1)
+
+    def test_idle_and_repeated_history_reads_do_not_write_state(self):
+        c=self.controls['deskb1x']
+        with patch.object(c,'save',wraps=c.save) as saved:
+            for _ in range(3):self.assertEqual(c.status()['history'],[])
+            saved.assert_not_called()
+        c.confirm(self.challenge()); self.callbacks[0]()
+        c.status()
+        with patch.object(c,'save',wraps=c.save) as saved:
+            for _ in range(3):c.status()
+            saved.assert_not_called()
+
+    def test_resume_history_does_not_claim_reboot_or_rejoin(self):
+        one,target=self.controls['deskb1x'],self.controls['deskb3x']
+        one.confirm(one.challenge({'node':'deskb3x','action':'maintenance'})['token'])
+        self.callbacks[0]()
+        target.resume(target.state['maintenance']['id'])
+        record=one.status()['history'][0]
+        self.assertEqual(record['state'],'resumed')
+        self.assertEqual(record['action'],'maintenance')
+        self.assertNotIn('rebooting',{e['state'] for e in record['events']})
+        target.reboot.assert_not_called()
+
+    def test_history_peer_response_fits_existing_body_limit(self):
+        c=self.controls['deskb1x']; now=int(time.time())
+        c.state['history']=[{'id':f'{i:032x}','node':'deskb3x','action':'reboot','started':now-100,
+            'events':[{'state':state,'at':now-50} for state in nc.HISTORY_ORDER]}
+            for i in range(nc.HISTORY_LIMIT)]
+        raw=nc.encode(c.peer_action('/peer/state',{}))
+        self.assertLess(len(raw),nc.MAX_BODY)
+
+    def test_legacy_state_migrates_without_changing_action_records(self):
+        c=self.controls['deskb1x']; old={k:v for k,v in c.state.items() if k!='history'}
+        c.path.parent.mkdir(parents=True);c.path.write_text(json.dumps(old))
+        restored=nc.Control(c.config,c.path,reboot=Mock())
+        self.assertEqual(restored.state['history'],[])
+        self.assertEqual({k:v for k,v in restored.state.items() if k!='history'},old)
+
+    def test_history_write_failure_does_not_break_status_or_retry_execution(self):
+        c=self.controls['deskb1x']; c.confirm(self.challenge())
+        with patch.object(c,'save',side_effect=OSError('fixture disk full')):
+            result=c.status()
+        self.assertEqual(result['operation']['state'],'accepted')
+        self.assertEqual(len(self.callbacks),1)
+
+    def test_readiness_uses_fresh_local_metadata_without_new_probes(self):
+        c=self.controls['deskb1x']
+        value={'id':c.node,'boot_id':'old-boot','observed_at':time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime()),
+            'components':{'worker':'ready','core':'ready','mqtt':'ready','dns':'ready'},
+            'configuration':{k:{'state':'synced','revision':1} for k in ('xiaozhi','dns','monitoring')}}
+        value['configuration']['xiaozhi']['state']='pending'
+        c.get=Mock(return_value=value)
+        result=nc.Control.health(c)
+        self.assertEqual(result['readiness'],{'services':True,'configuration':False,'waiting':['xiaozhi config']})
+        self.assertFalse(result['ready']);c.get.assert_called_once()
+        c.cached_health=(0,None)
+        value['observed_at']=time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime(time.time()-30))
+        self.assertNotIn('readiness',nc.Control.health(c))
+
+    def test_old_completed_record_does_not_fabricate_past_readiness_steps(self):
+        one=self.controls['deskb1x'];one.confirm(self.challenge())
+        self.health['deskb3x']={'node':'deskb3x','boot_id':'new-boot','ready':True,
+            'revisions':{'xiaozhi':11,'dns':5,'monitoring':4}}
+        one.status()
+        self.health['deskb3x']['readiness']={'services':True,'configuration':True,'waiting':[]}
+        result=one.status()
+        states={e['state'] for e in result['history'][0]['events']}
+        self.assertNotIn('services_ready',states);self.assertNotIn('configuration_synced',states)
+
 
 if __name__=='__main__': unittest.main()
