@@ -85,7 +85,15 @@ New event records add bounded optional `subject`, `from` and `to` fields. Same-
 revision pending must persist for 30 seconds before it is logged; an actual new
 revision or explicit failure is immediate. Native service unavailability must
 persist for 15 seconds; brief dips and their recoveries stay quiet. Dashboard
-health remains immediate; only event emission is delayed. Boot identity is kept
+health remains immediate; only event emission is delayed. Node telemetry loss
+must persist for 30 seconds before a timeline event is emitted. Recovery is
+emitted only after a confirmed loss; initial discovery and brief failed reads
+stay quiet. The debounce uses observer time, not the stale node timestamp.
+Optional `collector_started_at` metadata identifies a new collector instance:
+peers emit a separate neutral collector restart event, including across a brief
+unavailable sample. A changed boot identity takes precedence over collector
+restart; initial discovery alone does not establish a restart. Legacy peers
+without collector metadata remain supported. Boot identity is kept
 in a three-node RAM map so a reboot can be recognized across an unavailable
 sample, without publishing boot IDs. No new probes, log scraping, disk history
 or daemon are introduced. The compact panel v1 projection stays compatible.
@@ -99,6 +107,17 @@ Live event context and the deployed timeline were verified through the VIP;
 root, panel/status APIs and the three application routes returned HTTP 200.
 Only the read-only collector was restarted; no voice/DNS/VIP service, firmware
 or provider workload was changed. No physical outage was induced for this change.
+
+Telemetry-noise fix acceptance on 2026-10-13: 22 Go checks and 8 dashboard/UI
+Python checks passed, including short-loss suppression, persistent-loss recovery,
+initial discovery, legacy peer compatibility, restart versus reboot, and immediate
+removal of stale owner/activity claims from both APIs. Serial collector and page
+rollouts passed all protected guards. A collector-only restart on node 3 produced
+one deduplicated restart event on all three observers, with no new telemetry
+unavailable/restored pair; all nodes recovered fresh telemetry. Voice/DNS/VIP
+processes and policies remained unchanged. No node reboot or provider workload
+was triggered. Historical events from the previous collector remain until normal
+six-hour retention expires.
 
 ## Deployment and isolation
 

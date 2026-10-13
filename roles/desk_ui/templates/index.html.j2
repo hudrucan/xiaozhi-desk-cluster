@@ -338,11 +338,13 @@ function timelineInfo(e){
   if(/failed/.test(e.to||message))tone='warning';else if(/synced/.test(e.to||message))tone='good';
  }else if(subject==='dns_routing'||message.startsWith('DNS routing ')){
   key='dns:routing';title='DNS routing changes';symbol='shield';source='DNS pool eligibility';const mode=e.to||message.replace('DNS routing ','');tone=mode==='fallback'||mode==='unavailable'?'warning':mode==='adguard'?'good':'';
+ }else if(subject==='telemetry_collector'){
+  key=`collector:${e.node}`;title='Telemetry collector restarted';source='Observed collector lifecycle';symbol='sync';
  }else if(e.kind==='service'){
   const name=subject.replace(/^service_/,'')||message.split(' ')[0];source=`${service[name]||'Service'} health`;tone=/unavailable/.test(e.to||message)?'warning':/ready/.test(e.to||message)?'good':'';
  }else{tone=/unavailable/.test(message)?'warning':/restored/.test(message)?'good':'';}
  const step=message.replace(/^xiaozhi config /,'Xiaozhi config ').replace(/^dns config /,'DNS config ').replace(/^monitoring config /,'Monitoring config ').replace(/^worker service /,'Voice worker ').replace(/^core service /,'Conversation core ').replace(/^mqtt service /,'MQTT gateway ').replace(/^dns service /,'AdGuard ');
- const context=message==='Node telemetry unavailable'?'Telemetry became stale; power and Wi-Fi failure are not distinguished.':message==='Node reboot detected'?'Boot identity changed; the reboot trigger is not inferred.':source==='DNS pool eligibility'?'Pool state was observed; this is not a measurement of every client query.':'';
+ const context=message==='Node telemetry unavailable'?'Telemetry could not be read; this does not prove the node or its services stopped.':subject==='telemetry_collector'?'The metadata collector started a new instance; node and service health are checked separately.':message==='Node reboot detected'?'Boot identity changed; the reboot trigger is not inferred.':source==='DNS pool eligibility'?'Pool state was observed; this is not a measurement of every client query.':'';
  return {key,title,symbol,source,tone,step,context};
 }
 function timelineGroups(events){

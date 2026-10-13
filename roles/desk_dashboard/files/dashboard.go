@@ -58,6 +58,7 @@ type Node struct {
 	IP                   string                `json:"ip"`
 	Boot                 string                `json:"boot_id"`
 	At                   time.Time             `json:"observed_at"`
+	CollectorStarted     *time.Time            `json:"collector_started_at,omitempty"`
 	Online               bool                  `json:"online"`
 	VIP                  map[string]*bool      `json:"vip"`
 	MQTT                 *int                  `json:"mqtt"`
@@ -274,6 +275,8 @@ type Dashboard struct {
 	started     time.Time
 	transitions map[string]eventTransition
 	boots       map[string]string
+	collectors  map[string]time.Time
+	telemetry   map[string]eventTransition
 	firmware    Firmware
 }
 
@@ -544,6 +547,7 @@ func (d *Dashboard) collect(ctx context.Context) {
 	n := unknown(d.member)
 	n.Online = true
 	n.At = time.Now().UTC()
+	n.CollectorStarted = &d.started
 	boot, _ := os.ReadFile("/proc/sys/kernel/random/boot_id")
 	n.Boot = strings.TrimSpace(string(boot))
 	up := uptime()
@@ -735,31 +739,85 @@ func configEventValue(s SyncStatus) string {
 	}
 	return value
 }
+
+// Only timeline emission is debounced. The snapshot remains unavailable on the
+// first failed sample; stale ownership or activity must never look healthy.
+const telemetryEventDelay = 30 * time.Second
+
+func (d *Dashboard) observeTelemetry(previous, current Node, now time.Time) {
+	if d.telemetry == nil {
+		d.telemetry = map[string]eventTransition{}
+	}
+	t := d.telemetry[current.ID]
+	if t.confirmed == "" {
+		if previous.Online {
+			t.confirmed = "Online"
+		} else if current.Online {
+			d.telemetry[current.ID] = eventTransition{confirmed: "Online"}
+			return // Initial discovery is not recovery from a published outage.
+		} else {
+			return
+		}
+	}
+	after := "Unavailable"
+	if current.Online {
+		after = "Online"
+	}
+	if after == t.confirmed {
+		t.candidate = ""
+	} else if current.Online {
+		d.change(current, "node", "node", t.confirmed, after, "Node telemetry restored")
+		t.confirmed, t.candidate = after, ""
+	} else {
+		if t.candidate != after {
+			t.candidate, t.since = after, now
+		}
+		// Use observer time: unavailable nodes carry the last sample timestamp.
+		if now.Sub(t.since) >= telemetryEventDelay {
+			d.change(current, "node", "node", t.confirmed, after, "Node telemetry unavailable")
+			t.confirmed, t.candidate = after, ""
+		}
+	}
+	d.telemetry[current.ID] = t
+}
+
 func (d *Dashboard) observe(previous, current Node) {
+	d.observeAt(previous, current, time.Now())
+}
+func (d *Dashboard) observeAt(previous, current Node, now time.Time) {
 	// Retain only three safe boot identities in RAM so reboot detection survives
 	// an intervening unavailable sample. Never publish the boot identities.
 	if d.boots == nil {
 		d.boots = map[string]string{}
 	}
+	bootChanged := false
 	if current.Online && current.Boot != "" {
 		old := d.boots[current.ID]
 		if old == "" {
 			old = previous.Boot
 		}
 		if old != "" && old != current.Boot {
+			bootChanged = true
 			d.change(current, "node", "node", "Previous boot", "New boot", "Node reboot detected")
 		}
 		d.boots[current.ID] = current.Boot
 	}
+	if current.Online && current.CollectorStarted != nil && !current.CollectorStarted.IsZero() {
+		if d.collectors == nil {
+			d.collectors = map[string]time.Time{}
+		}
+		old := d.collectors[current.ID]
+		if old.IsZero() && previous.CollectorStarted != nil {
+			old = *previous.CollectorStarted
+		}
+		if !old.IsZero() && !old.Equal(*current.CollectorStarted) && !bootChanged {
+			d.change(current, "node", "telemetry_collector", "Previous collector", "New collector", "Telemetry collector restarted")
+		}
+		d.collectors[current.ID] = *current.CollectorStarted
+	}
+	d.observeTelemetry(previous, current, now)
 	if previous.ID == "" {
 		return
-	}
-	if previous.Online != current.Online {
-		message, from, to := "Node telemetry unavailable", "Online", "Unavailable"
-		if current.Online {
-			message, from, to = "Node telemetry restored", "Unavailable", "Online"
-		}
-		d.change(current, "node", "node", from, to, message)
 	}
 	if !previous.Online || !current.Online {
 		if current.ID == d.config.Node {
@@ -824,6 +882,9 @@ func (d *Dashboard) observe(previous, current Node) {
 }
 
 func validateNode(n Node, m Member, now time.Time) bool {
+	if n.CollectorStarted != nil && (n.CollectorStarted.IsZero() || n.CollectorStarted.After(n.At.Add(5*time.Second))) {
+		return false
+	}
 	if n.Protocol != protocol || n.ID != m.ID || n.IP != m.Management || !n.Online || n.At.IsZero() || now.Sub(n.At) > staleAfter || n.At.Sub(now) > 5*time.Second {
 		return false
 	}

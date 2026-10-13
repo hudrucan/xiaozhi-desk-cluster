@@ -2,8 +2,11 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"math"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -94,7 +97,9 @@ func TestEventsAreTransitionsBoundedAndSkipVoiceNoise(t *testing.T) {
 		t.Fatal("history not bounded")
 	}
 	b.Online = false
-	d.observe(a, b)
+	now := time.Now()
+	d.observeAt(a, b, now)
+	d.observeAt(b, b, now.Add(telemetryEventDelay))
 	if d.events[63].Message != "Node telemetry unavailable" {
 		t.Fatal("missing unavailability event")
 	}
@@ -346,5 +351,126 @@ func TestTimelineDetectsRebootAfterUnavailableSample(t *testing.T) {
 	}
 	if reboot != 1 {
 		t.Fatal("reboot lost across telemetry interruption")
+	}
+}
+
+func TestTelemetryEventDebounceUsesObserverTime(t *testing.T) {
+	now := time.Now()
+	s, members := panelFixture(now)
+	a := s.Nodes[0]
+	offline := unknown(members[0])
+	offline.At = now.Add(-time.Hour) // Retained stale time must not short-circuit debounce.
+	d := &Dashboard{config: Config{Node: "deskb2x"}, started: now}
+	d.observeAt(a, offline, now)
+	d.observeAt(offline, offline, now.Add(25*time.Second))
+	if len(d.events) != 0 || offline.Online {
+		t.Fatal("brief loss logged, or health made falsely available")
+	}
+	d.observeAt(offline, a, now.Add(26*time.Second))
+	if len(d.events) != 0 {
+		t.Fatal("unpublished dip emitted recovery")
+	}
+	// A new loss starts its own window, rather than accumulating separate dips.
+	d.observeAt(a, offline, now.Add(35*time.Second))
+	d.observeAt(offline, offline, now.Add(60*time.Second))
+	if len(d.events) != 0 {
+		t.Fatal("debounce did not reset after healthy sample")
+	}
+	d.observeAt(offline, offline, now.Add(65*time.Second))
+	d.observeAt(offline, offline, now.Add(70*time.Second))
+	if len(d.events) != 1 || d.events[0].From != "Online" || d.events[0].To != "Unavailable" {
+		t.Fatalf("persistent loss not logged exactly once: %+v", d.events)
+	}
+	d.observeAt(offline, a, now.Add(75*time.Second))
+	d.observeAt(a, a, now.Add(80*time.Second))
+	if len(d.events) != 2 || d.events[1].Message != "Node telemetry restored" {
+		t.Fatal("confirmed recovery not logged exactly once")
+	}
+}
+func TestInitialDiscoveryDoesNotCreateTelemetryRecovery(t *testing.T) {
+	now := time.Now()
+	s, members := panelFixture(now)
+	a := s.Nodes[0]
+	d := &Dashboard{config: Config{Node: "deskb2x"}, started: now}
+	u := unknown(members[0])
+	d.observeAt(Node{}, u, now)
+	d.observeAt(u, u, now.Add(time.Minute))
+	d.observeAt(u, a, now.Add(2*time.Minute))
+	if len(d.events) != 0 {
+		t.Fatalf("initial discovery created false recovery: %+v", d.events)
+	}
+}
+func TestCollectorRestartDistinguishedFromNodeReboot(t *testing.T) {
+	now := time.Now()
+	s, members := panelFixture(now)
+	a := s.Nodes[0]
+	first, second, third := now.Add(-time.Hour), now.Add(-time.Minute), now
+	a.CollectorStarted = &first
+	d := &Dashboard{config: Config{Node: "deskb2x"}, started: now}
+	d.observeAt(Node{}, a, now)
+	u := unknown(members[0])
+	d.observeAt(a, u, now.Add(5*time.Second))
+	b := a
+	b.CollectorStarted = &second
+	d.observeAt(u, b, now.Add(25*time.Second))
+	d.observeAt(b, b, now.Add(26*time.Second))
+	if len(d.events) != 1 || d.events[0].Subject != "telemetry_collector" || d.events[0].Message != "Telemetry collector restarted" {
+		t.Fatalf("brief collector restart mislabeled: %+v", d.events)
+	}
+	c := b
+	c.Boot = "new-boot"
+	c.CollectorStarted = &third
+	d.observeAt(b, c, now.Add(time.Minute))
+	if len(d.events) != 2 || d.events[1].Message != "Node reboot detected" {
+		t.Fatalf("node reboot mislabeled as collector restart: %+v", d.events)
+	}
+}
+func TestCollectorMetadataValidationAndLegacyCompatibility(t *testing.T) {
+	now := time.Now()
+	s, members := panelFixture(now)
+	n := s.Nodes[0]
+	if !validateNode(n, members[0], now) {
+		t.Fatal("legacy node without collector timestamp rejected")
+	}
+	started := now.Add(-24 * time.Hour)
+	n.CollectorStarted = &started
+	if !validateNode(n, members[0], now) {
+		t.Fatal("valid long-running collector rejected")
+	}
+	future := now.Add(time.Minute)
+	n.CollectorStarted = &future
+	if validateNode(n, members[0], now) {
+		t.Fatal("future collector timestamp accepted")
+	}
+	zero := time.Time{}
+	n.CollectorStarted = &zero
+	if validateNode(n, members[0], now) {
+		t.Fatal("invalid zero collector timestamp accepted")
+	}
+}
+
+type unavailableTelemetryTransport struct{}
+
+func (unavailableTelemetryTransport) RoundTrip(*http.Request) (*http.Response, error) {
+	return nil, errors.New("simulated peer telemetry timeout")
+}
+func TestTelemetryDebounceDoesNotRetainStaleOwnerOrActivity(t *testing.T) {
+	now := time.Now()
+	s, members := panelFixture(now)
+	d := &Dashboard{config: Config{Node: members[2].ID, Members: members, Port: 8010},
+		started: now, local: s.Nodes[2], snapshot: s,
+		client: &http.Client{Transport: unavailableTelemetryTransport{}}}
+	d.aggregate(context.Background())
+	for _, n := range d.snapshot.Nodes[:2] {
+		if n.Online || n.VIP["dns"] != nil || n.VIP["xiaozhi"] != nil || n.Activity["tts"] != nil {
+			t.Fatalf("failed peer still claims live state during debounce: %+v", n)
+		}
+	}
+	if len(d.snapshot.Events) != 0 {
+		t.Fatal("first failed read created timeline noise")
+	}
+	p := panelSnapshot(d.snapshot, members, time.Now())
+	if p.Owners["dns"].Node != nil || p.Owners["xiaozhi"].Node != nil || p.State != "degraded" {
+		t.Fatal("compact API retained stale ownership during debounce")
 	}
 }
