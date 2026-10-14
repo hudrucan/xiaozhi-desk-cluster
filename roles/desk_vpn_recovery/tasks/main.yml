@@ -1,0 +1,148 @@
+---
+- name: Require all three members for endpoint recovery
+  ansible.builtin.assert:
+    that:
+      - groups['deskboxes'] | sort == ['deskb1x', 'deskb2x', 'deskb3x']
+      - ansible_play_hosts_all | length == 3
+- name: Freeze protected services and policies
+  ansible.builtin.command:
+    argv: [/usr/bin/python3, '-c', "{{ lookup('ansible.builtin.file', 'roles/desk_ui/files/ui_guard.py') }}", freeze]
+  register: recovery_before
+  changed_when: false
+  no_log: true
+- name: Require existing VPN candidate readiness
+  ansible.builtin.command:
+    argv: [/usr/local/libexec/desk-vpn/probe, ready]
+  changed_when: false
+- name: Require the deployed public-key-only peer contract
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/python3
+      - -c
+      - |
+        import json,subprocess
+        p=json.load(open('/etc/desk-vpn/public.json'))
+        assert p['protocol']=='desk-vpn-ha-v1'
+        assert len(p['peers']) <= 32
+        get=lambda k: dict(line.split('\t') for line in subprocess.check_output(['wg','show','wgdesk0',k],text=True).splitlines())
+        assert get('allowed-ips')==p['peers']
+        assert all(v=='(none)' for v in get('preshared-keys').values())
+        assert all(v in ('off','0') for v in get('persistent-keepalive').values())
+  changed_when: false
+  no_log: true
+- name: Resolve dedicated ignored metadata authentication key
+  ansible.builtin.set_fact:
+    vpn_recovery_key: "{{ lookup('ansible.builtin.password', playbook_dir + '/secret/vpn-recovery.key', length=64, chars=['hexdigits']) }}"
+  no_log: true
+- name: Create controller recovery build directory
+  ansible.builtin.file:
+    path: /private/tmp/desk-vpn-recovery-source
+    state: directory
+    mode: '0700'
+  delegate_to: localhost
+  become: false
+  when: inventory_hostname == (ansible_play_hosts_all | sort | first)
+- name: Build dependency-free endpoint helper once on controller
+  ansible.builtin.command:
+    argv: [go, build, -trimpath, -ldflags, '-s -w -buildid=', -o, /private/tmp/desk-vpn-recovery-source/recovery-arm64, "{{ role_path }}/files/recovery.go"]
+  environment:
+    GOOS: linux
+    GOARCH: arm64
+    CGO_ENABLED: '0'
+    GO111MODULE: 'off'
+    GOCACHE: /private/tmp/desk-vpn-go-cache
+    GOTOOLCHAIN: local
+  delegate_to: localhost
+  become: false
+  when: inventory_hostname == (ansible_play_hosts_all | sort | first)
+- name: Create private recovery credential directory
+  ansible.builtin.file:
+    path: /etc/desk-vpn-recovery
+    state: directory
+    mode: '0700'
+    owner: root
+    group: root
+- name: Install isolated metadata authentication key
+  ansible.builtin.copy:
+    content: "{{ vpn_recovery_key }}"
+    dest: /etc/desk-vpn-recovery/peer.key
+    mode: '0600'
+    owner: root
+    group: root
+  no_log: true
+  register: recovery_key
+- name: Install private membership metadata
+  ansible.builtin.template:
+    src: config.json.j2
+    dest: /etc/desk-vpn-recovery/config.json
+    mode: '0600'
+  register: recovery_config
+- name: Install endpoint recovery helper
+  ansible.builtin.copy:
+    src: /private/tmp/desk-vpn-recovery-source/recovery-arm64
+    dest: /usr/local/libexec/desk-vpn/recovery
+    mode: '0755'
+  register: recovery_binary
+- name: Install independent endpoint recovery unit
+  ansible.builtin.template:
+    src: desk-vpn-recovery.service.j2
+    dest: /etc/systemd/system/desk-vpn-recovery.service
+    mode: '0644'
+  register: recovery_unit
+- name: Validate the recovery unit before activation
+  ansible.builtin.command:
+    argv: [systemd-analyze, verify, /etc/systemd/system/desk-vpn-recovery.service]
+  changed_when: false
+- name: Keep metadata authentication key outside web reader namespaces
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/python3
+      - -c
+      - |
+        from pathlib import Path
+        changed=False
+        for name in ('desk-dashboard','desk-node-control'):
+            p=Path('/etc/systemd/system/'+name+'.service');s=p.read_text()
+            if '-/etc/desk-vpn-recovery' not in s:
+                assert 'InaccessiblePaths=' in s
+                p.write_text(s.replace('InaccessiblePaths=','InaccessiblePaths=-/etc/desk-vpn-recovery ',1))
+                changed=True
+        print('changed' if changed else 'unchanged')
+  register: recovery_isolation
+  changed_when: recovery_isolation.stdout == 'changed'
+- name: Refresh only metadata readers after tightening their namespaces
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    daemon_reload: true
+    state: restarted
+  loop: [desk-dashboard, desk-node-control]
+  when: recovery_isolation.changed
+- name: Start only endpoint recovery helper
+  ansible.builtin.systemd_service:
+    name: desk-vpn-recovery
+    daemon_reload: true
+    enabled: true
+    state: "{{ 'restarted' if recovery_key.changed or recovery_config.changed or recovery_binary.changed or recovery_unit.changed else 'started' }}"
+- name: Require recovery helper to remain running
+  ansible.builtin.command:
+    argv: [systemctl, is-active, desk-vpn-recovery]
+  changed_when: false
+- name: Require local dashboard to validate its own telemetry
+  ansible.builtin.uri:
+    url: "http://{{ cluster_ip }}:8010/health"
+    use_proxy: false
+    timeout: 3
+  register: recovery_dashboard_health
+  until: recovery_dashboard_health.status == 200 and recovery_dashboard_health.json.ready
+  retries: 15
+  delay: 2
+  changed_when: false
+- name: Require prepared VPN candidate readiness after install
+  ansible.builtin.command:
+    argv: [/usr/local/libexec/desk-vpn/probe, ready]
+  changed_when: false
+- name: Verify unchanged protected services and policies
+  ansible.builtin.command:
+    argv: [/usr/bin/python3, '-c', "{{ lookup('ansible.builtin.file', 'roles/desk_ui/files/ui_guard.py') }}", guard]
+    stdin: "{{ recovery_before.stdout }}"
+  changed_when: false

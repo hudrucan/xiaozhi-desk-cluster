@@ -1,0 +1,1 @@
+{{ {'node': inventory_hostname, 'members': dict(groups['deskboxes'] | sort | zip(groups['deskboxes'] | sort | map('extract', hostvars, 'cluster_ip'))), 'key_file': '/etc/desk-vpn-recovery/peer.key'} | to_nice_json }}

@@ -176,3 +176,69 @@ used roughly 1.29 CPU seconds for an owner check and 0.76–0.78 CPU seconds for
 a standby check, once per approximately two minutes. These are single-run
 measurements, not a TTS contention benchmark. Dashboard and node-control
 mount namespaces deny both /etc/desk-vpn-ddns and /run/credentials.
+
+## Proactive peer-session recovery
+
+The 2026-10-14 header-only WAN diagnostic separated election from session renewal.
+Node 2 received the former session's encrypted packets 1.403 seconds after the
+handoff began and acquired .254 at 1.964 seconds. The client did not send a new
+handshake until 17.769 seconds; the kernel response followed about 2 ms later.
+Thus modem delivery was already working in this run while the new node waited
+for a client handshake. A controlled server-initiated canary formed the new
+session at about 6.46 seconds from handoff start, with about 50 ms between server
+initiation and client response. SSH/polling overhead delayed that trigger; these
+measurements are not guarantees or validation of a real power outage.
+
+`vpn-recovery.yml` is a separate optional deployment. It installs a small native
+`desk-vpn-recovery` helper on all nodes, independent of VPN election and readiness.
+The owner sends HMAC-authenticated endpoint hints every 5 seconds to private
+10.10.10.x addresses on UDP 51854. Only endpoints already learned by WireGuard
+for configured peers with a recent handshake are included. Receivers pin private
+source membership, server identity, peer membership, signature and timestamps;
+replays, stale hints and conflicting publishers are rejected. Cache lives only
+in process RAM, expires after 15 seconds and stores no transport/private keys.
+The dedicated ignored key is `secret/vpn-recovery.key`; web reader namespaces
+cannot access `/etc/desk-vpn-recovery`.
+
+After a false-to-true local VIP transition, the helper waits for source routing
+and the owner output gate. If one fresh hint remains, it renews only the matching
+public-key-only peer's ephemeral state, retaining the installed peer identity
+and AllowedIPs, then emits one UDP discard-port datagram through the tunnel to
+start a standard kernel handshake. The former owner does not need to answer any
+RPC or remain powered on. Already renewed, deleted, altered, PSK or keepalive
+peers are skipped. The helper deliberately supports the deployed peers with
+no PSK or server-side persistent keepalive; future peer-management changes must
+preserve that guard or implement preservation of those settings separately.
+
+Starting/restarting this helper on an existing owner never resets its current
+peer session. Missing/expired/conflicting cache, helper failure or a cold cluster
+restart leaves normal WireGuard client-driven recovery available. Static keys,
+on-disk WireGuard config, modem rules and election priorities stay unchanged.
+The service has CAP_NET_ADMIN for kernel WG state, no CAP_NET_RAW, binds only the
+private address and is capped at 10% of one core with a 32 MiB memory limit.
+This accelerates re-handshake, not transport-key or TCP/NAT-state replication.
+
+Fake/race tests passed for signature/source/server/peer validation,
+replay/expiry/conflicting owners, no standby mutation and protected peer cases.
+With explicit user approval, the helper was deployed on all three nodes, with
+existing voice/DNS configuration and runtime guards passing. Web-reader mount
+namespaces were verified unable to read its credential; UDP 51854 is bound only
+to each node's private 10.10.10.x address. No unexpected helper restarts occurred.
+
+Integrated WAN failover from node 1 to node 2 formed a new handshake after about
+3.9 seconds from handoff start (4.7 seconds observed through polling). For the
+abrupt-loss simulation, node 1's publisher was stopped and only its VPN VRRP
+process was paused before .254 was removed, so no priority-zero handoff notice
+was sent. Node 2's VPN election was held inactive to exercise node 3. Node 3
+formed a fresh handshake from its existing RAM cache after about 5.8 seconds
+(6.1 seconds observed), without a former-owner RPC or controller peer mutation.
+The controller's SSH steps are included in these timings. The user confirmed
+both dashboard and modem recovered through iPhone 4G/5G without toggling the
+tunnel. No real power cut was performed; timing is not a guaranteed HA bound.
+Remote restore timers and finally blocks restored all paused/stopped elections
+and publisher services; normal separated VIP placement returned.
+
+A roughly 32-second idle sample measured 0.249/0.154/0.134 percent of one core
+on nodes 1/2/3, respectively, or approximately 0.062/0.039/0.034 percent of each
+four-core host. Helper memory was about 5.6–5.8 MiB. These are short helper-only
+measurements, not a TTS benchmark or a long-duration stress test.

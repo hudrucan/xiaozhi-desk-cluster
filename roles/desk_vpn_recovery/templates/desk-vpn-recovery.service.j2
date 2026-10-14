@@ -1,0 +1,36 @@
+[Unit]
+Description=Desk VPN authenticated ephemeral endpoint recovery
+Wants=network-online.target
+After=network-online.target desk-vpn.service
+
+[Service]
+ExecStart=/usr/local/libexec/desk-vpn/recovery /etc/desk-vpn-recovery/config.json
+Restart=on-failure
+RestartSec=5
+Environment=GOMAXPROCS=1
+UMask=0077
+CPUWeight=1
+CPUQuota=10%
+Nice=10
+MemoryMax=32M
+TasksMax=16
+CapabilityBoundingSet=CAP_NET_ADMIN
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_UNIX AF_NETLINK
+IPAddressDeny=any
+IPAddressAllow=10.10.10.0/24
+IPAddressAllow=10.77.0.0/24
+InaccessiblePaths=-/etc/desk-vpn/wgdesk0.conf -/etc/desk-vpn-ddns -/run/credentials /var/lib /opt -/etc/nats -/etc/desk-node-control -/etc/xiaozhi-control-plane -/etc/desk-dns/sync -/etc/desk-monitoring
+LockPersonality=true
+RestrictSUIDSGID=true
+TimeoutStopSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,10 @@
+---
+# Optional bounded endpoint hints; no restart/dependency into VPN or election.
+- name: Install owner-initiated VPN session recovery without changing static peers
+  hosts: deskboxes
+  become: true
+  gather_facts: false
+  serial: 1
+  any_errors_fatal: true
+  roles:
+    - desk_vpn_recovery
