@@ -123,21 +123,56 @@ The updater uses DynamicUser, an empty capability set and inaccessible secret
 paths. Only a fresh, ready .254 owner calls external services. Every approximately
 2 minutes (plus up to 10 seconds jitter), it compares two HTTPS IPv4 observations,
 requires a global IPv4, and PATCHes only the existing A if content/TTL changed.
-Ownership and readiness are rechecked immediately before PATCH. Updates enforce
+A fresh ready snapshot is required at start, and actual local VIP ownership
+and boot identity are rechecked immediately before PATCH. The systemd health
+copy is not treated as a continually refreshed file during the HTTP operation. Updates enforce
 DNS-only and TTL 120 and are read back. Standby timers do not make HTTP requests.
 Invalid IP, provider disagreement, redirects, API errors or ownership loss leave
 the existing DNS record unchanged. DDNS has no dependency into VPN readiness or
-VIP election, and writes no eMMC history. Logs contain outcome/error categories,
+VIP election, and has no application history database; only outcome lines enter the normal system journal. Logs contain outcome/error categories,
 never tokens or peer keys. IP changes may still require toggling client tunnels
 because WireGuard does not guarantee continuous endpoint DNS re-resolution.
 
 Inspect outcomes with `systemctl status desk-vpn-ddns.timer` and
 `journalctl -u desk-vpn-ddns -n 10`. Stopping the timer affects only DDNS.
-Code and fake regression tests are prepared; live activation requires the
-user-supplied dedicated token. No IP change is simulated on the real DNS record.
+The dedicated user-supplied token is deployed through systemd credentials.
+DDNS timers are enabled on all three nodes. Owner readback reports unchanged,
+standby nodes skip HTTP. No IP change is simulated on the real DNS record.
 
-DDNS fake regression tests passed (10 cases). A credential-free canary on all
+DDNS fake regression tests passed (12 cases, including startup snapshot lifetime). A credential-free canary on all
 three nodes verified that the actual DynamicUser sandbox can read only its
 systemd metadata copies and sees exactly node 1 as eligible; nodes 2/3 skip.
-The helper is staged on nodes, but no DDNS timer or DNS credential has been
-installed yet. This canary made no external HTTP calls or DNS changes.
+This credential-free canary made no external HTTP calls or DNS changes;
+the subsequent live deployment was verified separately with the dedicated token.
+
+The short DDNS process is capped at 20% of one CPU core (5% of a four-core
+host), with Nice=15 and CPUWeight=1; it does not stay resident. A 5% one-core
+cap stretched Python startup beyond the 20-second health freshness window on
+these nodes, so it was raised for the bounded startup/TLS burst. The updater
+reuses one TLS context and validates startup freshness only once.
+
+## iPhone WAN handoff validation
+
+With the iPhone tunnel kept on 4G/5G, node-1 VPN election was stopped temporarily.
+Node 2 acquired .254, and its existing iPhone peer formed a new WAN handshake
+and exchanged encrypted traffic without changing the client profile. Observed
+handshake recovery was approximately 100 seconds, including polling overhead.
+The user confirmed application access recovered but reported noticeable delay.
+The original election was restored using finally; a separate 300-second remote
+restore timer guarded against controller disconnection. No peer configuration,
+Xiaozhi or DNS service was modified. This validates automatic WAN recovery,
+not fast or seamless session failover.
+
+A second unchanged-profile WAN test recovered in approximately 31 seconds.
+Both runs restored the original election and its standby placement. Recovery
+time varies; the VIP and handshake observations narrow the delay to the path
+after ownership election, but do not prove whether router ARP/NAT delivery or
+client session renewal dominates. No fast-failover guarantee is made. The
+bounded packet-type capture was stopped and stored no packet payload or keys.
+
+Live DDNS on node 1 reports unchanged after public-IP agreement and Cloudflare
+record readback. Nodes 2 and 3 report standby. The observed updater process
+used roughly 1.29 CPU seconds for an owner check and 0.76–0.78 CPU seconds for
+a standby check, once per approximately two minutes. These are single-run
+measurements, not a TTS contention benchmark. Dashboard and node-control
+mount namespaces deny both /etc/desk-vpn-ddns and /run/credentials.

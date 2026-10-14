@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 """Owner-only bounded Cloudflare A update. Independent of VPN election health."""
-import ipaddress,json,os,re,subprocess,time,urllib.error,urllib.request
+import ipaddress,json,os,re,ssl,subprocess,time,urllib.error,urllib.request
 from pathlib import Path
 HOST='vpn.huynm.dev';VIP='192.168.1.254';BASE='https://api.cloudflare.com/client/v4'
 MAX_BYTES=32768
@@ -14,15 +14,15 @@ def load(path,limit=MAX_BYTES):
     if not isinstance(value,dict):raise Failure('invalid_metadata')
     return value
 
-def eligible(config,addresses,status,boot,now):
+def eligible(config,addresses,status,boot,now,check_fresh=True):
     return (config.get('protocol')=='desk-vpn-ha-v1' and config.get('vip')==VIP
             and config.get('node') in ('deskb1x','deskb2x','deskb3x')
             and any(d.get('ifname')=='wlan0' and any(a.get('family')=='inet' and a.get('local')==VIP for a in d.get('addr_info',[])) for d in addresses)
             and status.get('protocol')=='desk-vpn-status-v1' and status.get('node')==config['node']
             and status.get('boot_id')==boot and status.get('ready') is True
-            and 0<=now-status.get('_timestamp',0)<=20)
+            and (not check_fresh or 0<=now-status.get('_timestamp',0)<=20))
 
-def is_owner():
+def is_owner(check_fresh=True):
     try:
         directory=Path(os.environ['CREDENTIALS_DIRECTORY'])
         config=load(directory/'vpn-public.json')
@@ -32,7 +32,7 @@ def is_owner():
         boot=Path('/proc/sys/kernel/random/boot_id').read_text().strip()
         p=subprocess.run(['/usr/sbin/ip','-j','-4','addr','show','dev','wlan0'],capture_output=True,text=True,timeout=2,check=True)
         if len(p.stdout)>MAX_BYTES:return False
-        return eligible(config,json.loads(p.stdout),status,boot,time.time())
+        return eligible(config,json.loads(p.stdout),status,boot,time.time(),check_fresh)
     except (OSError,ValueError,TypeError,KeyError,AttributeError,subprocess.SubprocessError,Failure):return False
 
 def credentials(value):
@@ -57,7 +57,7 @@ def record(value,record_id):
 class Client:
     def __init__(self,token):
         self.token=token
-        self.opener=urllib.request.build_opener(urllib.request.ProxyHandler({}),NoRedirect())
+        self.opener=urllib.request.build_opener(urllib.request.ProxyHandler({}),NoRedirect(),urllib.request.HTTPSHandler(context=ssl.create_default_context()))
     def request(self,url,body=None,cloud=False):
         headers={'User-Agent':'Desk-Cluster-DDNS/1'}
         if cloud:headers.update({'Authorization':'Bearer '+self.token,'Content-Type':'application/json'})
@@ -77,12 +77,13 @@ class Client:
         if a!=b:raise Failure('public_ip_disagreement')
         return a
 
-def reconcile(client,secret,owner=is_owner):
+def reconcile(client,secret,owner=is_owner,still_owner=None):
+    still_owner=still_owner or owner
     if not owner():return 'standby'
     ip=client.public_ip()
     url=BASE+'/zones/'+secret['zone_id']+'/dns_records/'+secret['record_id']
     current=record(client.request(url,cloud=True),secret['record_id'])
-    if not owner():return 'ownership_changed'
+    if not still_owner():return 'ownership_changed'
     if current['content']==ip and current.get('ttl')==120:return 'unchanged'
     # Never create/delete a record or modify any hostname besides the pinned A.
     changed=record(client.request(url,body={'content':ip,'ttl':120,'proxied':False},cloud=True),secret['record_id'])
@@ -95,7 +96,8 @@ def main():
     try:
         if not is_owner():print('DDNS standby');return 0
         secret=credentials(load(Path(os.environ['CREDENTIALS_DIRECTORY'])/'cloudflare.json',4096))
-        print('DDNS '+reconcile(Client(secret['api_token']),secret))
+        # Fresh startup health was checked above, before TLS initialization.
+        print('DDNS '+reconcile(Client(secret['api_token']),secret,owner=lambda:True,still_owner=lambda:is_owner(check_fresh=False)))
         return 0
     except (Failure,OSError,ValueError,TypeError,KeyError) as e:
         print('DDNS failed: '+(str(e) if isinstance(e,Failure) else 'local_or_response_invalid'))

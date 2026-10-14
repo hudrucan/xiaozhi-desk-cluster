@@ -13,7 +13,8 @@ Environment=PYTHONDONTWRITEBYTECODE=1
 Environment=PYTHONUNBUFFERED=1
 UMask=0077
 CPUWeight=1
-CPUQuota=5%
+# Short startup/TLS burst capped at 20% of one core; idle timer has no process.
+CPUQuota=20%
 Nice=15
 MemoryMax=48M
 TasksMax=16

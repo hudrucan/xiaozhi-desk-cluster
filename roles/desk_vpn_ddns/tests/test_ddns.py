@@ -48,11 +48,35 @@ class DDNS(unittest.TestCase):
         for bad in ({'node':'deskb2x'},{'boot_id':'old'},{'ready':False},{'_timestamp':79},{'_timestamp':101},{'protocol':'other'}):
             self.assertFalse(d.eligible(config,addr,{**health,**bad},'boot',100))
         self.assertFalse(d.eligible(config,[],health,'boot',100))
+    def test_start_health_and_live_ownership_are_checked_separately(self):
+        c=Fake()
+        with patch.object(d,'is_owner') as unused:
+            start=lambda:True
+            still=lambda:False
+            self.assertEqual(d.reconcile(c,SECRET,start,still),'ownership_changed')
+            self.assertFalse(any(call[1] for call in c.calls if isinstance(call,tuple)))
+        config={'protocol':'desk-vpn-ha-v1','vip':d.VIP,'node':'deskb1x'}
+        addr=[{'ifname':'wlan0','addr_info':[{'family':'inet','local':d.VIP}]}]
+        status={'protocol':'desk-vpn-status-v1','node':'deskb1x','boot_id':'boot','ready':True,'_timestamp':100}
+        self.assertFalse(d.eligible(config,addr,status,'boot',125))
+        self.assertTrue(d.eligible(config,addr,status,'boot',125,check_fresh=False))
+        self.assertFalse(d.eligible(config,[],status,'boot',125,check_fresh=False))
+        self.assertFalse(d.eligible(config,addr,status,'newboot',125,check_fresh=False))
+
     def test_update_readback_mismatch_is_error(self):
         c=Fake(update={'content':'9.9.9.9'})
         with self.assertRaises(d.Failure):d.reconcile(c,SECRET,lambda:True)
     def test_redirect_is_refused(self):
         with self.assertRaises(d.Failure):d.NoRedirect().redirect_request(None,None,None,None,None,None)
+    def test_main_checks_fresh_start_once_and_live_vip_before_patch(self):
+        c=Fake()
+        with patch.object(d,'is_owner',side_effect=[True,False]) as owned,patch.object(d,'load',return_value=SECRET),patch.object(d,'Client',return_value=c),patch('builtins.print') as out,patch.dict(d.os.environ,{'CREDENTIALS_DIRECTORY':'/fake'}):
+            self.assertEqual(d.main(),0)
+            self.assertEqual(owned.call_count,2)
+            self.assertEqual(owned.call_args.kwargs,{'check_fresh':False})
+            self.assertIn('ownership_changed',str(out.call_args))
+            self.assertFalse(any(call[1] for call in c.calls if isinstance(call,tuple)))
+
     def test_failure_never_outputs_token(self):
         with patch.object(d,'is_owner',return_value=True),patch.object(d,'load',side_effect=OSError(SECRET['api_token'])),patch('builtins.print') as out,patch.dict(d.os.environ,{'CREDENTIALS_DIRECTORY':'/fake'}):
             self.assertEqual(d.main(),1)
