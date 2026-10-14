@@ -1,0 +1,5 @@
+---
+desk_vpn_ui_simulate: false
+desk_vpn_ui_publish: true
+desk_vpn_ui_package: /private/tmp/desk-vpn-ui-package
+desk_vpn_ui_crypto: /opt/desk-monitoring-sync/46.0.3/vendor

@@ -1,0 +1,1342 @@
+diff --git a/src/app/app.vue b/src/app/app.vue
+index 9991e28..6f27fc0 100644
+--- a/src/app/app.vue
++++ b/src/app/app.vue
+@@ -26,16 +26,16 @@ useHead({
+   link: [
+     {
+       rel: 'manifest',
+-      href: '/manifest.json',
++      href: '/vpn/manifest.json',
+     },
+     {
+       rel: 'icon',
+       type: 'image/png',
+-      href: '/favicon.png',
++      href: '/vpn/favicon.png',
+     },
+     {
+       rel: 'apple-touch-icon',
+-      href: '/apple-touch-icon.png',
++      href: '/vpn/apple-touch-icon.png',
+     },
+   ],
+   meta: [
+@@ -52,6 +52,6 @@ useHead({
+       content: 'black-translucent',
+     },
+   ],
+-  title: 'WireGuard',
++  title: 'VPN · Desk Cluster',
+ });
+ </script>
+diff --git a/src/app/components/Admin/SuggestDialog.vue b/src/app/components/Admin/SuggestDialog.vue
+index 71556a3..fe56a93 100644
+--- a/src/app/components/Admin/SuggestDialog.vue
++++ b/src/app/components/Admin/SuggestDialog.vue
+@@ -28,7 +28,7 @@
+ defineEmits(['change']);
+ const props = defineProps<{
+   triggerClass?: string;
+-  url: '/api/admin/ip-info' | '/api/setup/4';
++  url: '/vpn/api/admin/ip-info' | '/vpn/api/setup/4';
+ }>();
+ 
+ const { data } = useFetch(props.url, {
+diff --git a/src/app/components/ClientCard/Address.vue b/src/app/components/ClientCard/Address.vue
+index c405ef8..3539595 100644
+--- a/src/app/components/ClientCard/Address.vue
++++ b/src/app/components/ClientCard/Address.vue
+@@ -1,6 +1,6 @@
+ <template>
+   <span class="inline-block">
+-    {{ client.ipv4Address }}, {{ client.ipv6Address }}
++    {{ client.ipv4Address }}
+   </span>
+ </template>
+ 
+diff --git a/src/app/components/ClientCard/Config.vue b/src/app/components/ClientCard/Config.vue
+index eddbe1d..98da66b 100644
+--- a/src/app/components/ClientCard/Config.vue
++++ b/src/app/components/ClientCard/Config.vue
+@@ -1,6 +1,6 @@
+ <template>
+   <a
+-    :href="'/api/client/' + client.id + '/configuration'"
++    :href="'/vpn/api/client/' + client.id + '/configuration'"
+     download
+     class="inline-block rounded bg-gray-100 p-2 align-middle transition hover:bg-red-800 hover:text-white dark:bg-neutral-600 dark:text-neutral-300 dark:hover:bg-red-800 dark:hover:text-white"
+     :title="$t('client.downloadConfig')"
+diff --git a/src/app/components/ClientCard/OneTimeLinkBtn.vue b/src/app/components/ClientCard/OneTimeLinkBtn.vue
+index e3ff7e3..60bd7e6 100644
+--- a/src/app/components/ClientCard/OneTimeLinkBtn.vue
++++ b/src/app/components/ClientCard/OneTimeLinkBtn.vue
+@@ -1,32 +1 @@
+-<template>
+-  <button
+-    class="inline-block rounded bg-gray-100 p-2 align-middle transition hover:bg-red-800 hover:text-white dark:bg-neutral-600 dark:text-neutral-300 dark:hover:bg-red-800 dark:hover:text-white"
+-    :title="$t('client.otlDesc')"
+-    @click="showOneTimeLink"
+-  >
+-    <IconsLink class="w-5" />
+-  </button>
+-</template>
+-
+-<script setup lang="ts">
+-const props = defineProps<{ client: LocalClient }>();
+-
+-const clientsStore = useClientsStore();
+-
+-const _showOneTimeLink = useSubmit(
+-  `/api/client/${props.client.id}/generateOneTimeLink`,
+-  {
+-    method: 'post',
+-  },
+-  {
+-    revert: async () => {
+-      await clientsStore.refresh();
+-    },
+-    noSuccessToast: true,
+-  }
+-);
+-
+-function showOneTimeLink() {
+-  return _showOneTimeLink(undefined);
+-}
+-</script>
++<template><span /></template>
+\ No newline at end of file
+diff --git a/src/app/components/ClientCard/Switch.vue b/src/app/components/ClientCard/Switch.vue
+index 60e7b68..b1fd0ed 100644
+--- a/src/app/components/ClientCard/Switch.vue
++++ b/src/app/components/ClientCard/Switch.vue
+@@ -18,7 +18,7 @@ const enabled = ref(props.client.enabled);
+ const clientsStore = useClientsStore();
+ 
+ const _disableClient = useSubmit(
+-  `/api/client/${props.client.id}/disable`,
++  `/vpn/api/client/${props.client.id}/disable`,
+   {
+     method: 'post',
+   },
+@@ -31,7 +31,7 @@ const _disableClient = useSubmit(
+ );
+ 
+ const _enableClient = useSubmit(
+-  `/api/client/${props.client.id}/enable`,
++  `/vpn/api/client/${props.client.id}/enable`,
+   {
+     method: 'post',
+   },
+diff --git a/src/app/components/Clients/ConfigDialog.vue b/src/app/components/Clients/ConfigDialog.vue
+index e78b1a8..f4db9f7 100644
+--- a/src/app/components/Clients/ConfigDialog.vue
++++ b/src/app/components/Clients/ConfigDialog.vue
+@@ -37,7 +37,7 @@ const { copied, copy, isSupported } = useClipboard({
+ });
+ 
+ const { data: config, status } = useFetch(
+-  `/api/client/${props.clientId}/configuration`,
++  `/vpn/api/client/${props.clientId}/configuration`,
+   {
+     responseType: 'text',
+     server: false,
+diff --git a/src/app/components/Clients/CreateDialog.vue b/src/app/components/Clients/CreateDialog.vue
+index be5aa27..85cc949 100644
+--- a/src/app/components/Clients/CreateDialog.vue
++++ b/src/app/components/Clients/CreateDialog.vue
+@@ -9,11 +9,6 @@
+     <template #description>
+       <div class="flex flex-col">
+         <FormTextField id="name" v-model="name" :label="$t('client.name')" />
+-        <FormDateField
+-          id="expiresAt"
+-          v-model="expiresAt"
+-          :label="$t('client.expireDate')"
+-        />
+       </div>
+     </template>
+     <template #actions>
+@@ -43,7 +38,7 @@ function createClient() {
+ }
+ 
+ const _createClient = useSubmit(
+-  '/api/client',
++  '/vpn/api/client',
+   {
+     method: 'post',
+   },
+diff --git a/src/app/components/Form/HostField.vue b/src/app/components/Form/HostField.vue
+index 9d15817..a703cb5 100644
+--- a/src/app/components/Form/HostField.vue
++++ b/src/app/components/Form/HostField.vue
+@@ -37,7 +37,7 @@ defineProps<{
+   label: string;
+   description?: string;
+   placeholder?: string;
+-  url: '/api/admin/ip-info' | '/api/setup/4';
++  url: '/vpn/api/admin/ip-info' | '/vpn/api/setup/4';
+ }>();
+ 
+ const data = defineModel<string | null>({
+diff --git a/src/app/components/Ui/UserMenu.vue b/src/app/components/Ui/UserMenu.vue
+index 6d32a75..622d11e 100644
+--- a/src/app/components/Ui/UserMenu.vue
++++ b/src/app/components/Ui/UserMenu.vue
+@@ -1,96 +1 @@
+-<template>
+-  <DropdownMenuRoot v-model:open="toggleState">
+-    <DropdownMenuTrigger>
+-      <span
+-        class="flex items-center rounded-full pe-1 text-sm font-medium text-gray-400 hover:text-red-800 focus:ring-4 focus:ring-gray-100 md:me-0 dark:text-neutral-400 dark:hover:text-red-800 dark:focus:ring-gray-700"
+-      >
+-        <BaseAvatar class="h-8 w-8">
+-          {{ fallbackName }}
+-        </BaseAvatar>
+-        {{ authStore.userData?.name }}
+-      </span>
+-    </DropdownMenuTrigger>
+-
+-    <DropdownMenuPortal>
+-      <DropdownMenuContent
+-        :side-offset="5"
+-        class="z-10 w-44 divide-y divide-gray-100 rounded-lg bg-white text-gray-700 shadow dark:divide-neutral-800 dark:bg-neutral-700 dark:text-gray-200"
+-      >
+-        <DropdownMenuItem>
+-          <div class="px-4 py-2">
+-            <div class="truncate">{{ authStore.userData?.name }}</div>
+-            <div class="truncate">@{{ authStore.userData?.username }}</div>
+-          </div>
+-        </DropdownMenuItem>
+-        <DropdownMenuItem>
+-          <NuxtLink
+-            to="/"
+-            class="block px-4 py-2 hover:bg-gray-100 dark:hover:bg-gray-600 dark:hover:text-white"
+-          >
+-            {{ $t('pages.clients') }}
+-          </NuxtLink>
+-        </DropdownMenuItem>
+-        <DropdownMenuItem>
+-          <NuxtLink
+-            to="/me"
+-            class="block px-4 py-2 hover:bg-gray-100 dark:hover:bg-gray-600 dark:hover:text-white"
+-          >
+-            {{ $t('pages.me') }}
+-          </NuxtLink>
+-        </DropdownMenuItem>
+-        <DropdownMenuItem
+-          v-if="
+-            authStore.userData &&
+-            hasPermissions(authStore.userData, 'admin', 'any')
+-          "
+-        >
+-          <NuxtLink
+-            to="/admin"
+-            class="block px-4 py-2 hover:bg-gray-100 dark:hover:bg-gray-600 dark:hover:text-white"
+-          >
+-            {{ $t('pages.admin.panel') }}
+-          </NuxtLink>
+-        </DropdownMenuItem>
+-        <DropdownMenuItem>
+-          <button
+-            class="flex w-full items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 dark:text-gray-200 dark:hover:bg-gray-600 dark:hover:text-white"
+-            @click.prevent="submit"
+-          >
+-            <IconsLogout class="h-5" />
+-            {{ $t('general.logout') }}
+-          </button>
+-        </DropdownMenuItem>
+-      </DropdownMenuContent>
+-    </DropdownMenuPortal>
+-  </DropdownMenuRoot>
+-</template>
+-
+-<script setup lang="ts">
+-const authStore = useAuthStore();
+-const toggleState = ref(false);
+-
+-const _submit = useSubmit(
+-  '/api/session',
+-  {
+-    method: 'delete',
+-  },
+-  {
+-    revert: async () => {
+-      await navigateTo('/login');
+-    },
+-    noSuccessToast: true,
+-  }
+-);
+-
+-function submit() {
+-  return _submit(undefined);
+-}
+-
+-const fallbackName = computed(() => {
+-  return authStore.userData?.name
+-    .split(' ')
+-    .map((word) => word.charAt(0).toUpperCase())
+-    .slice(0, 2)
+-    .join('');
+-});
+-</script>
++<template><div class="flex gap-4 text-sm"><NuxtLink to="/">Clients</NuxtLink><NuxtLink to="/admin/config">Client defaults</NuxtLink><a href="/">Cluster</a></div></template>
+\ No newline at end of file
+diff --git a/src/app/layouts/default.vue b/src/app/layouts/default.vue
+index 8ec4ed6..7e40add 100644
+--- a/src/app/layouts/default.vue
++++ b/src/app/layouts/default.vue
+@@ -19,7 +19,7 @@
+           <UiUserMenu v-if="loggedIn" />
+         </div>
+       </div>
+-      <HeaderUpdate class="my-4" />
++      <div class="mt-2 rounded-lg border border-gray-200 p-3 text-sm dark:border-neutral-600"><a href="/" class="mr-3 underline">Desk Cluster</a><strong>VPN</strong><span class="ml-2 text-gray-500">WireGuard · wg-easy</span><div class="mt-2">{{ clusterStatus?.message || 'Reading cluster configuration…' }}</div><div class="mt-1 flex flex-wrap gap-4"><span v-for="n in clusterStatus?.nodes || []" :key="n.node">{{ n.node }} · {{ n.state }}</span></div></div>
+     </header>
+     <slot />
+     <UiFooter />
+@@ -28,6 +28,8 @@
+ 
+ <script setup lang="ts">
+ const route = useRoute();
++const {data:clusterStatus,refresh:refreshCluster}=useFetch('/vpn/api/desk-cluster/status');
++let clusterTimer:ReturnType<typeof setInterval>;onMounted(()=>{clusterTimer=setInterval(()=>{if(!document.hidden)refreshCluster();},5000)});onUnmounted(()=>clearInterval(clusterTimer));
+ 
+ const loggedIn = computed(() => route.path !== '/login');
+ </script>
+diff --git a/src/app/middleware/auth.global.ts b/src/app/middleware/auth.global.ts
+index 06029fd..cc13a9f 100644
+--- a/src/app/middleware/auth.global.ts
++++ b/src/app/middleware/auth.global.ts
+@@ -1,6 +1,6 @@
+ export default defineNuxtRouteMiddleware(async (to) => {
+   // api & setup handled server side
+-  if (to.path.startsWith('/api/') || to.path.startsWith('/setup')) {
++  if (to.path.startsWith('/vpn/api/') || to.path.startsWith('/setup')) {
+     return;
+   }
+ 
+diff --git a/src/app/pages/admin.vue b/src/app/pages/admin.vue
+index 0f880b7..1a64bd7 100644
+--- a/src/app/pages/admin.vue
++++ b/src/app/pages/admin.vue
+@@ -54,12 +54,7 @@ const { t } = useI18n();
+ 
+ const route = useRoute();
+ 
+-const menuItems = computed(() => [
+-  { id: 'general', name: t('pages.admin.general') },
+-  { id: 'config', name: t('pages.admin.config') },
+-  { id: 'interface', name: t('pages.admin.interface') },
+-  { id: 'hooks', name: t('pages.admin.hooks') },
+-]);
++const menuItems = computed(() => [{ id: 'config', name: t('pages.admin.config') }]);
+ 
+ const defaultItem = { id: '', name: t('pages.admin.panel') };
+ 
+diff --git a/src/app/pages/admin/config.vue b/src/app/pages/admin/config.vue
+index 40146ae..cf26e77 100644
+--- a/src/app/pages/admin/config.vue
++++ b/src/app/pages/admin/config.vue
+@@ -3,28 +3,14 @@
+     <FormElement @submit.prevent="submit">
+       <FormGroup>
+         <FormHeading>{{ $t('admin.config.connection') }}</FormHeading>
+-        <FormHostField
+-          id="host"
+-          v-model="data.host"
+-          :label="$t('general.host')"
+-          :description="$t('admin.config.hostDesc')"
+-          url="/api/admin/ip-info"
+-        />
+-        <FormNumberField
+-          id="port"
+-          v-model="data.port"
+-          :label="$t('general.port')"
+-          :description="$t('admin.config.portDesc')"
+-        />
++        <div class="col-span-full text-sm"><span class="font-medium">Endpoint host: </span>{{ data.host }} <span class="text-gray-500">· cluster managed</span></div>
++        <div class="col-span-full text-sm"><span class="font-medium">UDP port: </span>{{ data.port }} <span class="text-gray-500">· cluster managed</span></div>
+       </FormGroup>
+       <FormGroup>
+         <FormHeading :description="$t('admin.config.allowedIpsDesc')">
+           {{ $t('general.allowedIps') }}
+         </FormHeading>
+-        <FormArrayField
+-          v-model="data.defaultAllowedIps"
+-          name="defaultAllowedIps"
+-        />
++        <div class="col-span-full text-sm"><span class="font-medium">LAN routes: </span>{{ data.defaultAllowedIps?.join(', ') || 'Default' }} <span class="text-gray-500">· cluster managed</span></div>
+       </FormGroup>
+       <FormGroup>
+         <FormHeading :description="$t('admin.config.dnsDesc')">
+@@ -34,12 +20,7 @@
+       </FormGroup>
+       <FormGroup>
+         <FormHeading>{{ $t('form.sectionAdvanced') }}</FormHeading>
+-        <FormNumberField
+-          id="defaultMtu"
+-          v-model="data.defaultMtu"
+-          :label="$t('general.mtu')"
+-          :description="$t('admin.config.mtuDesc')"
+-        />
++        <div class="col-span-full text-sm"><span class="font-medium">MTU: </span>{{ data.defaultMtu }} <span class="text-gray-500">· cluster managed</span></div>
+         <FormNumberField
+           id="defaultPersistentKeepalive"
+           v-model="data.defaultPersistentKeepalive"
+@@ -114,14 +95,14 @@
+ <script lang="ts" setup>
+ const globalStore = useGlobalStore();
+ 
+-const { data: _data, refresh } = await useFetch(`/api/admin/userconfig`, {
++const { data: _data, refresh } = await useFetch(`/vpn/api/admin/userconfig`, {
+   method: 'get',
+ });
+ 
+ const data = toRef(_data.value);
+ 
+ const _submit = useSubmit(
+-  `/api/admin/userconfig`,
++  `/vpn/api/admin/userconfig`,
+   {
+     method: 'post',
+   },
+diff --git a/src/app/pages/admin/general.vue b/src/app/pages/admin/general.vue
+index 9515e45..aa952ce 100644
+--- a/src/app/pages/admin/general.vue
++++ b/src/app/pages/admin/general.vue
+@@ -1,64 +1 @@
+-<template>
+-  <main v-if="data">
+-    <FormElement @submit.prevent="submit">
+-      <FormGroup>
+-        <FormNumberField
+-          id="session"
+-          v-model="data.sessionTimeout"
+-          :label="$t('admin.general.sessionTimeout')"
+-          :description="$t('admin.general.sessionTimeoutDesc')"
+-        />
+-      </FormGroup>
+-      <FormGroup>
+-        <FormHeading>{{ $t('admin.general.metrics') }}</FormHeading>
+-        <FormNullTextField
+-          id="password"
+-          v-model="data.metricsPassword"
+-          :label="$t('admin.general.metricsPassword')"
+-          :description="$t('admin.general.metricsPasswordDesc')"
+-        />
+-        <FormSwitchField
+-          id="prometheus"
+-          v-model="data.metricsPrometheus"
+-          :label="$t('admin.general.prometheus')"
+-          :description="$t('admin.general.prometheusDesc')"
+-        />
+-        <FormSwitchField
+-          id="json"
+-          v-model="data.metricsJson"
+-          :label="$t('admin.general.json')"
+-          :description="$t('admin.general.jsonDesc')"
+-        />
+-      </FormGroup>
+-      <FormGroup>
+-        <FormHeading>{{ $t('form.actions') }}</FormHeading>
+-        <FormPrimaryActionField type="submit" :label="$t('form.save')" />
+-        <FormSecondaryActionField :label="$t('form.revert')" @click="revert" />
+-      </FormGroup>
+-    </FormElement>
+-  </main>
+-</template>
+-
+-<script setup lang="ts">
+-const { data: _data, refresh } = await useFetch(`/api/admin/general`, {
+-  method: 'get',
+-});
+-const data = toRef(_data.value);
+-
+-const _submit = useSubmit(
+-  `/api/admin/general`,
+-  {
+-    method: 'post',
+-  },
+-  { revert }
+-);
+-
+-function submit() {
+-  return _submit(data.value);
+-}
+-
+-async function revert() {
+-  await refresh();
+-  data.value = toRef(_data.value).value;
+-}
+-</script>
++<template><p>Server identity, firewall, hooks and access are managed by Desk Cluster. Edit client defaults or return to Clients.</p></template>
+\ No newline at end of file
+diff --git a/src/app/pages/admin/hooks.vue b/src/app/pages/admin/hooks.vue
+index c992b72..aa952ce 100644
+--- a/src/app/pages/admin/hooks.vue
++++ b/src/app/pages/admin/hooks.vue
+@@ -1,58 +1 @@
+-<template>
+-  <main v-if="data">
+-    <FormElement @submit.prevent="submit">
+-      <FormGroup>
+-        <FormTextArea
+-          id="PreUp"
+-          v-model="data.preUp"
+-          :label="$t('hooks.preUp')"
+-        />
+-        <FormTextArea
+-          id="PostUp"
+-          v-model="data.postUp"
+-          :label="$t('hooks.postUp')"
+-        />
+-        <FormTextArea
+-          id="PreDown"
+-          v-model="data.preDown"
+-          :label="$t('hooks.preDown')"
+-        />
+-        <FormTextArea
+-          id="PostDown"
+-          v-model="data.postDown"
+-          :label="$t('hooks.postDown')"
+-        />
+-      </FormGroup>
+-      <FormGroup>
+-        <FormHeading>{{ $t('form.actions') }}</FormHeading>
+-        <FormPrimaryActionField type="submit" :label="$t('form.save')" />
+-        <FormSecondaryActionField :label="$t('form.revert')" @click="revert" />
+-      </FormGroup>
+-    </FormElement>
+-  </main>
+-</template>
+-
+-<script setup lang="ts">
+-const { data: _data, refresh } = await useFetch(`/api/admin/hooks`, {
+-  method: 'get',
+-});
+-
+-const data = toRef(_data.value);
+-
+-const _submit = useSubmit(
+-  `/api/admin/hooks`,
+-  {
+-    method: 'post',
+-  },
+-  { revert }
+-);
+-
+-async function submit() {
+-  return _submit(data.value);
+-}
+-
+-async function revert() {
+-  await refresh();
+-  data.value = toRef(_data.value).value;
+-}
+-</script>
++<template><p>Server identity, firewall, hooks and access are managed by Desk Cluster. Edit client defaults or return to Clients.</p></template>
+\ No newline at end of file
+diff --git a/src/app/pages/admin/interface.vue b/src/app/pages/admin/interface.vue
+index 0df031d..aa952ce 100644
+--- a/src/app/pages/admin/interface.vue
++++ b/src/app/pages/admin/interface.vue
+@@ -1,232 +1 @@
+-<template>
+-  <main v-if="data">
+-    <FormElement @submit.prevent="submit">
+-      <FormGroup>
+-        <FormNumberField
+-          id="mtu"
+-          v-model="data.mtu"
+-          :label="$t('general.mtu')"
+-          :description="$t('admin.interface.mtuDesc')"
+-        />
+-        <FormNumberField
+-          id="port"
+-          v-model="data.port"
+-          :label="$t('general.port')"
+-          :description="$t('admin.interface.portDesc')"
+-        />
+-        <FormTextField
+-          id="device"
+-          v-model="data.device"
+-          :label="$t('admin.interface.device')"
+-          :description="$t('admin.interface.deviceDesc')"
+-        />
+-      </FormGroup>
+-      <FormGroup v-if="globalStore.information?.isAwg">
+-        <FormHeading>{{ $t('awg.obfuscationParameters') }}</FormHeading>
+-
+-        <FormNullNumberField
+-          id="jC"
+-          v-model="data.jC"
+-          :label="$t('awg.jCLabel')"
+-          :description="$t('awg.jCDescription')"
+-        />
+-        <FormNullNumberField
+-          id="jMin"
+-          v-model="data.jMin"
+-          :label="$t('awg.jMinLabel')"
+-          :description="$t('awg.jMinDescription')"
+-        />
+-        <FormNullNumberField
+-          id="jMax"
+-          v-model="data.jMax"
+-          :label="$t('awg.jMaxLabel')"
+-          :description="$t('awg.jMaxDescription')"
+-        />
+-        <FormNullNumberField
+-          id="s1"
+-          v-model="data.s1"
+-          :label="$t('awg.s1Label')"
+-          :description="$t('awg.s1Description')"
+-        />
+-        <FormNullNumberField
+-          id="s2"
+-          v-model="data.s2"
+-          :label="$t('awg.s2Label')"
+-          :description="$t('awg.s2Description')"
+-        />
+-
+-        <div class="col-span-full text-sm">* {{ $t('awg.mtuNote') }}</div>
+-
+-        <FormNullNumberField
+-          id="s3"
+-          v-model="data.s3"
+-          :label="$t('awg.s3Label')"
+-          :description="$t('awg.s3Description')"
+-        />
+-        <FormNullNumberField
+-          id="s4"
+-          v-model="data.s4"
+-          :label="$t('awg.s4Label')"
+-          :description="$t('awg.s4Description')"
+-        />
+-        <FormNullTextField
+-          id="h1"
+-          v-model="data.h1"
+-          :label="$t('awg.h1Label')"
+-          :description="$t('awg.h1Description')"
+-        />
+-        <FormNullTextField
+-          id="h2"
+-          v-model="data.h2"
+-          :label="$t('awg.h2Label')"
+-          :description="$t('awg.h2Description')"
+-        />
+-        <FormNullTextField
+-          id="h3"
+-          v-model="data.h3"
+-          :label="$t('awg.h3Label')"
+-          :description="$t('awg.h3Description')"
+-        />
+-        <FormNullTextField
+-          id="h4"
+-          v-model="data.h4"
+-          :label="$t('awg.h4Label')"
+-          :description="$t('awg.h4Description')"
+-        />
+-        <FormNullTextField
+-          id="i1"
+-          v-model="data.i1"
+-          :label="$t('awg.i1Label')"
+-          :description="$t('awg.i1Description')"
+-        />
+-        <FormNullTextField
+-          id="i2"
+-          v-model="data.i2"
+-          :label="$t('awg.i2Label')"
+-          :description="$t('awg.i2Description')"
+-        />
+-        <FormNullTextField
+-          id="i3"
+-          v-model="data.i3"
+-          :label="$t('awg.i3Label')"
+-          :description="$t('awg.i3Description')"
+-        />
+-        <FormNullTextField
+-          id="i4"
+-          v-model="data.i4"
+-          :label="$t('awg.i4Label')"
+-          :description="$t('awg.i4Description')"
+-        />
+-        <FormNullTextField
+-          id="i5"
+-          v-model="data.i5"
+-          :label="$t('awg.i5Label')"
+-          :description="$t('awg.i5Description')"
+-        />
+-      </FormGroup>
+-      <FormGroup>
+-        <FormHeading>{{ $t('admin.interface.firewall') }}</FormHeading>
+-        <FormSwitchField
+-          id="firewallEnabled"
+-          v-model="data.firewallEnabled"
+-          :label="$t('admin.interface.firewallEnabled')"
+-          :description="$t('admin.interface.firewallEnabledDesc')"
+-        />
+-      </FormGroup>
+-      <FormGroup>
+-        <FormHeading>{{ $t('form.actions') }}</FormHeading>
+-        <FormPrimaryActionField type="submit" :label="$t('form.save')" />
+-        <FormSecondaryActionField :label="$t('form.revert')" @click="revert" />
+-        <AdminCidrDialog
+-          trigger-class="col-span-2"
+-          :ipv4-cidr="data.ipv4Cidr"
+-          :ipv6-cidr="data.ipv6Cidr"
+-          @change="changeCidr"
+-        >
+-          <FormSecondaryActionField
+-            :label="$t('admin.interface.changeCidr')"
+-            class="w-full"
+-            tabindex="-1"
+-          />
+-        </AdminCidrDialog>
+-        <AdminRestartInterfaceDialog
+-          trigger-class="col-span-2"
+-          @restart="restartInterface"
+-        >
+-          <FormSecondaryActionField
+-            :label="$t('admin.interface.restart')"
+-            class="w-full"
+-            tabindex="-1"
+-          />
+-        </AdminRestartInterfaceDialog>
+-      </FormGroup>
+-    </FormElement>
+-  </main>
+-</template>
+-
+-<script setup lang="ts">
+-const globalStore = useGlobalStore();
+-
+-const { t } = useI18n();
+-
+-const { data: _data, refresh } = await useFetch(`/api/admin/interface`, {
+-  method: 'get',
+-});
+-
+-const data = toRef(_data.value);
+-
+-const _submit = useSubmit(
+-  `/api/admin/interface`,
+-  {
+-    method: 'post',
+-  },
+-  {
+-    revert: async (success) => {
+-      await revert();
+-      if (success) {
+-        // Refresh global store information after successful save
+-        await globalStore.refreshInformation();
+-      }
+-    },
+-  }
+-);
+-
+-function submit() {
+-  return _submit(data.value);
+-}
+-
+-async function revert() {
+-  await refresh();
+-  data.value = toRef(_data.value).value;
+-}
+-
+-const _changeCidr = useSubmit(
+-  `/api/admin/interface/cidr`,
+-  {
+-    method: 'post',
+-  },
+-  {
+-    revert,
+-    successMsg: t('admin.interface.cidrSuccess'),
+-  }
+-);
+-
+-async function changeCidr(ipv4Cidr: string, ipv6Cidr: string) {
+-  await _changeCidr({ ipv4Cidr, ipv6Cidr });
+-}
+-
+-const _restartInterface = useSubmit(
+-  `/api/admin/interface/restart`,
+-  {
+-    method: 'post',
+-  },
+-  {
+-    revert,
+-    successMsg: t('admin.interface.restartSuccess'),
+-  }
+-);
+-
+-async function restartInterface() {
+-  await _restartInterface(undefined);
+-}
+-</script>
++<template><p>Server identity, firewall, hooks and access are managed by Desk Cluster. Edit client defaults or return to Clients.</p></template>
+\ No newline at end of file
+diff --git a/src/app/pages/clients/[id].vue b/src/app/pages/clients/[id].vue
+index f4714ea..cef9f07 100644
+--- a/src/app/pages/clients/[id].vue
++++ b/src/app/pages/clients/[id].vue
+@@ -22,12 +22,6 @@
+               v-model="data.enabled"
+               :label="$t('client.enabled')"
+             />
+-            <FormDateField
+-              id="expiresAt"
+-              v-model="data.expiresAt"
+-              :description="$t('client.expireDateDesc')"
+-              :label="$t('client.expireDate')"
+-            />
+           </FormGroup>
+           <FormGroup>
+             <FormHeading>{{ $t('client.address') }}</FormHeading>
+@@ -36,11 +30,7 @@
+               v-model="data.ipv4Address"
+               label="IPv4"
+             />
+-            <FormTextField
+-              id="ipv6Address"
+-              v-model="data.ipv6Address"
+-              label="IPv6"
+-            />
++            <div class="col-span-full text-sm"><span class="font-medium">IPv6 metadata: </span>{{ data.ipv6Address }} <span class="text-gray-500">· cluster managed</span></div>
+             <FormInfoField
+               id="endpoint"
+               :data="data.endpoint ?? $t('client.notConnected')"
+@@ -52,16 +42,13 @@
+             <FormHeading :description="$t('client.allowedIpsDesc')">
+               {{ $t('general.allowedIps') }}
+             </FormHeading>
+-            <FormNullArrayField v-model="data.allowedIps" name="allowedIps" />
++            <div class="col-span-full text-sm"><span class="font-medium">LAN routes: </span>{{ data.allowedIps?.join(', ') || 'Default' }} <span class="text-gray-500">· cluster managed</span></div>
+           </FormGroup>
+           <FormGroup>
+             <FormHeading :description="$t('client.serverAllowedIpsDesc')">
+               {{ $t('client.serverAllowedIps') }}
+             </FormHeading>
+-            <FormArrayField
+-              v-model="data.serverAllowedIps"
+-              name="serverAllowedIps"
+-            />
++            <div class="col-span-full text-sm"><span class="font-medium">Additional server routes: </span>{{ data.serverAllowedIps?.join(', ') || 'Default' }} <span class="text-gray-500">· cluster managed</span></div>
+           </FormGroup>
+           <FormGroup v-if="globalStore.information?.firewallEnabled">
+             <FormHeading :description="$t('client.firewallIpsDesc')">
+@@ -77,12 +64,7 @@
+           </FormGroup>
+           <FormGroup>
+             <FormHeading>{{ $t('form.sectionAdvanced') }}</FormHeading>
+-            <FormNumberField
+-              id="mtu"
+-              v-model="data.mtu"
+-              :description="$t('client.mtuDesc')"
+-              :label="$t('general.mtu')"
+-            />
++            <div class="col-span-full text-sm"><span class="font-medium">MTU: </span>{{ data.mtu }} <span class="text-gray-500">· cluster managed</span></div>
+             <FormNumberField
+               id="persistentKeepalive"
+               v-model="data.persistentKeepalive"
+@@ -219,13 +201,13 @@ const globalStore = useGlobalStore();
+ const route = useRoute();
+ const id = route.params.id as string;
+ 
+-const { data: _data, refresh } = await useFetch(`/api/client/${id}`, {
++const { data: _data, refresh } = await useFetch(`/vpn/api/client/${id}`, {
+   method: 'get',
+ });
+ const data = toRef(_data.value);
+ 
+ const _submit = useSubmit(
+-  `/api/client/${id}`,
++  `/vpn/api/client/${id}`,
+   {
+     method: 'post',
+   },
+@@ -250,7 +232,7 @@ async function revert() {
+ }
+ 
+ const _deleteClient = useSubmit(
+-  `/api/client/${id}`,
++  `/vpn/api/client/${id}`,
+   {
+     method: 'delete',
+   },
+diff --git a/src/app/pages/login.vue b/src/app/pages/login.vue
+index 1d716fb..b83323c 100644
+--- a/src/app/pages/login.vue
++++ b/src/app/pages/login.vue
+@@ -78,7 +78,7 @@ const totpRequired = ref(false);
+ const totp = ref<string>('');
+ 
+ const _submit = useSubmit(
+-  '/api/session',
++  '/vpn/api/session',
+   {
+     method: 'post',
+   },
+diff --git a/src/app/pages/me.vue b/src/app/pages/me.vue
+index 65c68ae..5b1a3e4 100644
+--- a/src/app/pages/me.vue
++++ b/src/app/pages/me.vue
+@@ -1,247 +1 @@
+-<template>
+-  <main>
+-    <Panel>
+-      <PanelHead>
+-        <PanelHeadTitle>
+-          {{ $t('pages.me') }}
+-        </PanelHeadTitle>
+-      </PanelHead>
+-      <PanelBody class="dark:text-neutral-200">
+-        <FormElement @submit.prevent="submit">
+-          <FormGroup>
+-            <FormHeading>{{ $t('form.sectionGeneral') }}</FormHeading>
+-            <FormTextField
+-              id="name"
+-              v-model="name"
+-              :label="$t('general.name')"
+-            />
+-            <FormNullTextField
+-              id="email"
+-              v-model="email"
+-              :label="$t('user.email')"
+-            />
+-            <FormSecondaryActionField type="submit" :label="$t('form.save')" />
+-          </FormGroup>
+-        </FormElement>
+-        <FormElement @submit.prevent="updatePassword">
+-          <FormGroup>
+-            <FormHeading>{{ $t('general.password') }}</FormHeading>
+-            <FormPasswordField
+-              id="current-password"
+-              v-model="currentPassword"
+-              autocomplete="current-password"
+-              :label="$t('me.currentPassword')"
+-            />
+-            <FormPasswordField
+-              id="new-password"
+-              v-model="newPassword"
+-              autocomplete="new-password"
+-              :label="$t('general.newPassword')"
+-            />
+-            <FormPasswordField
+-              id="confirm-password"
+-              v-model="confirmPassword"
+-              autocomplete="new-password"
+-              :label="$t('general.confirmPassword')"
+-            />
+-            <FormSecondaryActionField
+-              type="submit"
+-              :label="$t('general.updatePassword')"
+-            />
+-          </FormGroup>
+-        </FormElement>
+-        <FormElement @submit.prevent>
+-          <FormGroup>
+-            <FormHeading>{{ $t('general.2fa') }}</FormHeading>
+-            <div
+-              v-if="!authStore.userData?.totpVerified && !twofa"
+-              class="col-span-2 flex flex-col"
+-            >
+-              <FormSecondaryActionField
+-                :label="$t('me.enable2fa')"
+-                @click="setup2fa"
+-              />
+-            </div>
+-            <div
+-              v-if="!authStore.userData?.totpVerified && twofa"
+-              class="col-span-2"
+-            >
+-              <p class="text-sm text-gray-500 dark:text-gray-400">
+-                {{ $t('me.enable2faDesc') }}
+-              </p>
+-              <div class="mt-2 flex flex-col gap-2">
+-                <img :src="twofa.qrcode" size="128" class="bg-white" />
+-                <FormTextField
+-                  id="2fakey"
+-                  :model-value="twofa.key"
+-                  :on-update:model-value="() => {}"
+-                  :label="$t('me.2faKey')"
+-                  :disabled="true"
+-                />
+-                <p class="text-sm text-gray-500 dark:text-gray-400">
+-                  {{ $t('me.2faCodeDesc') }}
+-                </p>
+-                <FormTextField
+-                  id="2facode"
+-                  v-model="code"
+-                  :label="$t('general.2faCode')"
+-                />
+-                <FormSecondaryActionField
+-                  :label="$t('me.enable2fa')"
+-                  @click="enable2fa"
+-                />
+-              </div>
+-            </div>
+-            <div
+-              v-if="authStore.userData?.totpVerified"
+-              class="col-span-2 flex flex-col gap-2"
+-            >
+-              <p class="text-sm text-gray-500 dark:text-gray-400">
+-                {{ $t('me.disable2faDesc') }}
+-              </p>
+-              <FormPasswordField
+-                id="2fapassword"
+-                v-model="disable2faPassword"
+-                :label="$t('me.currentPassword')"
+-                type="password"
+-                autocomplete="current-password"
+-              />
+-              <FormSecondaryActionField
+-                :label="$t('me.disable2fa')"
+-                @click="disable2fa"
+-              />
+-            </div>
+-          </FormGroup>
+-        </FormElement>
+-      </PanelBody>
+-    </Panel>
+-  </main>
+-</template>
+-
+-<script setup lang="ts">
+-import { encodeQR } from 'qr';
+-
+-const authStore = useAuthStore();
+-
+-const name = ref(authStore.userData?.name);
+-const email = ref(authStore.userData?.email);
+-
+-const _submit = useSubmit(
+-  `/api/me`,
+-  {
+-    method: 'post',
+-  },
+-  {
+-    revert: () => {
+-      return authStore.update();
+-    },
+-  }
+-);
+-
+-function submit() {
+-  return _submit({ name: name.value, email: email.value });
+-}
+-
+-const currentPassword = ref('');
+-const newPassword = ref('');
+-const confirmPassword = ref('');
+-
+-const _updatePassword = useSubmit(
+-  `/api/me/password`,
+-  {
+-    method: 'post',
+-  },
+-  {
+-    revert: async () => {
+-      currentPassword.value = '';
+-      newPassword.value = '';
+-      confirmPassword.value = '';
+-    },
+-  }
+-);
+-
+-function updatePassword() {
+-  return _updatePassword({
+-    currentPassword: currentPassword.value,
+-    newPassword: newPassword.value,
+-    confirmPassword: confirmPassword.value,
+-  });
+-}
+-
+-const twofa = ref<{ key: string; qrcode: string } | null>(null);
+-
+-const _setup2fa = useSubmit(
+-  `/api/me/totp`,
+-  {
+-    method: 'post',
+-  },
+-  {
+-    revert: async (success, data) => {
+-      if (success && data?.type === 'setup') {
+-        const qrcode = encodeQR(data.uri, 'svg', {
+-          ecc: 'high',
+-          scale: 4,
+-          encoding: 'byte',
+-        });
+-        const svg = new Blob([qrcode], { type: 'image/svg+xml' });
+-        twofa.value = { key: data.key, qrcode: URL.createObjectURL(svg) };
+-      }
+-    },
+-  }
+-);
+-
+-async function setup2fa() {
+-  return _setup2fa({
+-    type: 'setup',
+-  });
+-}
+-
+-const code = ref<string>('');
+-
+-const _enable2fa = useSubmit(
+-  `/api/me/totp`,
+-  {
+-    method: 'post',
+-  },
+-  {
+-    revert: async (success, data) => {
+-      if (success && data?.type === 'created') {
+-        authStore.update();
+-        twofa.value = null;
+-        code.value = '';
+-      }
+-    },
+-  }
+-);
+-
+-async function enable2fa() {
+-  return _enable2fa({
+-    type: 'create',
+-    code: code.value,
+-  });
+-}
+-
+-const disable2faPassword = ref('');
+-
+-const _disable2fa = useSubmit(
+-  `/api/me/totp`,
+-  {
+-    method: 'post',
+-  },
+-  {
+-    revert: async (success, data) => {
+-      if (success && data?.type === 'deleted') {
+-        authStore.update();
+-        disable2faPassword.value = '';
+-      }
+-    },
+-  }
+-);
+-
+-async function disable2fa() {
+-  return _disable2fa({
+-    type: 'delete',
+-    currentPassword: disable2faPassword.value,
+-  });
+-}
+-</script>
++<template><p>Trusted LAN / VPN access is managed by Desk Cluster.</p></template>
+\ No newline at end of file
+diff --git a/src/app/pages/setup/2.vue b/src/app/pages/setup/2.vue
+index 7c32e89..40f3440 100644
+--- a/src/app/pages/setup/2.vue
++++ b/src/app/pages/setup/2.vue
+@@ -50,7 +50,7 @@ const password = ref<string>('');
+ const confirmPassword = ref<string>('');
+ 
+ const _submit = useSubmit(
+-  '/api/setup/2',
++  '/vpn/api/setup/2',
+   {
+     method: 'post',
+   },
+diff --git a/src/app/pages/setup/4.vue b/src/app/pages/setup/4.vue
+index 887fc96..a80ac23 100644
+--- a/src/app/pages/setup/4.vue
++++ b/src/app/pages/setup/4.vue
+@@ -11,7 +11,7 @@
+           :label="$t('general.host')"
+           placeholder="vpn.example.com"
+           :description="$t('setup.hostDesc')"
+-          url="/api/setup/4"
++          url="/vpn/api/setup/4"
+         />
+       </div>
+       <div class="flex flex-col">
+@@ -43,7 +43,7 @@ const host = ref<null | string>(null);
+ const port = ref<number>(51820);
+ 
+ const _submit = useSubmit(
+-  '/api/setup/4',
++  '/vpn/api/setup/4',
+   {
+     method: 'post',
+   },
+diff --git a/src/app/pages/setup/migrate.vue b/src/app/pages/setup/migrate.vue
+index f706b84..8603319 100644
+--- a/src/app/pages/setup/migrate.vue
++++ b/src/app/pages/setup/migrate.vue
+@@ -36,7 +36,7 @@ function onChangeFile(evt: Event) {
+ }
+ 
+ const _submit = useSubmit(
+-  '/api/setup/migrate',
++  '/vpn/api/setup/migrate',
+   {
+     method: 'post',
+   },
+diff --git a/src/app/stores/auth.ts b/src/app/stores/auth.ts
+index 64bac79..fc45530 100644
+--- a/src/app/stores/auth.ts
++++ b/src/app/stores/auth.ts
+@@ -7,7 +7,7 @@ export const useAuthStore = defineStore('Auth', () => {
+   async function getSession(event?: H3Event) {
+     const fetch = event?.$fetch || $fetch;
+     try {
+-      const data = await fetch('/api/session', {
++      const data = await fetch('/vpn/api/session', {
+         method: 'get',
+       });
+       return data;
+diff --git a/src/app/stores/clients.ts b/src/app/stores/clients.ts
+index e44e6b0..1bdf7cc 100644
+--- a/src/app/stores/clients.ts
++++ b/src/app/stores/clients.ts
+@@ -3,7 +3,7 @@ import { sha256 } from 'js-sha256';
+ import type { TypedInternalResponse } from 'nitropack/types';
+ 
+ type WGClientReturn = TypedInternalResponse<
+-  '/api/client',
++  '/vpn/api/client',
+   unknown,
+   'get'
+ >[number];
+@@ -35,7 +35,7 @@ export const useClientsStore = defineStore('Clients', () => {
+     filter: undefined as string | undefined,
+   });
+ 
+-  const { data: _clients, refresh: _refresh } = useFetch('/api/client', {
++  const { data: _clients, refresh: _refresh } = useFetch('/vpn/api/client', {
+     method: 'get',
+     params: searchParams,
+   });
+diff --git a/src/app/stores/global.ts b/src/app/stores/global.ts
+index aa28ca1..da5f01b 100644
+--- a/src/app/stores/global.ts
++++ b/src/app/stores/global.ts
+@@ -1,6 +1,6 @@
+ export const useGlobalStore = defineStore('Global', () => {
+   const { data: information, refresh: refreshInformation } = useFetch(
+-    '/api/information',
++    '/vpn/api/information',
+     {
+       method: 'get',
+     }
+diff --git a/src/nuxt.config.ts b/src/nuxt.config.ts
+index 9bd89f2..11de59b 100644
+--- a/src/nuxt.config.ts
++++ b/src/nuxt.config.ts
+@@ -2,6 +2,8 @@ import { fileURLToPath } from 'node:url';
+ 
+ // https://nuxt.com/docs/api/configuration/nuxt-config
+ export default defineNuxtConfig({
++  app: { baseURL: '/vpn/' },
++  ssr: false,
+   future: {
+     compatibilityVersion: 4,
+   },
+diff --git a/src/server/api/information.get.ts b/src/server/api/information.get.ts
+index ff9e237..4a63636 100644
+--- a/src/server/api/information.get.ts
++++ b/src/server/api/information.get.ts
+@@ -1,7 +1,7 @@
+ import { gt } from 'semver';
+ 
+ export default defineEventHandler(async () => {
+-  const latestRelease = await cachedFetchLatestRelease();
++  const latestRelease = process.env.DESK_CLUSTER === 'true' ? {version:RELEASE, changelog:'Updates managed by Desk Cluster'} : await cachedFetchLatestRelease();
+   const updateAvailable = gt(latestRelease.version, RELEASE);
+   const insecure = WG_ENV.INSECURE;
+   const isAwg = WG_ENV.WG_EXECUTABLE === 'awg';
+diff --git a/src/server/database/sqlite.ts b/src/server/database/sqlite.ts
+index 4b0f672..5d8c716 100644
+--- a/src/server/database/sqlite.ts
++++ b/src/server/database/sqlite.ts
+@@ -15,7 +15,7 @@ import { OneTimeLinkService } from './repositories/oneTimeLink/service';
+ 
+ const DB_DEBUG = createDebug('Database');
+ 
+-const client = createClient({ url: 'file:/etc/wireguard/wg-easy.db' });
++const client = createClient({ url: 'file:' + (process.env.DESK_WG_DATABASE || '/var/lib/desk-vpn-ui/wg-easy.db') });
+ const db = drizzle({ client, schema });
+ 
+ export async function connect() {
+diff --git a/src/server/utils/WireGuard.ts b/src/server/utils/WireGuard.ts
+index 9ffc8cc..a36ce10 100644
+--- a/src/server/utils/WireGuard.ts
++++ b/src/server/utils/WireGuard.ts
+@@ -12,6 +12,7 @@ class WireGuard {
+    * Save and sync config
+    */
+   async saveConfig() {
++    if (process.env.DESK_CLUSTER === 'true') return;
+     const wgInterface = await Database.interfaces.get();
+     await this.#saveWireguardConfig(wgInterface);
+     await this.#syncWireguardConfig(wgInterface);
+@@ -192,6 +193,7 @@ class WireGuard {
+   }
+ 
+   async Startup() {
++    if (process.env.DESK_CLUSTER === 'true') return;
+     WG_DEBUG('Starting WireGuard...');
+     // let as it has to refetch if keys change
+     let wgInterface = await Database.interfaces.get();
+@@ -282,11 +284,13 @@ class WireGuard {
+ 
+   // Shutdown wireguard
+   async Shutdown() {
++    if (process.env.DESK_CLUSTER === 'true') return;
+     const wgInterface = await Database.interfaces.get();
+     await wg.down(wgInterface.name).catch(() => {});
+   }
+ 
+   async Restart() {
++    if (process.env.DESK_CLUSTER === 'true') throw createError({statusCode:405,statusMessage:'Tunnel lifecycle is managed by Desk Cluster'});
+     const wgInterface = await Database.interfaces.get();
+     await wg.restart(wgInterface.name);
+   }
+diff --git a/src/server/utils/wgHelper.ts b/src/server/utils/wgHelper.ts
+index 0ad7cef..bfdabfd 100644
+--- a/src/server/utils/wgHelper.ts
++++ b/src/server/utils/wgHelper.ts
+@@ -1,3 +1,4 @@
++import { generateKeyPairSync, createPrivateKey, createPublicKey, randomBytes } from 'node:crypto';
+ // ! Auto Imports are not supported in this file
+ 
+ import { parseCidr } from 'cidr-tools';
+@@ -171,16 +172,19 @@ Endpoint = ${userConfig.host}:${userConfig.port}`;
+   },
+ 
+   generatePrivateKey: () => {
++    if (process.env.DESK_CLUSTER === 'true') { const { privateKey } = generateKeyPairSync('x25519'); return Promise.resolve(privateKey.export({format:'der',type:'pkcs8'}).subarray(-32).toString('base64')); }
+     return exec(`${wgExecutable} genkey`);
+   },
+ 
+   getPublicKey: (privateKey: string) => {
++    if (process.env.DESK_CLUSTER === 'true') { const key=createPrivateKey({key:Buffer.concat([Buffer.from('302e020100300506032b656e04220420','hex'),Buffer.from(privateKey,'base64')]),format:'der',type:'pkcs8'}); return Promise.resolve(createPublicKey(key).export({format:'der',type:'spki'}).subarray(-32).toString('base64')); }
+     return exec(`echo ${privateKey} | ${wgExecutable} pubkey`, {
+       log: `echo ***hidden*** | ${wgExecutable} pubkey`,
+     });
+   },
+ 
+   generatePreSharedKey: () => {
++    if (process.env.DESK_CLUSTER === 'true') return Promise.resolve(randomBytes(32).toString('base64'));
+     return exec(`${wgExecutable} genpsk`);
+   },
+ 
+@@ -205,6 +209,11 @@ Endpoint = ${userConfig.host}:${userConfig.port}`;
+   },
+ 
+   dump: async (infName: string) => {
++    if (process.env.DESK_CLUSTER === 'true') {
++      const response=await fetch('http://127.0.0.1:51822/native/status',{headers:{'X-Desk-Backend':process.env.DESK_WG_TOKEN || ''},signal:AbortSignal.timeout(5000)});
++      if (!response.ok) throw new Error('VPN owner telemetry unavailable');
++      return await response.json();
++    }
+     const rawDump = await exec(`${wgExecutable} show ${infName} dump`, {
+       log: false,
+     });

@@ -1,0 +1,2 @@
+# Unified patches contain required space-prefixed blank context lines.
+roles/desk_vpn_ui/files/upstream.patch -whitespace

@@ -124,7 +124,7 @@ func TestRecoveryMutatesOnlyFreshOwnerAndRetainsIdentity(t *testing.T) {
 	if strings.Contains(joined, "private-key") {
 		t.Fatal("identity touched")
 	}
-	for _, field := range []string{"fresh", "psk", "keepalive", "deleted", "changed"} {
+	for _, field := range []string{"fresh", "psk", "deleted", "changed"} {
 		calls = nil
 		stamp = "1000"
 		psk = "(none)"
@@ -153,5 +153,41 @@ func TestRecoveryMutatesOnlyFreshOwnerAndRetainsIdentity(t *testing.T) {
 				t.Fatal(field)
 			}
 		}
+	}
+}
+
+func TestRecoveryPreservesPSKAndKeepaliveWithoutArguments(t *testing.T) {
+	_, p, h, _, _ := fixture()
+	secret := "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+	calls := []string{}
+	run := func(name string, args ...string) (string, error) {
+		if len(args) == 3 && args[0] == "show" {
+			switch args[2] {
+			case "latest-handshakes":
+				return "peer\t1000", nil
+			case "allowed-ips":
+				return "peer\t10.77.0.2/32", nil
+			case "preshared-keys":
+				return "peer\t" + secret, nil
+			case "persistent-keepalive":
+				return "peer\t25", nil
+			}
+		}
+		calls = append(calls, strings.Join(args, " "))
+		return "", nil
+	}
+	secure := func(name string, args []string, input string) (string, error) {
+		if input != secret+"\n" {
+			t.Fatal("PSK changed")
+		}
+		calls = append(calls, strings.Join(args, " "))
+		return "", nil
+	}
+	if recoverPeers(p, h, 2000, func() bool { return true }, run, func(string) {}, secure) != 1 {
+		t.Fatal("PSK peer skipped")
+	}
+	all := strings.Join(calls, "\n")
+	if strings.Contains(all, secret) || !strings.Contains(all, "preshared-key /dev/stdin") || !strings.Contains(all, "persistent-keepalive 25") {
+		t.Fatal("PSK exposed or keepalive lost")
 	}
 }

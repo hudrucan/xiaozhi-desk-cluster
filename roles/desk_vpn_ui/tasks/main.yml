@@ -1,0 +1,185 @@
+---
+- name: Require the existing symmetric three-node VPN deployment
+  ansible.builtin.assert:
+    that:
+      - groups['deskboxes'] | sort == ['deskb1x','deskb2x','deskb3x']
+      - desk_vpn_vip | default('192.168.1.254') == '192.168.1.254'
+      - not (desk_vpn_ui_simulate | bool and desk_vpn_ui_publish | bool)
+- name: Read protected runtime state
+  ansible.builtin.command:
+    argv: [/usr/bin/python3, '-c', "{{ lookup('ansible.builtin.file','roles/desk_ui/files/ui_guard.py') }}", freeze]
+  changed_when: false
+  no_log: true
+  register: vpn_ui_before
+- name: Load ignored shared identity and package checksums
+  ansible.builtin.set_fact:
+    vpn_ui_credentials: "{{ lookup('ansible.builtin.file','secret/vpn-ui/credentials.json') | from_json }}"
+    vpn_ui_checksums: "{{ lookup('ansible.builtin.file',desk_vpn_ui_package+'/checksums.json') | from_json }}"
+  no_log: true
+- name: Verify crypto in existing private package directory
+  ansible.builtin.command:
+    argv: [/usr/bin/python3, '-c', 'from cryptography.fernet import Fernet; print("Crypto ready")']
+  environment:
+    PYTHONPATH: "{{ desk_vpn_ui_crypto }}"
+  changed_when: false
+- name: Create unprivileged native account
+  ansible.builtin.user:
+    name: desk-vpn-ui
+    system: true
+    shell: /usr/sbin/nologin
+    create_home: false
+- name: Create isolated package credential and state directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner | default('root') }}"
+    group: "{{ item.group | default('root') }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: /opt/desk-vpn-ui, mode: '0755'}
+    - {path: /etc/desk-vpn-ui, mode: '0750', group: desk-vpn-ui}
+    - {path: /var/lib/desk-vpn-ui, mode: '0770', owner: desk-vpn-ui, group: desk-vpn-ui}
+    - {path: /var/lib/desk-vpn-ui-sync, mode: '0700'}
+    - {path: /usr/local/libexec/desk-vpn-ui, mode: '0755'}
+- name: Copy verified built application and native Node package
+  ansible.builtin.copy:
+    src: "{{ desk_vpn_ui_package }}/{{ item }}"
+    dest: "/opt/desk-vpn-ui/{{ item }}"
+    mode: '0644'
+  loop: [app.tar.gz, node-v24.19.0-linux-arm64.tar.xz]
+  register: vpn_ui_packages
+- name: Verify controller package digests before extraction
+  ansible.builtin.command:
+    argv: [/usr/bin/python3, '-c', 'import hashlib,sys; assert hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest()==sys.argv[2]', "/opt/desk-vpn-ui/{{ item }}", "{{ vpn_ui_checksums[item] }}"]
+  loop: [app.tar.gz, node-v24.19.0-linux-arm64.tar.xz]
+  changed_when: false
+- name: Extract verified packages
+  ansible.builtin.unarchive:
+    src: "/opt/desk-vpn-ui/{{ item }}"
+    dest: /opt/desk-vpn-ui
+    remote_src: true
+  loop: [app.tar.gz, node-v24.19.0-linux-arm64.tar.xz]
+  when: vpn_ui_packages.changed
+- name: Install unchanged native seed only on first deployment
+  ansible.builtin.copy:
+    src: secret/vpn-ui/seed.db
+    dest: /var/lib/desk-vpn-ui/wg-easy.db
+    owner: desk-vpn-ui
+    group: desk-vpn-ui
+    mode: '0660'
+    force: false
+  no_log: true
+- name: Install fixed logical seed and encrypted peer credentials
+  ansible.builtin.copy:
+    src: "secret/vpn-ui/{{ item }}"
+    dest: "/etc/desk-vpn-ui/{{ item }}"
+    mode: '0600'
+  loop: [seed.json, tls.crt, tls.key]
+  no_log: true
+- name: Install audited configuration and database helpers
+  ansible.builtin.copy:
+    src: "{{ item }}"
+    dest: "/usr/local/libexec/desk-vpn-ui/{{ item }}"
+    mode: '0755'
+  loop: [sync.py, database.py, config_journal.py]
+  register: vpn_ui_helpers
+- name: Install bounded native and quorum configuration
+  ansible.builtin.template:
+    src: "{{ item.src }}"
+    dest: "{{ item.dest }}"
+    mode: '0600'
+  loop:
+    - {src: config.json.j2, dest: /etc/desk-vpn-ui/config.json}
+    - {src: native.env.j2, dest: /etc/desk-vpn-ui/native.env}
+  no_log: true
+  register: vpn_ui_config
+- name: Install independent UI services
+  ansible.builtin.template:
+    src: "{{ item }}.j2"
+    dest: "/etc/systemd/system/{{ item }}"
+    mode: '0644'
+  loop: [desk-vpn-ui.service, desk-vpn-ui-sync.service]
+  register: vpn_ui_units
+- name: Build current bounded VPN readiness helper on controller
+  ansible.builtin.command:
+    argv: [go, build, -trimpath, -ldflags, '-s -w -buildid=', -o, /private/tmp/desk-vpn-ui-probe-arm64, "{{ playbook_dir }}/roles/desk_vpn/files/probe.go"]
+  environment:
+    GOOS: linux
+    GOARCH: arm64
+    CGO_ENABLED: '0'
+    GO111MODULE: 'off'
+    GOCACHE: /private/tmp/desk-vpn-go-cache
+    GOTOOLCHAIN: local
+  delegate_to: localhost
+  become: false
+  run_once: true
+- name: Install sync-aware readiness helper
+  ansible.builtin.copy:
+    src: /private/tmp/desk-vpn-ui-probe-arm64
+    dest: /usr/local/libexec/desk-vpn/probe
+    mode: '0755'
+- name: Start unprivileged native UI
+  ansible.builtin.systemd_service:
+    name: desk-vpn-ui
+    daemon_reload: true
+    enabled: true
+    state: "{{ 'restarted' if vpn_ui_packages.changed or vpn_ui_config.changed or vpn_ui_units.changed else 'started' }}"
+- name: Start quorum adapter without restarting the tunnel
+  ansible.builtin.systemd_service:
+    name: desk-vpn-ui-sync
+    enabled: true
+    state: "{{ 'restarted' if vpn_ui_helpers.changed or vpn_ui_config.changed or vpn_ui_units.changed else 'started' }}"
+- name: Require native session and client API readiness
+  ansible.builtin.command:
+    argv: [/usr/bin/python3, '-c', 'import sys,json; sys.path.insert(0,"/usr/local/libexec/desk-vpn-ui"); import sync; c=json.load(open("/etc/desk-vpn-ui/config.json")); assert sync.Native(c).request("/api/session")[0]==200; print("Native session ready")']
+  register: vpn_ui_native_ready
+  retries: 10
+  delay: 3
+  until: vpn_ui_native_ready.rc == 0
+  changed_when: false
+  environment:
+    PYTHONPATH: "{{ desk_vpn_ui_crypto }}"
+- name: Install retained VPN ingress extension
+  when: desk_vpn_ui_publish | bool
+  block:
+    - name: Install complete proxy composer with VPN retention
+      ansible.builtin.copy:
+        src: roles/desk_monitoring/files/install_proxy.py
+        dest: /usr/local/libexec/desk-monitoring/install-proxy.py
+        mode: '0755'
+    - name: Render independent UI HA backend
+      ansible.builtin.template:
+        src: backend.cfg.j2
+        dest: /etc/desk-vpn-ui/backend.cfg
+        mode: '0644'
+    - name: Validate HTTP and MQTT candidates before graceful reload
+      ansible.builtin.command:
+        argv: [/usr/bin/python3, /usr/local/libexec/desk-monitoring/install-proxy.py, --backend, /etc/desk-monitoring/backend.cfg, --dns-backend, /etc/desk-ui/backend.cfg, --dashboard-backend, /etc/desk-dashboard/backend.cfg, --vpn-backend, /etc/desk-vpn-ui/backend.cfg]
+- name: Keep shared VPN credentials out of metadata namespaces
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/python3
+      - '-c'
+      - |
+        from pathlib import Path
+        changed=False
+        for unit in ('desk-dashboard','desk-node-control'):
+            p=Path('/etc/systemd/system/'+unit+'.service');s=p.read_text()
+            if '-/etc/desk-vpn-ui' not in s:
+                assert 'InaccessiblePaths=' in s
+                p.write_text(s.replace('InaccessiblePaths=','InaccessiblePaths=-/etc/desk-vpn-ui -/var/lib/desk-vpn-ui -/var/lib/desk-vpn-ui-sync ',1));changed=True
+        print('changed' if changed else 'unchanged')
+  register: vpn_ui_isolation
+  changed_when: vpn_ui_isolation.stdout == 'changed'
+- name: Refresh only isolated metadata readers after namespace hardening
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    daemon_reload: true
+    state: restarted
+  loop: [desk-dashboard, desk-node-control]
+  when: vpn_ui_isolation.changed
+- name: Verify protected services DNS policies and VIPs
+  ansible.builtin.command:
+    argv: [/usr/bin/python3, '-c', "{{ lookup('ansible.builtin.file','roles/desk_ui/files/ui_guard.py') }}", guard]
+    stdin: "{{ vpn_ui_before.stdout }}"
+  changed_when: false

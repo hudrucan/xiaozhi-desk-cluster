@@ -43,6 +43,10 @@
     validate: /usr/bin/python3 -c "import ast,sys; ast.parse(open(sys.argv[1]).read())" %s
   loop: [firewall.py, reload.py, owner.py]
   register: vpn_helpers
+- name: Detect existing cluster-managed peer configuration
+  ansible.builtin.stat:
+    path: /etc/desk-vpn-ui/config.json
+  register: vpn_ui_managed
 - name: Install common peer configuration
   ansible.builtin.template:
     src: wgdesk0.conf.j2
@@ -50,12 +54,14 @@
     mode: '0600'
   no_log: true
   register: vpn_config
+  when: not vpn_ui_managed.stat.exists
 - name: Install node-specific public placement metadata
   ansible.builtin.template:
     src: public.json.j2
     dest: /etc/desk-vpn/public.json
     mode: '0600'
   register: vpn_public
+  when: not vpn_ui_managed.stat.exists
 - name: Create the controller VPN build directory
   ansible.builtin.file:
     path: /private/tmp/desk-vpn-source

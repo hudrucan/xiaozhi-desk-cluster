@@ -1,0 +1,39 @@
+---
+# Stage every hashed asset on every replica before any native application upgrade.
+- name: Stage immutable VPN UI assets before rolling code changes
+  hosts: deskboxes
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  vars:
+    desk_vpn_ui_package: /private/tmp/desk-vpn-ui-package
+  tasks:
+    - name: Create public asset directory independently of native runtime
+      ansible.builtin.file:
+        path: /opt/desk-vpn-ui/app/public
+        state: directory
+        mode: '0755'
+    - name: Copy complete current hashed asset set
+      ansible.builtin.copy:
+        src: "{{ desk_vpn_ui_package }}/assets.tar.gz"
+        dest: /opt/desk-vpn-ui/assets.tar.gz
+        mode: '0644'
+      register: vpn_assets
+    - name: Verify asset package digest before extraction
+      ansible.builtin.command:
+        argv: [/usr/bin/python3, '-c', 'import hashlib,sys; assert hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest()==sys.argv[2]', /opt/desk-vpn-ui/assets.tar.gz, "{{ (lookup('ansible.builtin.file',desk_vpn_ui_package+'/checksums.json') | from_json)['assets.tar.gz'] }}"]
+      changed_when: false
+    - name: Stage assets while retaining files used by existing browser sessions
+      ansible.builtin.unarchive:
+        src: /opt/desk-vpn-ui/assets.tar.gz
+        dest: /opt/desk-vpn-ui/app/public
+        remote_src: true
+      when: vpn_assets.changed
+- name: Install independent HA VPN UI and quorum configuration
+  hosts: deskboxes
+  become: true
+  gather_facts: false
+  serial: 1
+  any_errors_fatal: true
+  roles:
+    - desk_vpn_ui

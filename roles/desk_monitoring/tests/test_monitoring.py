@@ -95,6 +95,15 @@ class MonitoringTests(unittest.TestCase):
         self.assertEqual(probe.normalize_config(updated), current)
         self.assertLess(updated.index('deny deny_status'), updated.index('use_backend desk_monitoring'))
 
+    def test_vpn_survives_other_ui_updates(self):
+        current='frontend xiaozhi_settings\n    http-request deny deny_status 404 if { path_beg /internal/ }\n    default_backend xiaozhi_control_planes\n'
+        updated=proxy.candidate(current,'backend desk_monitoring_hubs','backend desk_adguard_ui','backend desk_dashboard', 'backend desk_vpn_ui')
+        rerun=proxy.candidate(updated,'backend desk_monitoring_hubs')
+        self.assertEqual(updated,rerun)
+        self.assertIn('path_beg /dns /monitor /vpn',rerun)
+        self.assertIn('use_backend desk_vpn_ui',rerun)
+        self.assertEqual(rerun.count('backend desk_vpn_ui\n'),1)
+
     def test_only_monitoring_haproxy_changes_are_allowed(self):
         snapshot = {'units': {'keepalived': {'MainPID': '1', 'ActiveState': 'active'}}, 'digests': {'/etc/haproxy/haproxy.cfg': 'old', '/etc/resolv.conf': 'same'}, 'haproxy_base': 'same'}
         new = {**snapshot, 'digests': {**snapshot['digests'], '/etc/haproxy/haproxy.cfg': 'new'}}

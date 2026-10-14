@@ -19,6 +19,7 @@ type Config struct {
 	Protocol, Node, Management, VIP, Interface, Wireguard string
 	Port                                                  int
 	Legacy                                                bool
+	UIManaged                                             bool   `json:"ui_managed"`
 	ServerPublic                                          string `json:"server_public"`
 	Peers                                                 map[string]string
 	Nodes                                                 map[string]string
@@ -37,7 +38,7 @@ func read(path string, target interface{}) error {
 	return json.Unmarshal(b, target)
 }
 func valid(c Config) bool {
-	return c.Protocol == "desk-vpn-ha-v1" && c.Interface == "wlan0" && c.Wireguard == "wgdesk0" && c.Port == 51820 && c.VIP == "192.168.1.254" && len(c.Nodes) == 3 && c.Nodes[c.Node] == c.Management && len(c.Peers) > 0
+	return c.Protocol == "desk-vpn-ha-v1" && c.Interface == "wlan0" && c.Wireguard == "wgdesk0" && c.Port == 51820 && c.VIP == "192.168.1.254" && len(c.Nodes) == 3 && c.Nodes[c.Node] == c.Management && len(c.Peers) <= 32
 }
 func addresses(iface string) (map[string]bool, error) {
 	i, e := net.InterfaceByName(iface)
@@ -84,7 +85,26 @@ func command(name string, args ...string) (string, error) {
 	}
 	return strings.TrimSpace(string(v)), e
 }
+func syncReady(c Config, path string, now float64) bool {
+	if !c.UIManaged {
+		return true
+	}
+	var v struct {
+		Protocol, Node string
+		Observed       float64 `json:"observed_at"`
+		Revision       int
+		Applied        int `json:"applied_revision"`
+		Ready          bool
+	}
+	if read(path, &v) != nil {
+		return false
+	}
+	return v.Protocol == "desk-vpn-sync-v1" && v.Node == c.Node && v.Ready && v.Revision >= 0 && v.Applied == v.Revision && now-v.Observed >= -1 && now-v.Observed < 35
+}
 func ready(c Config) bool {
+	if !syncReady(c, "/run/desk-vpn-ui-sync/status.json", float64(time.Now().Unix())) {
+		return false
+	}
 	a, e := addresses(c.Interface)
 	if e != nil || !a[c.Management] {
 		return false
@@ -118,6 +138,9 @@ func ready(c Config) bool {
 		if len(p) == 2 {
 			seen[p[0]] = p[1]
 		}
+	}
+	if len(seen) != len(c.Peers) {
+		return false
 	}
 	for k, v := range c.Peers {
 		if seen[k] != v {

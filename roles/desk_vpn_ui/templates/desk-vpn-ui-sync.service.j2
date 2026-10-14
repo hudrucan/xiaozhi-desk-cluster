@@ -1,0 +1,37 @@
+[Unit]
+Description=Desk VPN quorum configuration and native proxy
+After=network-online.target desk-vpn.service desk-vpn-ui.service
+Wants=network-online.target desk-vpn-ui.service
+[Service]
+Group=desk-vpn-ui
+ExecStart=/usr/bin/python3 /usr/local/libexec/desk-vpn-ui/sync.py /etc/desk-vpn-ui/config.json
+Environment=PYTHONPATH={{ desk_vpn_ui_crypto }}
+Environment=PYTHONDONTWRITEBYTECODE=1
+Restart=on-failure
+RestartSec=5
+RuntimeDirectory=desk-vpn-ui-sync
+RuntimeDirectoryMode=0755
+RuntimeDirectoryPreserve=restart
+UMask=0007
+Nice=10
+CPUWeight=1
+CPUQuota=20%
+MemoryMax=96M
+TasksMax=48
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_SETUID CAP_SETGID
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ReadWritePaths=/var/lib/desk-vpn-ui /var/lib/desk-vpn-ui-sync /etc/desk-vpn /run/desk-vpn-ui-sync
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+IPAddressDeny=any
+IPAddressAllow=localhost
+IPAddressAllow=10.10.10.0/24
+InaccessiblePaths=-/etc/desk-vpn-recovery -/etc/desk-vpn-ddns -/etc/desk-monitoring -/etc/desk-dns -/etc/nats -/etc/xiaozhi-control-plane -/run/credentials
+[Install]
+WantedBy=multi-user.target

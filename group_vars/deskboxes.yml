@@ -39,3 +39,6 @@ desk_node_control_port: 8011
 
 # Combined workers are deployed; retain activity icons on panel-only reruns.
 xiaozhi_panel_worker_activity_enabled: true
+
+# Independent wg-easy UI replicas behind the shared dashboard ingress.
+desk_vpn_ui_enabled: true

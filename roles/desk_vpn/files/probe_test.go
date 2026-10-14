@@ -46,3 +46,23 @@ func TestMembership(t *testing.T) {
 		t.Fatal("wrong VIP accepted")
 	}
 }
+
+func TestSyncedEligibility(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "sync.json")
+	c := Config{Node: "n1", UIManaged: true}
+	if syncReady(c, p, 100) {
+		t.Fatal("missing sync eligible")
+	}
+	for _, v := range []struct {
+		body string
+		want bool
+	}{
+		{`{"protocol":"desk-vpn-sync-v1","node":"n1","observed_at":99,"revision":2,"applied_revision":2,"ready":true}`, true},
+		{`{"protocol":"desk-vpn-sync-v1","node":"n1","observed_at":99,"revision":2,"applied_revision":1,"ready":true}`, false},
+		{`{"protocol":"desk-vpn-sync-v1","node":"n1","observed_at":60,"revision":2,"applied_revision":2,"ready":true}`, false}} {
+		os.WriteFile(p, []byte(v.body), 0600)
+		if syncReady(c, p, 100) != v.want {
+			t.Fatal("sync eligibility mismatch")
+		}
+	}
+}

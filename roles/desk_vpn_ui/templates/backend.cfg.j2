@@ -1,0 +1,13 @@
+backend desk_vpn_ui
+    mode http
+    cookie DESK_VPN_UI insert indirect nocache httponly
+    retries 2
+    option redispatch
+    retry-on conn-failure empty-response response-timeout 503 504
+    http-request disable-l7-retry unless { method GET HEAD }
+    option httpchk GET /health
+    http-check expect status 200
+    timeout server 40s
+    server deskb1x 10.10.10.11:51823 check inter 3s fall 3 rise 2 cookie deskb1x
+    server deskb2x 10.10.10.12:51823 check inter 3s fall 3 rise 2 cookie deskb2x
+    server deskb3x 10.10.10.13:51823 check inter 3s fall 3 rise 2 cookie deskb3x

@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -81,7 +82,7 @@ func endpoint(s string) bool {
 	return e == nil && n > 0 && n <= 65535 && ip != nil && ip.To4() != nil && ip.IsGlobalUnicast() && !ip.IsPrivate() && !ip.IsLoopback() && !ip.IsLinkLocalUnicast() && host != "0.0.0.0"
 }
 func validPublic(p Public, node string) bool {
-	if p.Protocol != "desk-vpn-ha-v1" || p.Node != node || p.VIP != "192.168.1.254" || p.Interface != "wlan0" || p.Wireguard != "wgdesk0" || p.ServerPublic == "" || len(p.Peers) == 0 || len(p.Peers) > 32 {
+	if p.Protocol != "desk-vpn-ha-v1" || p.Node != node || p.VIP != "192.168.1.254" || p.Interface != "wlan0" || p.Wireguard != "wgdesk0" || p.ServerPublic == "" || len(p.Peers) > 32 {
 		return false
 	}
 	for key, cidr := range p.Peers {
@@ -208,7 +209,7 @@ func routeReady(p Public) bool {
 }
 
 // Invoke only after a false->true VIP transition with a fresh single-owner hint.
-func recoverPeers(p Public, h Hint, acquired int64, owns func() bool, run func(string, ...string) (string, error), poke func(string)) int {
+func recoverPeers(p Public, h Hint, acquired int64, owns func() bool, run func(string, ...string) (string, error), poke func(string), secure ...func(string, []string, string) (string, error)) int {
 	text, e := run("/usr/bin/wg", "show", p.Wireguard, "latest-handshakes")
 	if e != nil {
 		return 0
@@ -232,20 +233,46 @@ func recoverPeers(p Public, h Hint, acquired int64, owns func() bool, run func(s
 	keep := fields(keepText)
 	for peer, addr := range h.Peers {
 		cidr, ok := p.Peers[peer]
-		if !ok || allowed[peer] != cidr || !endpoint(addr) || !owns() || psks[peer] != "(none)" || keep[peer] != "off" && keep[peer] != "0" {
+		if !ok || allowed[peer] != cidr || !endpoint(addr) || !owns() {
 			continue
+		}
+		psk := psks[peer]
+		ka := keep[peer]
+		if psk != "(none)" {
+			b, e := base64.StdEncoding.DecodeString(psk)
+			if e != nil || len(b) != 32 {
+				continue
+			}
+		}
+		if ka != "off" {
+			n, e := strconv.Atoi(ka)
+			if e != nil || n < 0 || n > 65535 {
+				continue
+			}
 		}
 		stamp, _ := strconv.ParseInt(stamps[peer], 10, 64)
 		if stamp >= acquired {
 			continue
 		}
-		// Re-add the exact configured public-key-only peer to discard stale ephemeral state.
+		// Re-add the exact peer, preserving configured PSK and keepalive in RAM only.
 		if _, e = run("/usr/bin/wg", "set", p.Wireguard, "peer", peer, "remove"); e != nil {
 			continue
 		}
 		args := []string{"set", p.Wireguard, "peer", peer, "allowed-ips", cidr, "endpoint", addr}
-		if _, e = run("/usr/bin/wg", args...); e != nil {
-			run("/usr/bin/wg", args...)
+		if ka != "off" && ka != "0" {
+			args = append(args, "persistent-keepalive", ka)
+		}
+		configure := func() (string, error) { return run("/usr/bin/wg", args...) }
+		if psk != "(none)" {
+			args = append(args, "preshared-key", "/dev/stdin")
+			fn := secureCommand
+			if len(secure) > 0 {
+				fn = secure[0]
+			}
+			configure = func() (string, error) { return fn("/usr/bin/wg", args, psk+"\n") }
+		}
+		if _, e = configure(); e != nil {
+			configure()
 			continue
 		}
 		if !owns() {
@@ -268,6 +295,17 @@ func poke(ip string) {
 	defer c.Close()
 	c.SetWriteDeadline(time.Now().Add(500 * time.Millisecond))
 	c.Write([]byte{0})
+}
+func secureCommand(name string, args []string, input string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Stdin = strings.NewReader(input)
+	b, e := cmd.Output()
+	if len(b) > 16384 {
+		return "", errors.New("oversize runtime output")
+	}
+	return strings.TrimSpace(string(b)), e
 }
 func main() {
 	log.SetFlags(0)
@@ -308,10 +346,14 @@ func main() {
 			if e != nil {
 				return
 			}
-			if from.Port != 51854 || owned(p) {
+			if from.Port != 51854 {
 				continue
 			}
-			h, e := decode(buf[:n], from.IP.String(), c, p, key, time.Now())
+			var current Public
+			if bounded("/etc/desk-vpn/public.json", &current) != nil || !validPublic(current, c.Node) {
+				continue
+			}
+			h, e := decode(buf[:n], from.IP.String(), c, current, key, time.Now())
 			if e == nil {
 				cache.store(h)
 			}
@@ -326,6 +368,9 @@ func main() {
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 	for now := range ticker.C {
+		if bounded("/etc/desk-vpn/public.json", &p) != nil || !validPublic(p, c.Node) {
+			continue
+		}
 		owner := owned(p)
 		if owner && !wasOwner {
 			acquired = now
