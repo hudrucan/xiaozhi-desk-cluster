@@ -61,6 +61,7 @@ type Node struct {
 	CollectorStarted     *time.Time            `json:"collector_started_at,omitempty"`
 	Online               bool                  `json:"online"`
 	VIP                  map[string]*bool      `json:"vip"`
+	VPNReady             *bool                 `json:"vpn_ready"`
 	MQTT                 *int                  `json:"mqtt"`
 	Core                 *int                  `json:"core"`
 	Sessions             map[string]int        `json:"sessions"`
@@ -281,7 +282,7 @@ type Dashboard struct {
 }
 
 func unknown(member Member) Node {
-	return Node{Protocol: protocol, ID: member.ID, IP: member.Management, VIP: map[string]*bool{"xiaozhi": nil, "dns": nil}, Activity: map[string]*int{"asr": nil, "llm": nil, "tts": nil}, Components: map[string]string{}, Config: map[string]SyncStatus{}, Sessions: map[string]int{}}
+	return Node{Protocol: protocol, ID: member.ID, IP: member.Management, VIP: map[string]*bool{"xiaozhi": nil, "dns": nil, "vpn": nil}, Activity: map[string]*int{"asr": nil, "llm": nil, "tts": nil}, Components: map[string]string{}, Config: map[string]SyncStatus{}, Sessions: map[string]int{}}
 }
 func number(v any) *int {
 	n, ok := v.(float64)
@@ -365,6 +366,17 @@ func vipOwner(path string, addresses map[string]bool) *bool {
 	}
 	owned := addresses[ip]
 	return &owned
+}
+func vpnReadiness(v map[string]any, boot, node string, now time.Time) *bool {
+	if boot == "" || v["protocol"] != "desk-vpn-status-v1" || v["boot_id"] != boot || v["node"] != node {
+		return nil
+	}
+	stamp, ok := v["observed_at"].(string)
+	at, e := time.Parse(time.RFC3339Nano, stamp)
+	if !ok || e != nil || !panelFresh(at, now, 20*time.Second) {
+		return nil
+	}
+	return boolean(v["ready"])
 }
 func localAddresses() map[string]bool {
 	addresses, e := net.InterfaceAddrs()
@@ -557,6 +569,15 @@ func (d *Dashboard) collect(ctx context.Context) {
 	addresses := localAddresses()
 	n.VIP["xiaozhi"] = vipOwner("/etc/xiaozhi-ingress.json", addresses)
 	n.VIP["dns"] = vipOwner("/etc/desk-dns/vip.json", addresses)
+	n.VIP["vpn"] = vipOwner("/etc/desk-vpn/public.json", addresses)
+	n.VPNReady = vpnReadiness(readJSON("/run/desk-vpn-vip/status.json", 4096), n.Boot, n.ID, time.Now())
+	n.Components["vpn"] = "unknown"
+	if n.VPNReady != nil {
+		n.Components["vpn"] = "unavailable"
+		if *n.VPNReady {
+			n.Components["vpn"] = "ready"
+		}
+	}
 	raw, _ := os.ReadFile("/proc/stat")
 	current := parseCPU(string(raw))
 	n.CPU = cpuPercent(d.cpu, current)
@@ -837,12 +858,14 @@ func (d *Dashboard) observeAt(previous, current Node, now time.Time) {
 	} else {
 		d.resetCandidate("dns_routing")
 	}
-	for _, key := range []string{"xiaozhi", "dns"} {
+	for _, key := range []string{"xiaozhi", "dns", "vpn"} {
 		a, b := previous.VIP[key], current.VIP[key]
 		if a != nil && b != nil && *a != *b {
 			label := "Xiaozhi VIP"
 			if key == "dns" {
 				label = "DNS VIP"
+			} else if key == "vpn" {
+				label = "VPN VIP"
 			}
 			verb, from, to := "released", "Owner", "Standby"
 			if *b {
@@ -949,10 +972,10 @@ func validateNode(n Node, m Member, now time.Time) bool {
 		}
 	}
 	for key, value := range n.Components {
-		if key != "mqtt" && key != "core" && key != "worker" && key != "dns" {
+		if key != "mqtt" && key != "core" && key != "worker" && key != "dns" && key != "vpn" {
 			return false
 		}
-		if value != "ready" && value != "unavailable" {
+		if value != "ready" && value != "unavailable" && !(key == "vpn" && value == "unknown") {
 			return false
 		}
 	}
@@ -1082,6 +1105,7 @@ type PanelNode struct {
 	Memory      *float64             `json:"memory_percent"`
 	Temperature *float64             `json:"temperature_c"`
 	VIP         map[string]*bool     `json:"vip"`
+	VPNReady    *bool                `json:"vpn_ready"`
 	Jobs        PanelJobs            `json:"jobs"`
 	MQTT        *int                 `json:"mqtt_clients"`
 	Core        *int                 `json:"conversations"`
@@ -1145,7 +1169,7 @@ func panelMetric(value *float64) *float64 {
 }
 func panelSnapshot(snapshot Snapshot, members []Member, now time.Time) Panel {
 	p := Panel{Protocol: panelProtocol, State: "unavailable", AgeMS: panelAge(snapshot.At, now), PollMS: int(interval / time.Millisecond), StaleMS: int(staleAfter / time.Millisecond),
-		Owners: map[string]PanelOwner{"xiaozhi": {State: "unknown"}, "dns": {State: "unknown"}}, DNS: PanelDNS{Mode: "unknown", Eligible: []string{}}, Nodes: []PanelNode{}, Client: PanelClient{State: "unknown"}, Events: []PanelEvent{}}
+		Owners: map[string]PanelOwner{"xiaozhi": {State: "unknown"}, "dns": {State: "unknown"}, "vpn": {State: "unknown"}}, DNS: PanelDNS{Mode: "unknown", Eligible: []string{}}, Nodes: []PanelNode{}, Client: PanelClient{State: "unknown"}, Events: []PanelEvent{}}
 	if !snapshot.At.IsZero() {
 		at := snapshot.At
 		p.At = &at
@@ -1168,7 +1192,7 @@ func panelSnapshot(snapshot Snapshot, members []Member, now time.Time) Panel {
 			p.State = "ready"
 		}
 	}
-	for _, key := range []string{"xiaozhi", "dns"} {
+	for _, key := range []string{"xiaozhi", "dns", "vpn"} {
 		owners := []string{}
 		for _, m := range members {
 			if n, ok := fresh[m.ID]; ok && n.VIP[key] != nil && *n.VIP[key] {
@@ -1182,7 +1206,7 @@ func panelSnapshot(snapshot Snapshot, members []Member, now time.Time) Panel {
 			p.Owners[key] = PanelOwner{State: "conflict"}
 			p.State = "degraded"
 		}
-		if len(owners) == 0 && current {
+		if len(owners) == 0 && current && key != "vpn" {
 			p.State = "degraded"
 		}
 	}
@@ -1217,7 +1241,7 @@ func panelSnapshot(snapshot Snapshot, members []Member, now time.Time) Panel {
 		p.State = "degraded"
 	}
 	for _, m := range members {
-		n := PanelNode{ID: m.ID, IP: m.Management, VIP: map[string]*bool{"xiaozhi": nil, "dns": nil}, Admission: map[string]*bool{"worker": nil, "core": nil, "mqtt": nil}, Components: map[string]string{}, Config: map[string]PanelSync{}}
+		n := PanelNode{ID: m.ID, IP: m.Management, VIP: map[string]*bool{"xiaozhi": nil, "dns": nil, "vpn": nil}, Admission: map[string]*bool{"worker": nil, "core": nil, "mqtt": nil}, Components: map[string]string{}, Config: map[string]PanelSync{}}
 		for _, old := range snapshot.Nodes {
 			if old.ID == m.ID {
 				n.AgeMS = panelAge(old.At, now)
@@ -1239,7 +1263,9 @@ func panelSnapshot(snapshot Snapshot, members []Member, now time.Time) Panel {
 			n.Jobs = PanelJobs{ASR: value.Activity["asr"], LLMVLM: value.Activity["llm"], TTS: value.Activity["tts"]}
 			n.MQTT = value.MQTT
 			n.Core = value.Core
-			for _, key := range []string{"xiaozhi", "dns"} {
+			n.VPNReady = value.VPNReady
+			n.Components["vpn"] = value.Components["vpn"]
+			for _, key := range []string{"xiaozhi", "dns", "vpn"} {
 				n.VIP[key] = value.VIP[key]
 			}
 			for _, key := range []string{"worker", "core", "mqtt"} {
@@ -1333,7 +1359,8 @@ func (d *Dashboard) handle(w http.ResponseWriter, r *http.Request) {
 		http.ServeFile(w, r, "/etc/desk-ui/index.html")
 		return
 	case "/health":
-		ready := len(d.snapshot.Nodes) == len(d.config.Members) && time.Since(d.snapshot.At) < staleAfter
+		// Stay available when peers fail, but never admit a collector that rejects its own snapshot.
+		ready := len(d.snapshot.Nodes) == len(d.config.Members) && time.Since(d.snapshot.At) < staleAfter && validateNode(d.local, d.member, time.Now())
 		if !ready {
 			w.WriteHeader(http.StatusServiceUnavailable)
 		}

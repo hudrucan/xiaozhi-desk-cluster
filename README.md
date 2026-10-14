@@ -532,6 +532,7 @@ two-digit node number on the right. Role labels are independent of activity icon
 | Established core transport session | `Co` |
 | Actual local Xiaozhi VIP ownership | `iP` |
 | Actual local DNS VIP ownership, when configured | `dn` |
+| Actual local WireGuard VIP ownership, when configured | `tL` |
 | No active roles | `--` |
 
 For example, node 2 with MQTT and core alternates `nt 02` and `Co 02`.

@@ -1,0 +1,31 @@
+[Unit]
+Description=Desk WireGuard independent unicast VRRP
+Wants=network-online.target desk-vpn.service
+After=network-online.target desk-vpn.service
+
+[Service]
+Type=simple
+RuntimeDirectory=desk-vpn-vip
+RuntimeDirectoryMode=0700
+ExecStartPre=/usr/sbin/keepalived --config-test --use-file=/etc/desk-vpn/keepalived.conf
+ExecStart=/usr/sbin/keepalived --dont-fork --log-console --vrrp --use-file=/etc/desk-vpn/keepalived.conf --pid=/run/desk-vpn-vip/parent.pid --vrrp_pid=/run/desk-vpn-vip/vrrp.pid
+ExecStopPost=/usr/bin/python3 /usr/local/libexec/desk-vpn/owner.py backup
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=10
+MemoryMax=48M
+TasksMax=32
+Environment=GOMAXPROCS=1
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_SETUID CAP_SETGID
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_NETLINK AF_PACKET
+ReadWritePaths=/run/desk-vpn-vip
+
+[Install]
+WantedBy=multi-user.target

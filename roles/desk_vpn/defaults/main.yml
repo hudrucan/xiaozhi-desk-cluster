@@ -1,0 +1,8 @@
+---
+desk_vpn_vip: 192.168.1.254
+desk_vpn_vrid: 53
+desk_vpn_endpoint: vpn.huynm.dev
+desk_vpn_port: 51820
+desk_vpn_preempt_delay: 30
+# Physical node endpoint stays closed after the confirmed modem VIP cutover.
+desk_vpn_legacy_node3_enabled: false

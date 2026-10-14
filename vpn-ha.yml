@@ -1,0 +1,8 @@
+---
+- name: Symmetric opt-in WireGuard HA on three existing nodes
+  hosts: deskboxes
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  roles:
+    - desk_vpn

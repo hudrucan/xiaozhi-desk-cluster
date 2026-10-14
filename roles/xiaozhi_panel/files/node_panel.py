@@ -24,7 +24,7 @@ CONFIG_PATH = "/etc/xiaozhi-node-panel.json"
 DRIVER_PATH = "/usr/libexec/deskbox-front-panel"
 MAX_JSON_BYTES = 65536
 GLYPHS = {"-": 0x40, "i": 0x04, "P": 0x73, "n": 0x54, "t": 0x78,
-          "C": 0x39, "o": 0x5C, "d": 0x5E}
+          "C": 0x39, "o": 0x5C, "d": 0x5E, "L": 0x38}
 ROLE_INTERVAL_SECONDS = 1.5
 STATUS_INTERVAL_SECONDS = 1.0
 FRAME_INTERVAL_SECONDS = 0.05
@@ -85,17 +85,16 @@ def load_config(path):
             r"[A-Za-z0-9_-]{1,128}", config["core_id"]):
             raise ValueError("invalid local core identity")
     for key, expected in (("dns_state_file", "/etc/desk-dns/vip.json"),
-                          ("dns_activity_path", "/run/desk-dns/activity.json")):
+                          ("dns_activity_path", "/run/desk-dns/activity.json"),
+                          ("vpn_state_file", "/etc/desk-vpn/public.json")):
         if key in config and config[key] != expected:
-            raise ValueError("invalid DNS panel metadata path")
+            raise ValueError("invalid panel metadata path")
     return config
 
 
-def local_vip_owner(config, state_key="ingress_state_file"):
-    """Read applied ingress state and actual addresses; never query Cloud/HTTP."""
+def management_addresses(config):
+    """One bounded local address snapshot for every role in a poll."""
     try:
-        state = read_json(config[state_key])
-        vip = str(ipaddress.IPv4Address(state["vip"]))
         result = subprocess.run(
             ["/usr/sbin/ip", "-j", "-4", "address", "show", "dev",
              config["management_interface"]],
@@ -105,8 +104,19 @@ def local_vip_owner(config, state_key="ingress_state_file"):
             check=False,
         )
         if result.returncode != 0 or len(result.stdout) > MAX_JSON_BYTES:
-            return False
-        interfaces = json.loads(result.stdout)
+            return []
+        return json.loads(result.stdout)
+    except (OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError):
+        return []
+
+
+def local_vip_owner(config, state_key="ingress_state_file", interfaces=None):
+    """Read applied VIP metadata and actual addresses; never query Cloud/HTTP."""
+    try:
+        state = read_json(config[state_key])
+        vip = str(ipaddress.IPv4Address(state["vip"]))
+        if interfaces is None:
+            interfaces = management_addresses(config)
         return any(
             interface["ifname"] == config["management_interface"]
             and any(address.get("family") == "inet" and address.get("local") == vip
@@ -167,7 +177,7 @@ def core_session_active(config):
         return False
 
 
-def display_text(node_number, vip_owner, mqtt_active=False, core_active=False, phase=0, dns_owner=False):
+def display_text(node_number, vip_owner, mqtt_active=False, core_active=False, phase=0, dns_owner=False, vpn_owner=False):
     roles = []
     if mqtt_active:
         roles.append("nt")
@@ -177,6 +187,8 @@ def display_text(node_number, vip_owner, mqtt_active=False, core_active=False, p
         roles.append("iP")
     if dns_owner:
         roles.append("dn")
+    if vpn_owner:
+        roles.append("tL")
     status = roles[phase % len(roles)] if roles else "--"
     return status + f"{node_number:02d}"
 
@@ -331,7 +343,8 @@ def run(config, driver, placeholder=False):
             previous_mqtt = None
             previous_core = None
             previous_dns_owner = None
-            dns_owner = False
+            dns_owner = vpn_owner = False
+            previous_vpn_owner = None
             dns_pulse = DnsPulse()
             owner = mqtt_active = core_active = False
             icons = 0
@@ -341,21 +354,23 @@ def run(config, driver, placeholder=False):
             while not stopping.is_set():
                 now = time.monotonic()
                 if not placeholder and now >= next_status_poll:
-                    owner = local_vip_owner(config)
-                    dns_owner = local_vip_owner(config, "dns_state_file") if "dns_state_file" in config else False
+                    addresses = management_addresses(config)
+                    owner = local_vip_owner(config, interfaces=addresses)
+                    dns_owner = local_vip_owner(config, "dns_state_file", addresses) if "dns_state_file" in config else False
+                    vpn_owner = local_vip_owner(config, "vpn_state_file", addresses) if "vpn_state_file" in config else False
                     mqtt_active = mqtt_connection_active(config)
                     core_active = core_session_active(config)
                     icons = connectivity_icons(config, driver)
                     now = time.monotonic()
                     next_status_poll = now + STATUS_INTERVAL_SECONDS
-                roles = (owner, mqtt_active, core_active, dns_owner)
+                roles = (owner, mqtt_active, core_active, dns_owner, vpn_owner)
                 if roles != previous_roles:
                     # Restart the sequence when ownership/activity changes.
                     rotation_started = now
                     previous_roles = roles
                 phase = int((now - rotation_started) / ROLE_INTERVAL_SECONDS)
                 segments = segments_for(display_text(
-                    config["node_number"], owner, mqtt_active, core_active, phase, dns_owner), driver)
+                    config["node_number"], owner, mqtt_active, core_active, phase, dns_owner, vpn_owner), driver)
                 if segments != previous_segments:
                     for index, (address, value) in enumerate(zip(driver.DIGIT_ADDRS, segments)):
                         if previous_segments is None or value != previous_segments[index]:
@@ -381,6 +396,9 @@ def run(config, driver, placeholder=False):
                 if dns_owner != previous_dns_owner and not placeholder:
                     LOGGER.info("node=%02d dns_vip_owner=%s", config["node_number"], dns_owner)
                     previous_dns_owner = dns_owner
+                if vpn_owner != previous_vpn_owner and not placeholder:
+                    LOGGER.info("node=%02d vpn_vip_owner=%s", config["node_number"], vpn_owner)
+                    previous_vpn_owner = vpn_owner
                 if placeholder:
                     break
                 stopping.wait(FRAME_INTERVAL_SECONDS)

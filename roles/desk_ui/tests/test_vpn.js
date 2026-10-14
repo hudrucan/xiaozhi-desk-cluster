@@ -1,0 +1,15 @@
+'use strict';
+const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict'),path=require('node:path');
+const source=fs.readFileSync(path.join(__dirname,'../templates/index.html.j2'),'utf8');
+const code=source.slice(source.indexOf('function blank'),source.indexOf('function configSummary'))+source.slice(source.indexOf('function topologyModel'),source.indexOf('let currentTopology'));
+const context=vm.createContext({state:{unavailable:false},Date,Set,Number,String,icon:()=>'',esc:String,dnsCurrent:()=>false});
+vm.runInContext(code,context);
+const node=(id,owner=true)=>({id,ip:'192.168.1.101',online:true,observed_at:new Date().toISOString(),vip:{xiaozhi:false,dns:false,vpn:owner},activity:{},mqtt:0,core:0});
+assert.match(context.roles(node('deskb1x')),/VPN VIP/);
+assert.doesNotMatch(context.roles(node('deskb2x',false)),/VPN VIP/);
+assert.equal(context.topologyModel([node('deskb1x')]).vpn.node.id,'deskb1x');
+assert.equal(context.topologyModel([node('deskb1x'),node('deskb2x')]).vpn.label,'Conflicting owners');
+const stale=node('deskb1x');stale.observed_at=new Date(Date.now()-30000).toISOString();
+assert.equal(context.topologyModel([stale]).vpn.node,null);
+assert.equal(context.live(stale).vip.vpn,undefined);
+console.log('PASS VPN role, owner, conflict and stale telemetry UI');

@@ -1,0 +1,12 @@
+[Interface]
+PrivateKey = {{ desk_vpn_credentials.server_private }}
+Address = 10.77.0.1/24
+ListenPort = {{ desk_vpn_port }}
+MTU = 1380
+FwMark = 51853
+PostUp = /usr/bin/python3 /usr/local/libexec/desk-vpn/firewall.py up
+PostDown = /usr/bin/python3 /usr/local/libexec/desk-vpn/firewall.py down
+
+[Peer]
+PublicKey = {{ desk_vpn_credentials.client_public }}
+AllowedIPs = 10.77.0.2/32

@@ -7,3 +7,6 @@ xiaozhi_panel_worker_activity_enabled: false
 
 # Optional DNS metadata; missing/stale files never claim ownership or traffic.
 xiaozhi_panel_dns_enabled: true
+
+# Optional VPN ownership; missing metadata never claims a tunnel owner.
+xiaozhi_panel_vpn_enabled: true

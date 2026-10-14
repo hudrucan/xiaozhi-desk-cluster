@@ -474,3 +474,88 @@ func TestTelemetryDebounceDoesNotRetainStaleOwnerOrActivity(t *testing.T) {
 		t.Fatal("compact API retained stale ownership during debounce")
 	}
 }
+
+func TestVPNReadinessRejectsStaleWrongBootAndMalformedSnapshots(t *testing.T) {
+	now := time.Now()
+	v := map[string]any{"protocol": "desk-vpn-status-v1", "node": "deskb1x", "boot_id": "boot", "observed_at": now.Format(time.RFC3339Nano), "ready": true}
+	if r := vpnReadiness(v, "boot", "deskb1x", now); r == nil || !*r {
+		t.Fatal("fresh probe missing")
+	}
+	for key, bad := range map[string]any{"node": "deskb2x", "boot_id": "old", "protocol": "other", "ready": "true", "observed_at": now.Add(-21 * time.Second).Format(time.RFC3339Nano)} {
+		original := v[key]
+		v[key] = bad
+		if vpnReadiness(v, "boot", "deskb1x", now) != nil {
+			t.Fatalf("accepted invalid %s", key)
+		}
+		v[key] = original
+	}
+	v["ready"] = false
+	if r := vpnReadiness(v, "boot", "deskb1x", now); r == nil || *r {
+		t.Fatal("failed probe became ready")
+	}
+}
+func TestPanelVPNOwnerProjectionAndConflict(t *testing.T) {
+	now := time.Now()
+	s, members := panelFixture(now)
+	yes, no := true, false
+	for i := range s.Nodes {
+		s.Nodes[i].VIP["vpn"] = &no
+		s.Nodes[i].VPNReady = &yes
+	}
+	s.Nodes[2].VIP["vpn"] = &yes
+	p := panelSnapshot(s, members, now)
+	if p.Owners["vpn"].Node == nil || *p.Owners["vpn"].Node != "deskb3x" || p.Nodes[2].VPNReady == nil || !*p.Nodes[2].VPNReady {
+		t.Fatal("VPN owner lost")
+	}
+	s.Nodes[0].VIP["vpn"] = &yes
+	if panelSnapshot(s, members, now).Owners["vpn"].State != "conflict" {
+		t.Fatal("duplicate VPN owner hidden")
+	}
+}
+
+func TestValidateNodeAcceptsVPNComponentAndRejectsUnknownFields(t *testing.T) {
+	now := time.Now()
+	s, members := panelFixture(now)
+	n := s.Nodes[0]
+	for _, state := range []string{"ready", "unavailable", "unknown"} {
+		n.Components["vpn"] = state
+		if !validateNode(n, members[0], now) {
+			t.Fatalf("valid VPN component %s rejected", state)
+		}
+	}
+	n.Components["vpn"] = "unvalidated"
+	if validateNode(n, members[0], now) {
+		t.Fatal("arbitrary VPN state accepted")
+	}
+	delete(n.Components, "vpn")
+	n.Components["unexpected"] = "ready"
+	if validateNode(n, members[0], now) {
+		t.Fatal("unknown component accepted")
+	}
+}
+
+func TestHealthRequiresValidLocalSnapshotButSurvivesPeerOutage(t *testing.T) {
+	now := time.Now()
+	s, members := panelFixture(now)
+	d := &Dashboard{config: Config{Members: members}, member: members[0], local: s.Nodes[0], snapshot: s}
+	d.local.Components["vpn"] = "ready"
+	request := func() int {
+		r := httptest.NewRequest("GET", "/health", nil)
+		r.RemoteAddr = members[0].Private + ":1234"
+		w := httptest.NewRecorder()
+		d.handle(w, r)
+		return w.Code
+	}
+	if request() != 200 {
+		t.Fatal("valid VPN collector not ready")
+	}
+	d.snapshot.Nodes[1] = unknown(members[1])
+	d.snapshot.Nodes[2] = unknown(members[2])
+	if request() != 200 {
+		t.Fatal("peer outage removed healthy dashboard from HA")
+	}
+	d.local.Components["vpn"] = "unexpected"
+	if request() != 503 {
+		t.Fatal("self-rejected telemetry passed rollout health")
+	}
+}

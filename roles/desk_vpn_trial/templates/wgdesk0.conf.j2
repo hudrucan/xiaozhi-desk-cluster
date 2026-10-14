@@ -1,0 +1,11 @@
+[Interface]
+PrivateKey = {{ vpn_trial_credentials.server_private }}
+Address = 10.77.0.1/24
+ListenPort = 51820
+MTU = 1380
+PostUp = /usr/bin/python3 /usr/local/libexec/desk-vpn-trial/firewall.py up
+PostDown = /usr/bin/python3 /usr/local/libexec/desk-vpn-trial/firewall.py down
+
+[Peer]
+PublicKey = {{ vpn_trial_credentials.client_public }}
+AllowedIPs = 10.77.0.2/32

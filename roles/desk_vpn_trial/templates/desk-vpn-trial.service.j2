@@ -1,0 +1,17 @@
+[Unit]
+Description=Single-node WireGuard trial (full local subnet)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/wg-quick up /etc/desk-vpn-trial/wgdesk0.conf
+ExecStop=/usr/bin/wg-quick down /etc/desk-vpn-trial/wgdesk0.conf
+ExecStopPost=/usr/bin/python3 /usr/local/libexec/desk-vpn-trial/firewall.py down
+TimeoutStartSec=30
+TimeoutStopSec=20
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

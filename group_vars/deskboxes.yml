@@ -36,3 +36,6 @@ desk_dashboard_client_url: http://192.168.1.128:8080/
 # Explicit same-origin, confirmed per-node reboot actions; telemetry stays read-only.
 desk_node_control_enabled: true
 desk_node_control_port: 8011
+
+# Combined workers are deployed; retain activity icons on panel-only reruns.
+xiaozhi_panel_worker_activity_enabled: true

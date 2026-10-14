@@ -112,6 +112,23 @@ class DnsPanelTests(unittest.TestCase):
         for address in driver.DIGIT_ADDRS:
             self.assertEqual(len([call for call in calls if call[0] == address]), 1)
 
+    def test_vpn_ownership_shares_one_address_snapshot_and_rotates_roles(self):
+        state = Path(self.directory.name) / 'vpn.json'
+        state.write_text('{"vip":"192.168.1.254"}')
+        settings = {**self.config, 'vpn_state_file': str(state)}
+        result = SimpleNamespace(returncode=0, stdout=json.dumps([{'ifname':'wlan0', 'addr_info':[{'family':'inet','local':'192.168.1.254'}]}]))
+        with patch.object(panel.subprocess, 'run', return_value=result) as query:
+            addresses = panel.management_addresses(settings)
+            self.assertTrue(panel.local_vip_owner(settings, 'vpn_state_file', addresses))
+            self.assertFalse(panel.local_vip_owner(settings, interfaces=addresses))
+            query.assert_called_once()
+        self.assertEqual(panel.display_text(2, False, vpn_owner=True), 'tL02')
+        driver = SimpleNamespace(DIGITS={'0':0x3F,'2':0x5B})
+        self.assertEqual(panel.segments_for('tL02', driver), (0x78,0x38,0x3F,0x5B))
+        self.assertEqual([panel.display_text(2, True, phase=n, dns_owner=True, vpn_owner=True) for n in range(4)], ['iP02','dn02','tL02','iP02'])
+        state.unlink()
+        self.assertFalse(panel.local_vip_owner(settings, 'vpn_state_file', []))
+
     def test_dns_metadata_paths_are_fixed_and_opt_in_config_is_valid(self):
         path = Path(self.directory.name) / 'panel.json'
         base = {**self.config, 'dns_state_file': '/etc/desk-dns/vip.json',

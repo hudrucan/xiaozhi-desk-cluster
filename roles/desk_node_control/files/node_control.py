@@ -215,7 +215,7 @@ class Control:
             age = time.time() - datetime.fromisoformat(value['observed_at'].replace('Z', '+00:00')).timestamp()
             components = value.get('components', {})
             configs = value.get('configuration', {})
-            result['metadata'] = {k: value.get(k) for k in ('ip', 'vip', 'core', 'mqtt', 'activity', 'connections', 'admission', 'maintenance_supported', 'dns_health')}
+            result['metadata'] = {k: value.get(k) for k in ('ip', 'vip', 'core', 'mqtt', 'activity', 'connections', 'admission', 'maintenance_supported', 'dns_health', 'vpn_ready')}
             result['revisions'] = {k: configs.get(k, {}).get('revision') for k in ('xiaozhi', 'dns', 'monitoring')}
             valid = value.get('id') == self.node and value.get('boot_id') == result['boot_id'] and 0 <= age <= 15
             if valid:
@@ -399,7 +399,7 @@ class Control:
             counts = [meta.get('core'),meta.get('mqtt'),*meta.get('activity',{}).values(),*meta.get('connections',{}).values()]
             if (len(counts)<7 or not all(type(n) is int and n==0 for n in counts)
                     or not all(meta.get('admission',{}).get(k) is True for k in ('worker','core','mqtt'))
-                    or not all(meta.get('vip',{}).get(k) is False for k in ('dns','xiaozhi'))):
+                    or not all(meta.get('vip',{}).get(k) is False for k in self.managed_vips(views))):
                 raise Failure(412, 'Node drain is not complete')
             with self.lock:
                 if self.state['maintenance'] is not current or current['state']!='maintenance':
@@ -488,8 +488,15 @@ class Control:
         os.replace(temporary, path)
 
     @staticmethod
+    def managed_vips(views):
+        keys = ('dns', 'xiaozhi')
+        if Path('/etc/desk-vpn/public.json').is_file() or any(v.get('metadata', {}).get('vip', {}).get('vpn') is not None for v in views.values()):
+            keys += ('vpn',)
+        return keys
+
+    @staticmethod
     def vip_service(name, action):
-        if name not in ('keepalived', 'desk-dns-vip') or action not in ('start', 'stop'):
+        if name not in ('keepalived', 'desk-dns-vip', 'desk-vpn-vip') or action not in ('start', 'stop'):
             raise ValueError('Invalid fixed service action')
         subprocess.run(['/usr/bin/systemctl', action, name], check=True, timeout=15,
                        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -579,7 +586,7 @@ class Control:
             with self.lock:
                 if self.state['maintenance'] is not value or value['state'] != 'draining': return
                 # Preserve exactly which election services were running.
-                for service in ('keepalived', 'desk-dns-vip'):
+                for service in (('keepalived', 'desk-dns-vip', 'desk-vpn-vip') if 'vpn' in self.managed_vips(views) else ('keepalived', 'desk-dns-vip')):
                     active = subprocess.run(['/usr/bin/systemctl','is-active',service],
                                             capture_output=True, text=True, timeout=5)
                     if active.stdout.strip() == 'active': value['services'].append(service)
@@ -591,13 +598,15 @@ class Control:
                     if self.state['maintenance'] is not value or value['state'] != 'releasing_vips': return
                 views = self.views()
                 local = views.get(self.node, {}).get('metadata', {}).get('vip', {})
-                # Both VIPs must be present on exactly one healthy survivor.
+                # Every configured VIP must be present on exactly one healthy survivor.
                 peers = [views[n] for n in self.members if n != self.node]
-                if (all(local.get(k) is False for k in ('dns','xiaozhi'))
+                if (all(local.get(k) is False for k in self.managed_vips(views))
                         and all(v.get('ready') and v.get('lease') == lease for v in peers)
                         and len({encode(v.get('revisions')) for v in peers}) == 1
                         and all(sum(v.get('metadata', {}).get('vip', {}).get(k) is True for v in peers) == 1
-                                for k in ('dns','xiaozhi'))):
+                                for k in self.managed_vips(views))
+                        and all(v.get('metadata', {}).get('vpn_ready') is True for v in peers
+                                if v.get('metadata', {}).get('vip', {}).get('vpn') is True)):
                     with self.lock:
                         if self.state['maintenance'] is not value: return
                         value['state'] = 'maintenance'

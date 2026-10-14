@@ -1,0 +1,127 @@
+---
+- name: Validate explicit symmetric VPN deployment
+  ansible.builtin.assert:
+    that:
+      - groups['deskboxes'] | sort == ['deskb1x', 'deskb2x', 'deskb3x']
+      - ansible_play_hosts_all | length == 3
+      - desk_vpn_vip == '192.168.1.254'
+      - desk_vpn_vrid | int == 53
+      - desk_vpn_port | int == 51820
+- name: Verify existing module and network tools
+  ansible.builtin.command:
+    argv: [/usr/bin/python3, '-c', "import pathlib,subprocess; subprocess.run(['/usr/sbin/modprobe','-n','wireguard'],check=True); assert all(pathlib.Path(p).exists() for p in ['/usr/bin/wg','/usr/bin/wg-quick','/usr/sbin/iptables-restore','/usr/sbin/keepalived']); assert pathlib.Path('/proc/sys/net/ipv4/ip_forward').read_text().strip()=='1'"]
+  changed_when: false
+- name: Freeze protected existing services and policies
+  ansible.builtin.command:
+    argv: [/usr/bin/python3, '-c', "{{ lookup('ansible.builtin.file', 'roles/desk_ui/files/ui_guard.py') }}", freeze]
+  register: vpn_protected_before
+  changed_when: false
+  no_log: true
+- name: Load common ignored credentials and persisted randomized election
+  ansible.builtin.set_fact:
+    desk_vpn_credentials: "{{ lookup('ansible.builtin.file', 'secret/vpn-trial/credentials.json') | from_json }}"
+    desk_vpn_election: "{{ lookup('ansible.builtin.file', 'secret/vpn-ha-election.json') | from_json }}"
+  no_log: true
+- name: Validate equal membership and election ranks
+  ansible.builtin.assert:
+    that:
+      - desk_vpn_election.keys() | sort == groups['deskboxes'] | sort
+      - desk_vpn_election.values() | sort == [100, 110, 120]
+- name: Create isolated VPN configuration and helper paths
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: /etc/desk-vpn, mode: '0700'}
+    - {path: /usr/local/libexec/desk-vpn, mode: '0755'}
+- name: Stage helper and fixed reload path
+  ansible.builtin.copy:
+    src: "{{ item }}"
+    dest: "/usr/local/libexec/desk-vpn/{{ item }}"
+    mode: '0755'
+    validate: /usr/bin/python3 -c "import ast,sys; ast.parse(open(sys.argv[1]).read())" %s
+  loop: [firewall.py, reload.py, owner.py]
+  register: vpn_helpers
+- name: Install common peer configuration
+  ansible.builtin.template:
+    src: wgdesk0.conf.j2
+    dest: /etc/desk-vpn/wgdesk0.conf
+    mode: '0600'
+  no_log: true
+  register: vpn_config
+- name: Install node-specific public placement metadata
+  ansible.builtin.template:
+    src: public.json.j2
+    dest: /etc/desk-vpn/public.json
+    mode: '0600'
+  register: vpn_public
+- name: Build dependency-free ARM64 readiness helper once on controller
+  ansible.builtin.command:
+    argv: [go, build, -trimpath, -ldflags, '-s -w -buildid=', -o, /private/tmp/desk-vpn-source/probe-arm64, "{{ role_path }}/files/probe.go"]
+  environment:
+    GOOS: linux
+    GOARCH: arm64
+    CGO_ENABLED: '0'
+    GO111MODULE: 'off'
+    GOCACHE: /private/tmp/desk-vpn-go-cache
+    GOTOOLCHAIN: local
+  delegate_to: localhost
+  become: false
+  run_once: true
+- name: Install native readiness helper
+  ansible.builtin.copy:
+    src: /private/tmp/desk-vpn-source/probe-arm64
+    dest: /usr/local/libexec/desk-vpn/probe
+    mode: '0755'
+- name: Stage independent Keepalived configuration
+  ansible.builtin.template:
+    src: keepalived.conf.j2
+    dest: /etc/desk-vpn/keepalived.conf
+    mode: '0644'
+    validate: /usr/sbin/keepalived --config-test --use-file=%s
+  register: vpn_election_config
+- name: Install independent WireGuard and VPN VIP units
+  ansible.builtin.template:
+    src: "{{ item }}.j2"
+    dest: "/etc/systemd/system/{{ item }}"
+    mode: '0644'
+  loop: [desk-vpn.service, desk-vpn-vip.service]
+  register: vpn_units
+- name: Query prior canary state
+  ansible.builtin.command:
+    argv: [systemctl, is-active, desk-vpn-trial]
+  register: vpn_trial_active
+  failed_when: false
+  changed_when: false
+- name: Stop prior node-3 canary before promoting the same tunnel identity
+  ansible.builtin.systemd_service:
+    name: desk-vpn-trial
+    state: stopped
+    enabled: false
+  when: inventory_hostname == 'deskb3x'
+- name: Start prepared tunnel on all nodes without electing yet
+  ansible.builtin.systemd_service:
+    name: desk-vpn
+    daemon_reload: true
+    state: started
+    enabled: true
+- name: Reload peers and scoped firewall without rebuilding the tunnel
+  ansible.builtin.systemd_service:
+    name: desk-vpn
+    state: reloaded
+  when: vpn_config.changed or vpn_public.changed or vpn_helpers.changed
+- name: Require native readiness on all candidates
+  ansible.builtin.command:
+    argv: [/usr/local/libexec/desk-vpn/probe, ready]
+  changed_when: false
+- name: Verify protected voice DNS VIP and policy remained unchanged
+  ansible.builtin.command:
+    argv: [/usr/bin/python3, '-c', "{{ lookup('ansible.builtin.file', 'roles/desk_ui/files/ui_guard.py') }}", guard]
+    stdin: "{{ vpn_protected_before.stdout }}"
+  changed_when: false
+- name: Enable only the independent VPN election after all candidates pass
+  ansible.builtin.systemd_service:
+    name: desk-vpn-vip
+    enabled: true
+    state: "{{ 'restarted' if vpn_election_config.changed or vpn_units.changed else 'started' }}"

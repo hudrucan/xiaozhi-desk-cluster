@@ -68,6 +68,16 @@ class ControlTests(unittest.TestCase):
         with self.assertRaises(nc.Failure): self.challenge()
         self.assertFalse(self.callbacks)
 
+    def test_optional_vpn_is_included_in_required_handoff(self):
+        target=self.controls['deskb3x']
+        self.assertEqual(target.managed_vips(self.health), ('dns','xiaozhi'))
+        with patch.object(nc.Path, 'is_file', return_value=True):
+            self.assertEqual(target.managed_vips(self.health), ('dns','xiaozhi','vpn'))
+        for node,value in self.health.items():
+            value['metadata']['vip']['vpn']=node=='deskb3x'
+            value['metadata']['vpn_ready']=True
+        self.assertEqual(target.managed_vips(self.health), ('dns','xiaozhi','vpn'))
+
     def test_missing_native_dns_survivor_rejects_before_any_pause(self):
         self.health['deskb1x']['metadata']['dns_health']['eligible_backends']=['deskb1x','deskb3x']
         with self.assertRaises(nc.Failure):self.challenge()
@@ -188,6 +198,25 @@ class ControlTests(unittest.TestCase):
         with self.assertRaises(nc.Failure): self.challenge()
         self.assertFalse(self.callbacks)
         self.assertIsNone(self.controls['deskb1x'].active())
+
+    def test_vpn_election_is_stopped_and_restored_with_maintenance(self):
+        one,target=self.controls['deskb1x'],self.controls['deskb3x']
+        for node,value in self.health.items():
+            value['metadata']['vip']['vpn']=node=='deskb3x'
+            value['metadata']['vpn_ready']=True
+        def handoff(service,action):
+            if service=='desk-vpn-vip' and action=='stop':
+                self.health['deskb3x']['metadata']['vip']['vpn']=False
+                self.health['deskb1x']['metadata']['vip']['vpn']=True
+        target.vip_service.side_effect=handoff
+        token=one.challenge({'node':'deskb3x','action':'maintenance'})['token']
+        one.confirm(token);self.callbacks[0]()
+        self.assertEqual(target.state['maintenance']['state'],'maintenance')
+        target.vip_service.assert_any_call('desk-vpn-vip','stop')
+        target.reboot.assert_not_called()
+        target.resume(target.state['maintenance']['id'])
+        target.vip_service.assert_any_call('desk-vpn-vip','start')
+        self.assertIsNone(target.state['maintenance'])
 
     def test_maintenance_only_releases_vips_without_reboot_and_can_resume(self):
         one,target=self.controls['deskb1x'],self.controls['deskb3x']

@@ -1,0 +1,66 @@
+global_defs {
+    router_id VPN_{{ inventory_hostname }}
+    enable_script_security
+    script_user root
+}
+
+vrrp_script vpn_ready {
+    script "/usr/local/libexec/desk-vpn/probe ready"
+    interval 5
+    timeout 3
+    fall 2
+    rise 2
+    weight 0
+    init_fail
+}
+
+vrrp_script avoid_xiaozhi_vip {
+    script "/usr/local/libexec/desk-vpn/probe xiaozhi"
+    interval 5
+    timeout 2
+    fall 2
+    rise 3
+    weight -40
+    init_fail
+}
+
+vrrp_script avoid_dns_vip {
+    script "/usr/local/libexec/desk-vpn/probe dns"
+    interval 5
+    timeout 2
+    fall 2
+    rise 3
+    weight -40
+    init_fail
+}
+
+vrrp_instance DESK_VPN {
+    state BACKUP
+    interface wlan0
+    virtual_router_id {{ desk_vpn_vrid }}
+    priority {{ desk_vpn_election[inventory_hostname] }}
+    advert_int 1
+    preempt_delay {{ desk_vpn_preempt_delay }}
+    garp_master_refresh 30
+    garp_master_refresh_repeat 2
+    unicast_src_ip {{ ansible_host }}
+    check_unicast_src
+    track_src_ip
+    unicast_peer {
+{% for node in groups['deskboxes'] | sort if node != inventory_hostname %}
+        {{ hostvars[node].ansible_host }}
+{% endfor %}
+    }
+    virtual_ipaddress {
+        {{ desk_vpn_vip }}/24 dev wlan0
+    }
+    notify_master "/usr/bin/python3 /usr/local/libexec/desk-vpn/owner.py master"
+    notify_backup "/usr/bin/python3 /usr/local/libexec/desk-vpn/owner.py backup"
+    notify_fault "/usr/bin/python3 /usr/local/libexec/desk-vpn/owner.py backup"
+    notify_stop "/usr/bin/python3 /usr/local/libexec/desk-vpn/owner.py backup"
+    track_script {
+        vpn_ready
+        avoid_xiaozhi_vip
+        avoid_dns_vip
+    }
+}
