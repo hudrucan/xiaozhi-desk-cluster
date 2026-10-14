@@ -97,3 +97,47 @@ After the hotfix, all three nodes were online, each VIP had one owner, and root,
 Xiaozhi, DNS, monitoring, cluster status and compact panel API returned HTTP 200.
 The user confirmed the physical node-1 display reads `tL01`. Combined-worker
 activity icons are retained in group vars for subsequent panel-only rollouts.
+
+## Owner-only Cloudflare DDNS
+
+`vpn-ddns.yml` is a separate opt-in deployment. Create a dedicated Cloudflare
+API token from the Edit zone DNS template, restricted to the `huynm.dev` zone.
+Cloudflare DNS tokens cover a zone; they are not restricted to one record.
+The updater itself pins the exact record ID, hostname, A type and DNS-only
+state, and refuses other records. No developer tunnel certificate is deployed.
+
+Run locally from the repository:
+
+```bash
+python3 scripts/setup-vpn-ddns-secret.py
+ansible-playbook -i inventory.ini vpn-ddns.yml
+```
+
+The helper reads the token through a hidden prompt, validates access to the
+existing DNS-only A, and writes only ignored `secret/vpn-ddns.json` with mode
+0600. When available, it reads just the zone ID from the local cloudflared
+certificate; alternatively supply `--zone-id`. Tokens are never printed.
+
+All nodes receive the same dedicated credential through systemd LoadCredential.
+The updater uses DynamicUser, an empty capability set and inaccessible secret
+paths. Only a fresh, ready .254 owner calls external services. Every approximately
+2 minutes (plus up to 10 seconds jitter), it compares two HTTPS IPv4 observations,
+requires a global IPv4, and PATCHes only the existing A if content/TTL changed.
+Ownership and readiness are rechecked immediately before PATCH. Updates enforce
+DNS-only and TTL 120 and are read back. Standby timers do not make HTTP requests.
+Invalid IP, provider disagreement, redirects, API errors or ownership loss leave
+the existing DNS record unchanged. DDNS has no dependency into VPN readiness or
+VIP election, and writes no eMMC history. Logs contain outcome/error categories,
+never tokens or peer keys. IP changes may still require toggling client tunnels
+because WireGuard does not guarantee continuous endpoint DNS re-resolution.
+
+Inspect outcomes with `systemctl status desk-vpn-ddns.timer` and
+`journalctl -u desk-vpn-ddns -n 10`. Stopping the timer affects only DDNS.
+Code and fake regression tests are prepared; live activation requires the
+user-supplied dedicated token. No IP change is simulated on the real DNS record.
+
+DDNS fake regression tests passed (10 cases). A credential-free canary on all
+three nodes verified that the actual DynamicUser sandbox can read only its
+systemd metadata copies and sees exactly node 1 as eligible; nodes 2/3 skip.
+The helper is staged on nodes, but no DDNS timer or DNS credential has been
+installed yet. This canary made no external HTTP calls or DNS changes.

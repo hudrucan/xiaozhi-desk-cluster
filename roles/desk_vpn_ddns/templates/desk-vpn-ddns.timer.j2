@@ -1,0 +1,12 @@
+[Unit]
+Description=Low-frequency owner-only VPN DDNS checks
+
+[Timer]
+OnBootSec=90
+OnUnitInactiveSec=120
+RandomizedDelaySec=10
+AccuracySec=5
+Unit=desk-vpn-ddns.service
+
+[Install]
+WantedBy=timers.target

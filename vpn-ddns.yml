@@ -1,0 +1,9 @@
+---
+# Optional Cloudflare DDNS; no VPN restart or election dependency.
+- name: Update the pinned VPN hostname only on the healthy VPN owner
+  hosts: deskboxes
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  roles:
+    - desk_vpn_ddns

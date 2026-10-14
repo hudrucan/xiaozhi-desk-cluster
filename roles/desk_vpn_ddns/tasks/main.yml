@@ -1,0 +1,67 @@
+---
+- name: Require symmetric membership before installing DDNS
+  ansible.builtin.assert:
+    that:
+      - groups['deskboxes'] | sort == ['deskb1x', 'deskb2x', 'deskb3x']
+      - ansible_play_hosts_all | length == 3
+- name: Load dedicated ignored DNS credential
+  ansible.builtin.set_fact:
+    vpn_ddns_secret: "{{ lookup('ansible.builtin.file', 'secret/vpn-ddns.json') | from_json }}"
+  no_log: true
+- name: Validate dedicated DNS credential shape
+  ansible.builtin.assert:
+    that:
+      - vpn_ddns_secret.keys() | sort == ['api_token', 'record_id', 'zone_id']
+      - vpn_ddns_secret.zone_id is match('^[a-f0-9]{32}$')
+      - vpn_ddns_secret.record_id is match('^[a-f0-9]{32}$')
+      - vpn_ddns_secret.api_token is match('^[A-Za-z0-9_-]{20,512}$')
+  no_log: true
+- name: Require existing HA VPN readiness without changing its configuration
+  ansible.builtin.command:
+    argv: [/usr/local/libexec/desk-vpn/probe, ready]
+  changed_when: false
+- name: Create isolated DDNS configuration and helper directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    mode: "{{ item.mode }}"
+    owner: root
+    group: root
+    state: directory
+  loop:
+    - {path: /etc/desk-vpn-ddns, mode: '0700'}
+    - {path: /usr/local/libexec/desk-vpn-ddns, mode: '0755'}
+- name: Install pinned-hostname updater
+  ansible.builtin.copy:
+    src: ddns.py
+    dest: /usr/local/libexec/desk-vpn-ddns/ddns.py
+    mode: '0755'
+    validate: /usr/bin/python3 -c "import ast,sys; ast.parse(open(sys.argv[1]).read())" %s
+- name: Install only the dedicated DNS token for systemd credentials
+  ansible.builtin.copy:
+    content: "{{ vpn_ddns_secret | to_nice_json }}"
+    dest: /etc/desk-vpn-ddns/cloudflare.json
+    owner: root
+    group: root
+    mode: '0600'
+  no_log: true
+- name: Install independent bounded DDNS units
+  ansible.builtin.template:
+    src: "{{ item }}.j2"
+    dest: "/etc/systemd/system/{{ item }}"
+    mode: '0644'
+  loop: [desk-vpn-ddns.service, desk-vpn-ddns.timer]
+  register: ddns_units
+- name: Validate installed DDNS units before activation
+  ansible.builtin.command:
+    argv: [/usr/bin/systemd-analyze, verify, /etc/systemd/system/desk-vpn-ddns.service, /etc/systemd/system/desk-vpn-ddns.timer]
+  changed_when: false
+- name: Enable periodic owner-only DDNS
+  ansible.builtin.systemd_service:
+    name: desk-vpn-ddns.timer
+    enabled: true
+    state: started
+    daemon_reload: "{{ ddns_units.changed }}"
+- name: Run initial bounded owner check and readback
+  ansible.builtin.systemd_service:
+    name: desk-vpn-ddns
+    state: started

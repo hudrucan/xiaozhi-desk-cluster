@@ -1,0 +1,37 @@
+[Unit]
+Description=Owner-only Cloudflare DDNS for Desk WireGuard
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /usr/local/libexec/desk-vpn-ddns/ddns.py
+LoadCredential=cloudflare.json:/etc/desk-vpn-ddns/cloudflare.json
+LoadCredential=vpn-public.json:/etc/desk-vpn/public.json
+LoadCredential=vpn-status.json:/run/desk-vpn-vip/status.json
+DynamicUser=yes
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PYTHONUNBUFFERED=1
+UMask=0077
+CPUWeight=1
+CPUQuota=5%
+Nice=15
+MemoryMax=48M
+TasksMax=16
+LimitNOFILE=64
+TimeoutStartSec=45
+CapabilityBoundingSet=
+AmbientCapabilities=
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+InaccessiblePaths=/var/lib /opt -/etc/desk-vpn -/etc/desk-vpn-ddns -/etc/desk-node-control -/etc/desk-monitoring -/etc/desk-dns -/etc/nats -/etc/haproxy
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
