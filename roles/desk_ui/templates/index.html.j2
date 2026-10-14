@@ -3,7 +3,7 @@
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="dark"><title>Desk Cluster</title>
 <style>
 
-#desk-cluster.dc-app{--dc-bg:light-dark(#f9f6ef,#100d08);--dc-surface:light-dark(#fffdf7,#1c170f);--dc-hover:light-dark(#f2ebdd,#241e14);--dc-text:light-dark(#352a1b,#f3ead8);--dc-muted:light-dark(#756754,#b9aa91);--dc-faint:light-dark(#8b7d69,#8e8069);--dc-border:light-dark(#e0d5c3,#3d3221);--dc-gold:light-dark(#896019,#d5a85e);--dc-soft:light-dark(#f2e3c8,#332817);--dc-green:light-dark(#267046,#82bf91);--dc-red:light-dark(#b53b31,#ed9282);background:var(--dc-bg);color:var(--dc-text);font:14px/1.5 Inter,ui-sans-serif,system-ui,sans-serif;min-height:740px;padding:0 30px 28px;box-sizing:border-box;border-radius:16px}
+#desk-cluster.dc-app{--dc-bg:light-dark(#f9f6ef,#100d08);--dc-surface:light-dark(#fffdf7,#1c170f);--dc-hover:light-dark(#f2ebdd,#241e14);--dc-text:light-dark(#352a1b,#f3ead8);--dc-muted:light-dark(#756754,#b9aa91);--dc-faint:light-dark(#8b7d69,#8e8069);--dc-border:light-dark(#e0d5c3,#3d3221);--dc-gold:light-dark(#896019,#d5a85e);--dc-soft:light-dark(#f2e3c8,#332817);--dc-green:light-dark(#267046,#82bf91);--dc-red:light-dark(#b53b31,#ed9282);--dc-vpn:light-dark(#40668d,#91aecf);background:var(--dc-bg);color:var(--dc-text);font:14px/1.5 Inter,ui-sans-serif,system-ui,sans-serif;min-height:740px;padding:0 30px 28px;box-sizing:border-box;border-radius:16px}
 #desk-cluster *{box-sizing:border-box}
 #desk-cluster .dc-top{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:23px 0;border-bottom:1px solid var(--dc-border);padding-right:74px}
 #desk-cluster .dc-brand{display:flex;align-items:center;gap:10px;font-weight:650;letter-spacing:-.3px;font-size:17px}
@@ -20,13 +20,15 @@
 #desk-cluster .dc-summary b{color:var(--dc-text);font-weight:500}
 #desk-cluster .dc-nodes{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}
 #desk-cluster .dc-node{border:1px solid var(--dc-border);border-radius:17px;overflow:hidden;background:var(--dc-surface);min-width:0}
-#desk-cluster .dc-node[data-selected="true"]{border-color:var(--dc-gold)}
+#desk-cluster .dc-node[data-selected="true"]{border-color:var(--dc-muted)}
 #desk-cluster .dc-node-head{padding:19px 19px 16px;display:flex;align-items:center;justify-content:space-between;gap:8px}
 #desk-cluster .dc-node-name{font-weight:600;font-size:16px;letter-spacing:-.3px}
 #desk-cluster .dc-ip{color:var(--dc-faint);font:12px/1.5 ui-monospace,monospace;margin-top:3px}
 #desk-cluster .dc-roles{display:flex;flex-wrap:wrap;gap:6px;padding:0 19px;min-height:48px;align-content:flex-start}
 #desk-cluster .dc-role{font-size:11px;border-radius:6px;padding:4px 7px;color:var(--dc-muted);background:var(--dc-hover);display:inline-flex;gap:5px;align-items:center}
 #desk-cluster .dc-role.owner{color:var(--dc-gold);background:var(--dc-soft)}
+#desk-cluster .dc-role.owner.dns{color:var(--dc-green)}
+#desk-cluster .dc-role.owner.vpn{color:var(--dc-vpn)}
 #desk-cluster .dc-role svg{width:12px;height:12px}
 #desk-cluster .dc-activity{padding:15px 19px 19px;min-height:99px}
 #desk-cluster .dc-label{font-size:10px;text-transform:uppercase;letter-spacing:1.25px;color:var(--dc-faint);font-weight:600}
@@ -112,20 +114,25 @@ body{margin:0;background:#100d08;color:#f3ead8;font-family:Inter,ui-sans-serif,s
 #desk-cluster .dc-dns{margin:18px 0;border:1px solid var(--dc-border);border-radius:17px;background:var(--dc-surface);overflow:hidden}#desk-cluster .dc-dns-head{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:16px 20px;border-bottom:1px solid var(--dc-border)}#desk-cluster .dc-dns-head h2{font-size:15px;margin:0 0 3px}#desk-cluster .dc-dns-head p{font-size:12px;margin:0}#desk-cluster .dc-dns-grid{display:grid;grid-template-columns:1fr 1fr 2fr;gap:20px;padding:16px 20px}#desk-cluster .dc-dns-grid small,#desk-cluster .dc-dns-grid span{display:block;color:var(--dc-faint);font-size:12px}#desk-cluster .dc-dns-grid strong{display:block;font-size:13px;margin:5px 0}#desk-cluster .dc-dns-warning{color:var(--dc-red)}#desk-cluster .dc-detail-links{flex-wrap:wrap}@media(max-width:540px){ #desk-cluster .dc-dns-grid{grid-template-columns:1fr 1fr;gap:14px}#desk-cluster .dc-dns-grid>div:last-child{grid-column:1/-1}#desk-cluster .dc-dns-head{align-items:flex-start;flex-direction:column}}
 #desk-cluster .dc-topology{position:relative}
 #desk-cluster .dc-topology-endpoints{position:relative;z-index:1;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:18px}
-#desk-cluster .dc-endpoint{display:flex;align-items:flex-start;gap:12px;padding:16px 18px;background:var(--dc-surface);border:1px solid var(--dc-border);border-radius:14px;min-width:0}
+#desk-cluster .dc-endpoint{display:flex;align-items:flex-start;gap:12px;padding:16px 18px;background:var(--dc-surface);border:1px solid var(--dc-border);border-radius:14px;min-width:0;text-align:left;font:inherit;color:var(--dc-text);width:100%}
+#desk-cluster .dc-endpoint:hover{background:var(--dc-hover)}
+#desk-cluster .dc-endpoint[aria-pressed="true"]{border-color:var(--dc-muted)}
+#desk-cluster .dc-endpoint[data-dimmed="true"]{opacity:.5}
 #desk-cluster .dc-endpoint>[data-icon]{color:var(--dc-gold);flex-shrink:0;margin-top:3px}
 #desk-cluster .dc-endpoint[data-service="dns"]>[data-icon]{color:var(--dc-green)}
-#desk-cluster .dc-endpoint[data-service="vpn"]>[data-icon]{color:var(--dc-muted)}
-#desk-cluster .dc-endpoint h2{font-size:14px;font-weight:600;margin:0 0 3px}
-#desk-cluster .dc-endpoint p{font-size:12px}
+#desk-cluster .dc-endpoint[data-service="vpn"]>[data-icon]{color:var(--dc-vpn)}
+#desk-cluster .dc-endpoint-title{display:block;font-size:14px;font-weight:600;margin:0 0 3px}
+#desk-cluster .dc-endpoint-description{display:block;font-size:12px;color:var(--dc-muted)}
+#desk-cluster .dc-endpoint-vip{display:block;font:11px/1.5 ui-monospace,monospace;color:var(--dc-faint);margin-top:5px}
 #desk-cluster .dc-endpoint-owner.dc-dns-warning{color:var(--dc-red)}
 #desk-cluster .dc-endpoint-owner{display:block;margin-top:6px;font-size:11px;color:var(--dc-faint);overflow-wrap:anywhere}
 #desk-cluster .dc-topology-wires{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;overflow:visible}
 #desk-cluster .dc-topology-wires path{fill:none;stroke:var(--dc-gold);stroke-width:1.5;stroke-linejoin:round;stroke-linecap:round}
 #desk-cluster .dc-topology-wires .dc-wire-dns{stroke:var(--dc-green)}
-#desk-cluster .dc-topology-wires .dc-wire-vpn{stroke:var(--dc-muted)}
+#desk-cluster .dc-topology-wires .dc-wire-vpn{stroke:var(--dc-vpn)}
+#desk-cluster .dc-topology-wires .dc-wire-halo{stroke:var(--dc-bg);stroke-width:6;stroke-dasharray:none;opacity:1}
 #desk-cluster .dc-topology-wires .dc-wire-pool{stroke-dasharray:4 5;opacity:.65}
-#desk-cluster .dc-topology .dc-nodes{position:relative;z-index:1;margin-top:84px}
+#desk-cluster .dc-topology .dc-nodes{position:relative;z-index:1;margin-top:72px}
 #desk-cluster .dc-node-dns{padding:9px 19px;border-top:1px solid var(--dc-border);font-size:11px;color:var(--dc-faint);display:flex;align-items:center;gap:6px}
 #desk-cluster .dc-node-dns.eligible{color:var(--dc-green)}
 #desk-cluster .dc-node-dns>svg{width:12px;height:12px}
@@ -134,7 +141,11 @@ body{margin:0;background:#100d08;color:#f3ead8;font-family:Inter,ui-sans-serif,s
 #desk-cluster .dc-topology-legend{display:flex;flex-wrap:wrap;gap:10px 20px;margin-top:13px;font-size:11px;color:var(--dc-faint)}
 #desk-cluster .dc-topology-legend span{display:flex;gap:7px;align-items:center}
 #desk-cluster .dc-topology-key{width:19px;height:0;border-top:1.5px solid var(--dc-gold)}
-#desk-cluster .dc-topology-key.pool{border-color:var(--dc-green);border-top-style:dashed}
+#desk-cluster .dc-topology-key.dns{border-color:var(--dc-green)}
+#desk-cluster .dc-topology-key.vpn{border-color:var(--dc-vpn)}
+#desk-cluster .dc-topology-key.pool{border-color:var(--dc-muted);border-top-style:dashed}
+#desk-cluster .dc-topology-legend [hidden]{display:none}
+#desk-cluster .dc-topology-hint{margin-left:auto}
 #desk-cluster .dc-topology-key.worker{border:0;width:6px;height:6px;border-radius:50%;background:var(--dc-gold)}
 #desk-cluster .dc-dns summary{padding:13px 18px;display:flex;justify-content:space-between;align-items:center;gap:12px;list-style:none;cursor:pointer;font-size:12px}
 #desk-cluster .dc-dns summary::-webkit-details-marker{display:none}
@@ -146,7 +157,7 @@ body{margin:0;background:#100d08;color:#f3ead8;font-family:Inter,ui-sans-serif,s
 @keyframes dc-worker-pulse{50%{opacity:.35}}
 @media(prefers-reduced-motion:reduce){ #desk-cluster .dc-worker-active .dc-task>svg{animation:none}}
 #desk-cluster[data-paused="true"] .dc-worker-active .dc-task>svg{animation-play-state:paused}
-@media(max-width:540px){ #desk-cluster .dc-topology-endpoints{grid-template-columns:1fr;gap:8px}#desk-cluster .dc-endpoint{padding:12px 10px;gap:7px}#desk-cluster .dc-endpoint>[data-icon]{width:14px;height:14px}#desk-cluster .dc-endpoint p{font-size:11px}#desk-cluster .dc-endpoint-owner{font-size:11px}#desk-cluster .dc-topology .dc-nodes{margin-top:38px;padding-left:22px}#desk-cluster .dc-node-dns{padding:9px 13px}#desk-cluster .dc-dns summary{align-items:flex-start;flex-wrap:wrap}#desk-cluster .dc-topology-legend{gap:9px 14px}}
+@media(max-width:540px){ #desk-cluster .dc-topology-endpoints{grid-template-columns:1fr;gap:8px;padding-left:22px}#desk-cluster .dc-endpoint{padding:12px 10px;gap:7px}#desk-cluster .dc-endpoint>[data-icon]{width:14px;height:14px}#desk-cluster .dc-endpoint-description{font-size:11px}#desk-cluster .dc-endpoint-owner{font-size:11px}#desk-cluster .dc-topology .dc-nodes{margin-top:38px;padding-left:22px}#desk-cluster .dc-node-dns{padding:9px 13px}#desk-cluster .dc-dns summary{align-items:flex-start;flex-wrap:wrap}#desk-cluster .dc-topology-legend{gap:9px 14px}}
 #desk-cluster .dc-timeline .dc-events-head{align-items:flex-start}
 #desk-cluster .dc-events-scroll{max-height:340px;overflow-y:auto;overscroll-behavior:contain;scrollbar-gutter:stable;scrollbar-width:thin;scrollbar-color:var(--dc-border) transparent}
 #desk-cluster .dc-episode{border-bottom:1px solid var(--dc-border)}
@@ -200,14 +211,14 @@ body{margin:0;background:#100d08;color:#f3ead8;font-family:Inter,ui-sans-serif,s
 <div class="dc-summary" id="summary"></div>
 <section id="topology" class="dc-topology" aria-label="Live cluster topology">
 <div class="dc-topology-endpoints">
-<div id="topology-xiaozhi" class="dc-endpoint" data-service="xiaozhi"><span data-icon="bot"></span><div><h2>Xiaozhi</h2><p>Control plane · /xiaozhi/</p><span class="dc-endpoint-owner" id="topology-xiaozhi-owner">Owner unconfirmed</span></div></div>
-<div id="topology-dns" class="dc-endpoint" data-service="dns"><span data-icon="shield"></span><div><h2>DNS</h2><p>Resolver · IPv4 + IPv6</p><span class="dc-endpoint-owner" id="topology-dns-owner">Owner unconfirmed</span></div></div>
-<div id="topology-vpn" class="dc-endpoint" data-service="vpn"><span data-icon="network"></span><div><h2>WireGuard</h2><p>{{ desk_vpn_endpoint | default("vpn.huynm.dev") }}:51820</p><span class="dc-endpoint-owner" id="topology-vpn-owner">Owner unconfirmed</span></div></div>
+<button type="button" id="topology-xiaozhi" class="dc-endpoint" data-service="xiaozhi" aria-pressed="false" aria-controls="topology-links"><span data-icon="bot"></span><span><strong class="dc-endpoint-title">Xiaozhi</strong><span class="dc-endpoint-description">Control plane · /xiaozhi/</span><span class="dc-endpoint-vip">VIP {{ dashboard_management_vip | default((route_before.stdout | from_json).vip if route_before is defined else (desk_ui_snapshot | default({})).get('vip', 'Shared UI')) }}</span><span class="dc-endpoint-owner" id="topology-xiaozhi-owner">Owner unconfirmed</span></span></button>
+<button type="button" id="topology-dns" class="dc-endpoint" data-service="dns" aria-pressed="false" aria-controls="topology-links"><span data-icon="shield"></span><span><strong class="dc-endpoint-title">DNS</strong><span class="dc-endpoint-description">Resolver · IPv4 + IPv6</span><span class="dc-endpoint-vip">VIP {{ desk_dns_vip | default('192.168.1.250') }} · {{ desk_dns_ipv6_vip | default('fe80::250') }}</span><span class="dc-endpoint-owner" id="topology-dns-owner">Owner unconfirmed</span></span></button>
+<button type="button" id="topology-vpn" class="dc-endpoint" data-service="vpn" aria-pressed="false" aria-controls="topology-links"><span data-icon="network"></span><span><strong class="dc-endpoint-title">WireGuard</strong><span class="dc-endpoint-description">{{ desk_vpn_endpoint | default("vpn.huynm.dev") }}:51820</span><span class="dc-endpoint-vip">VIP {{ desk_vpn_vip | default('192.168.1.254') }}</span><span class="dc-endpoint-owner" id="topology-vpn-owner">Owner unconfirmed</span></span></button>
 </div>
-<svg id="topology-links" class="dc-topology-wires" role="img" aria-label="Current cluster ownership and DNS eligibility"></svg>
+<svg id="topology-links" class="dc-topology-wires" role="img" aria-label="Service owners and confirmed backend readiness"></svg>
 <div class="dc-nodes" id="nodes"></div>
 </section>
-<div class="dc-topology-legend" aria-label="Topology legend"><span><i class="dc-topology-key"></i>VIP owner</span><span><i class="dc-topology-key pool"></i>DNS eligible</span><span><i class="dc-topology-key worker"></i>Voice worker active</span></div>
+<div class="dc-topology-legend" aria-label="Topology legend"><span><i class="dc-topology-key"></i>Xiaozhi owner</span><span><i class="dc-topology-key dns"></i>DNS owner</span><span><i class="dc-topology-key vpn"></i>VPN owner</span><span id="topology-pool-key" hidden><i class="dc-topology-key pool"></i><span id="topology-pool-label"></span></span><span id="topology-worker-key" hidden><i class="dc-topology-key worker"></i>Voice worker active</span><span class="dc-topology-hint" id="topology-hint">Select a service to trace its connections</span></div>
 <div id="node-operation" class="dc-operation" role="status" hidden></div>
 <div id="details" hidden></div>
 <details class="dc-dns" id="dns-health" aria-label="DNS health"><summary><span><span data-icon="arrow"></span>DNS health</span><span id="dns-health-summary">Waiting for telemetry…</span></summary><div id="dns-health-content"></div></details>
@@ -230,7 +241,7 @@ const firmwareURL={{ desk_dashboard_client_url | default('') | to_json }};
 const nodeControlEnabled={{ desk_node_control_enabled | default(false) | to_json }};
 {% raw %}
 const root=document.getElementById('desk-cluster');
-const state={selected:null,showAll:false,eventsClosed:false,openEvents:new Set(),snapshot:null,unavailable:false};
+const state={selectedService:null,selected:null,showAll:false,eventsClosed:false,openEvents:new Set(),snapshot:null,unavailable:false};
 const iconPaths={layers:'M12 3 3 8l9 5 9-5-9-5ZM3 12l9 5 9-5M3 16l9 5 9-5',server:'M4 3h16v7H4zM4 14h16v7H4zM7 6h.01M7 17h.01',crown:'m3 6 4 4 5-7 5 7 4-4-2 14H5L3 6Z',sparkles:'m12 3 2.8 6.2L21 12l-6.2 2.8L12 21l-2.8-6.2L3 12l6.2-2.8L12 3Z',volume:'m11 5-6 4H2v6h3l6 4V5Zm4 3a6 6 0 0 1 0 8m3-11a10 10 0 0 1 0 14',mic:'M9 4a3 3 0 0 1 6 0v8a3 3 0 0 1-6 0V4Zm-3 7v1a6 6 0 0 0 12 0v-1M12 18v4M8 22h8',network:'M9 2h6v6H9zM2 16h6v6H2zM16 16h6v6h-6zM12 8v4M5 16v-4h14v4',pause:'M8 5v14M16 5v14',shield:'m12 2 8 3v6c0 5-8 11-8 11S4 16 4 11V5l8-3Zm-4 10 3 3 5-6',check:'m5 12 4 4L19 6',arrow:'M7 17 17 7M7 7h10v10',x:'m6 6 12 12M6 18 18 6',activity:'M2 12h4l3-9 6 18 3-9h4',bot:'M6 8h12a2 2 0 0 1 2 2v9H4v-9a2 2 0 0 1 2-2ZM12 8V3M9 12h.01M15 12h.01M9 16h6',sync:'M4 9a8 8 0 0 1 14-4l2 2M20 3v4h-4M20 15A8 8 0 0 1 6 20l-2-2M4 22v-4h4',alert:'m12 3 10 18H2L12 3ZM12 9v5M12 17h.01',clock:'M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20ZM12 6v6l4 2'};
 function icon(name){return `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${iconPaths[name]||iconPaths.server}"/></svg>`;}
 function esc(value){return String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
@@ -248,7 +259,7 @@ function task(n){
  if(finite(n.dns_queries_per_second)&&n.dns_queries_per_second>0)return ['network','DNS · Serving',`${n.dns_queries_per_second.toFixed(1)} queries/s · ${n.core>0?'conversation idle':'voice idle'}`];
  return ['pause','Voice · Idle',n.core>0?'Conversation open · ready for input':'No active voice jobs'];
 }
-function roles(n){const entries=[];if(n.vip.xiaozhi===true)entries.push(['Xiaozhi VIP',true]);if(n.vip.dns===true)entries.push(['DNS VIP',true]);if(n.vip.vpn===true)entries.push(['VPN VIP',true]);if(n.mqtt>0)entries.push([`MQTT · ${n.mqtt}`,false]);if(n.core>0)entries.push([`Core · ${n.core}`,false]);if(!entries.length)entries.push([fresh(n)?'Voice worker':'Unavailable',false]);return entries.map(([label,owner])=>`<span class="dc-role ${owner?'owner':''}">${owner?icon('crown'):''}${esc(label)}</span>`).join('');}
+function roles(n){const entries=[];if(n.vip.xiaozhi===true)entries.push(['Xiaozhi VIP','xiaozhi']);if(n.vip.dns===true)entries.push(['DNS VIP','dns']);if(n.vip.vpn===true)entries.push(['VPN VIP','vpn']);if(n.mqtt>0)entries.push([`MQTT · ${n.mqtt}`,false]);if(n.core>0)entries.push([`Core · ${n.core}`,false]);if(!entries.length)entries.push([fresh(n)?'Voice worker':'Unavailable',false]);return entries.map(([label,owner])=>`<span class="dc-role ${owner?`owner ${owner}`:''}">${owner?icon('crown'):''}${esc(label)}</span>`).join('');}
 function configSummary(nodes,key){let highest=null;for(const n of nodes){const r=n.configuration[key]?.revision;if(finite(r)&&(highest===null||r>highest))highest=r;}return {ready:nodes.filter(n=>fresh(n)&&highest!==null&&n.configuration[key]?.revision===highest&&n.configuration[key]?.state==='synced').length,revision:highest};}
 function nodeMarkup(n,model){const [symbol,title,subtitle]=task(n);const active=fresh(n)&&['asr','llm','tts'].some(k=>finite(n.activity[k])&&n.activity[k]>0);const [dnsClass,dnsLabel]=dnsEligibility(n,model);return `<article class="dc-node ${fresh(n)?'':'dc-offline'} ${active?'dc-worker-active':''}" data-selected="${state.selected===n.id}"><div class="dc-node-head"><div><div class="dc-node-name">${esc(n.id)}</div><div class="dc-ip">${esc(n.ip)}</div></div><i class="dc-dot" aria-label="${fresh(n)?'Online':'Unavailable'}"></i></div><div class="dc-roles">${roles(n)}</div><div class="dc-activity"><div class="dc-label">Current activity</div><div class="dc-task">${icon(symbol)}${esc(title)}</div><div class="dc-task-meta">${esc(subtitle)}</div></div><div class="dc-metrics">${[['CPU',n.cpu,'%'],['Memory',n.memory,'%'],['Temp',n.temperature,'°C']].map(([label,value,unit])=>`<div class="dc-metric"><small>${label}</small><strong>${metric(value,unit)}</strong>${unit==='%'?`<div class="dc-bar"><i style="width:${finite(value)?Math.min(100,Math.max(0,value)):0}%"></i></div>`:''}</div>`).join('')}</div><div class="dc-node-dns ${dnsClass}">${icon('shield')}${esc(dnsLabel)}</div><button type="button" class="dc-node-button" data-node="${esc(n.id)}" aria-expanded="${state.selected===n.id}" aria-controls="details"><span>View node details</span>${icon('arrow')}</button></article>`;}
 function detailMarkup(n){
@@ -298,7 +309,8 @@ function topologyModel(nodes){
  const xiaozhi=findOwner('xiaozhi'),dns=findOwner('dns'),vpn=findOwner('vpn');
  const health=dns.node&&dnsCurrent(dns.node)?dns.node.dns_health:null;
  const eligible=new Set(health?.mode==='adguard'?(health.eligible_backends||[]).filter(id=>nodes.some(n=>n.id===id&&fresh(n))):[]);
- return {xiaozhi,dns,vpn,health,eligible};
+ const vpnStandby=new Set(vpn.node?nodes.filter(n=>fresh(n)&&n.vip.vpn===false&&n.vpn_ready===true).map(n=>n.id):[]);
+ return {xiaozhi,dns,vpn,health,eligible,vpnStandby};
 }
 function dnsEligibility(n,model){
  if(!fresh(n)||!model.health||!['adguard','fallback','unavailable'].includes(model.health.mode))return ['unknown','DNS · Unconfirmed'];
@@ -311,6 +323,13 @@ function renderTopology(nodes){
  document.getElementById('topology-vpn-owner').textContent=model.vpn.label+(model.vpn.node?(model.vpn.node.vpn_ready===true?' · Ready':model.vpn.node.vpn_ready===false?' · Not eligible':' · Health unconfirmed'):'');
  document.getElementById('topology-dns-owner').classList.toggle('dc-dns-warning',model.health?.mode==='fallback');
  document.getElementById('topology-dns-owner').textContent=model.dns.label+(model.health?.mode==='fallback'?' · Fallback active':'');
+ document.querySelectorAll('.dc-endpoint[data-service]').forEach(el=>{el.setAttribute('aria-pressed',String(state.selectedService===el.dataset.service));el.dataset.dimmed=String(!!state.selectedService&&state.selectedService!==el.dataset.service);});
+ const poolKey=document.getElementById('topology-pool-key');
+ poolKey.hidden=!['dns','vpn'].includes(state.selectedService);
+ document.getElementById('topology-pool-label').textContent=state.selectedService==='vpn'?'VPN standby ready':'DNS backend eligible';
+ document.getElementById('topology-worker-key').hidden=!nodes.some(n=>fresh(n)&&['asr','llm','tts'].some(k=>finite(n.activity[k])&&n.activity[k]>0));
+ const hint=state.selectedService==='dns'?`${model.eligible.size} confirmed DNS backend${model.eligible.size===1?'':'s'}`:state.selectedService==='vpn'?`${model.vpnStandby.size} confirmed standby · local readiness`:state.selectedService==='xiaozhi'?'Control-plane owner · standby readiness not reported':'Select a service to trace its connections';
+ document.getElementById('topology-hint').textContent=hint;
  document.getElementById('nodes').innerHTML=nodes.map(n=>nodeMarkup(n,model)).join('');
  drawTopology();
 }
@@ -321,23 +340,25 @@ function drawTopology(){
  const cards=[...document.getElementById('nodes').children];
  const endpoint=key=>document.getElementById(`topology-${key}`).getBoundingClientRect();
  const stacked=cards.length>1&&Math.abs(cards[0].getBoundingClientRect().left-cards[1].getBoundingClientRect().left)<1;
- const paths=[];const descriptions=[];
- function connect(key,id,kind,lane){
+ const paths=[],descriptions=[];
+ function connect(key,id,kind){
   const index=nodes.findIndex(n=>n.id===id);if(index<0||!cards[index])return;
   const from=endpoint(key),to=cards[index].getBoundingClientRect();
-  const x=from.left-rect.left+from.width/2,y=from.bottom-rect.top;
-  const targetX=to.left-rect.left+to.width/2,targetY=to.top-rect.top;
-  const turn=y+lane;
-  const path=stacked?`M ${x} ${y} V ${turn} H ${kind==='pool'?20:key==='dns'?12:key==='vpn'?7:2} V ${targetY+30} H ${to.left-rect.left}`:`M ${x} ${y} V ${turn} H ${targetX} V ${targetY}`;
-  paths.push(`<path class="${key==='dns'?'dc-wire-dns ':key==='vpn'?'dc-wire-vpn ':''}${kind==='pool'?'dc-wire-pool':''}" d="${path}"/>`);
-  descriptions.push(`${key==='dns'?'DNS':key==='vpn'?'WireGuard':'Xiaozhi'} ${kind==='pool'?'eligible backend':'VIP owner'} ${id}`);
+  const offset={xiaozhi:-24,dns:0,vpn:24}[key];
+  const x=from.left-rect.left+from.width/2+offset,y=from.bottom-rect.top;
+  const targetX=to.left-rect.left+to.width/2+offset,targetY=to.top-rect.top;
+  const turn=y+{xiaozhi:18,dns:36,vpn:54}[key];
+  const path=stacked?`M ${from.left-rect.left} ${from.top-rect.top+from.height/2} H ${{xiaozhi:3,dns:10,vpn:17}[key]} V ${targetY+30} H ${to.left-rect.left}`:`M ${x} ${y} V ${turn} H ${targetX} V ${targetY}`;
+  const classes=`dc-wire-${key}${kind==='pool'?' dc-wire-pool':''}`;
+  // A background stroke separates crossings; they are never shared network junctions.
+  paths.push(`<path class="dc-wire-halo" d="${path}"/><path class="${classes}" d="${path}"/>`);
+  descriptions.push(`${key==='dns'?'DNS':key==='vpn'?'WireGuard':'Xiaozhi'} ${kind==='pool'?(key==='vpn'?'ready standby':'eligible backend'):'VIP owner'} ${id}`);
  }
- if(model.xiaozhi.node)connect('xiaozhi',model.xiaozhi.node.id,'owner',18);
- if(model.dns.node)connect('dns',model.dns.node.id,'owner',30);
- if(model.vpn.node)connect('vpn',model.vpn.node.id,'owner',42);
- model.eligible.forEach(id=>{if(id!==model.dns.node?.id)connect('dns',id,'pool',stacked?24:56);});
+ if(state.selectedService==='dns')model.eligible.forEach(id=>{if(id!==model.dns.node?.id)connect('dns',id,'pool');});
+ if(state.selectedService==='vpn')model.vpnStandby.forEach(id=>connect('vpn',id,'pool'));
+ for(const key of ['xiaozhi','dns','vpn'])if((!state.selectedService||state.selectedService===key)&&model[key].node)connect(key,model[key].node.id,'owner');
  svg.setAttribute('viewBox',`0 0 ${rect.width} ${rect.height}`);
- const markup=`<title>Current cluster ownership and DNS eligibility</title><desc>${esc(descriptions.join('. ')||'Routing unconfirmed; waiting for fresh telemetry')}</desc>${paths.join('')}`;
+ const markup=`<title>Service owners and confirmed backend readiness</title><desc>${esc(descriptions.join('. ')||'Routing unconfirmed; waiting for fresh telemetry')}</desc>${paths.join('')}`;
  if(svg.innerHTML!==markup)svg.innerHTML=markup;
 }
 
@@ -487,7 +508,7 @@ function renderEvents(){
 }
 root.addEventListener('toggle',event=>{const el=event.target;if(!el.matches?.('[data-episode]'))return;if(el.open)state.openEvents.add(el.dataset.episode);else state.openEvents.delete(el.dataset.episode);},true);
 
-root.addEventListener('click',event=>{const button=event.target.closest('[data-node]');if(button){state.selected=state.selected===button.dataset.node?null:button.dataset.node;render();}if(event.target.closest('.dc-close')){const previousSelection=state.selected;state.selected=null;render();if(previousSelection)root.querySelector(`[data-node="${previousSelection}"]`)?.focus();}if(event.target.closest('#event-collapse')){const history=document.getElementById('events');if(!state.eventsClosed)state.eventScroll=history.scrollTop;state.eventsClosed=!state.eventsClosed;renderEvents();if(!state.eventsClosed)history.scrollTop=state.eventScroll||0;}if(event.target.closest('#event-toggle')){state.showAll=!state.showAll;renderEvents();document.getElementById('events').scrollTop=0;}});
+root.addEventListener('click',event=>{const service=event.target.closest('.dc-endpoint[data-service]');if(service){state.selectedService=state.selectedService===service.dataset.service?null:service.dataset.service;render();}const button=event.target.closest('[data-node]');if(button){state.selected=state.selected===button.dataset.node?null:button.dataset.node;render();}if(event.target.closest('.dc-close')){const previousSelection=state.selected;state.selected=null;render();if(previousSelection)root.querySelector(`[data-node="${previousSelection}"]`)?.focus();}if(event.target.closest('#event-collapse')){const history=document.getElementById('events');if(!state.eventsClosed)state.eventScroll=history.scrollTop;state.eventsClosed=!state.eventsClosed;renderEvents();if(!state.eventsClosed)history.scrollTop=state.eventScroll||0;}if(event.target.closest('#event-toggle')){state.showAll=!state.showAll;renderEvents();document.getElementById('events').scrollTop=0;}});
 
 document.getElementById('address').textContent=location.host;root.querySelectorAll('[data-icon]').forEach(el=>{el.innerHTML=icon(el.dataset.icon);});
 let timer=null,activeRequest=null;

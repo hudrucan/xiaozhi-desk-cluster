@@ -22,6 +22,7 @@
     - name: Retain the installed dashboard membership
       ansible.builtin.set_fact:
         dashboard_members: "{{ (applied_dashboard.content | b64decode | from_json).members }}"
+        dashboard_management_vip: "{{ (page_before.stdout | from_json).vip }}"
     - name: Retain the previous root page for rollback
       ansible.builtin.slurp:
         src: /etc/desk-ui/index.html

@@ -13,3 +13,33 @@ const stale=node('deskb1x');stale.observed_at=new Date(Date.now()-30000).toISOSt
 assert.equal(context.topologyModel([stale]).vpn.node,null);
 assert.equal(context.live(stale).vip.vpn,undefined);
 console.log('PASS VPN role, owner, conflict and stale telemetry UI');
+
+// Readiness is explicit, fresh and tied to an unambiguous owner.
+const owner=node('deskb1x'),standby=node('deskb2x',false);standby.vpn_ready=true;
+assert.equal(context.topologyModel([owner,standby]).vpnStandby.size,1);
+standby.vpn_ready=false;assert.equal(context.topologyModel([owner,standby]).vpnStandby.size,0);
+standby.vpn_ready=true;standby.observed_at=stale.observed_at;
+assert.equal(context.topologyModel([owner,standby]).vpnStandby.size,0);
+assert.equal(context.topologyModel([owner,node('deskb3x')]).vpnStandby.size,0);
+
+const fixtures=[node('deskb1x'),node('deskb2x',false),node('deskb3x',false)];
+fixtures[1].vip.xiaozhi=true;fixtures[2].vip.dns=true;fixtures[1].vpn_ready=true;fixtures[2].vpn_ready=true;
+const bounds=(left,top,width,height)=>({left,top,width,height,bottom:top+height});
+const cards=fixtures.map((_,i)=>({getBoundingClientRect:()=>bounds(i*360,200,340,400)}));
+const svg={innerHTML:'',setAttribute(){}};
+context.document={getElementById:id=>id==='topology'?{getBoundingClientRect:()=>bounds(0,0,1060,600)}:id==='topology-links'?svg:id==='nodes'?{children:cards}:{getBoundingClientRect:()=>bounds(['xiaozhi','dns','vpn'].indexOf(id.slice(9))*360,0,340,128)}};
+context.currentTopology={nodes:fixtures,model:context.topologyModel(fixtures)};
+vm.runInContext(source.slice(source.indexOf('function drawTopology'),source.indexOf('async function resumeMaintenance')),context);
+context.drawTopology();
+assert.match(svg.innerHTML,/Xiaozhi VIP owner deskb2x/);assert.match(svg.innerHTML,/DNS VIP owner deskb3x/);assert.match(svg.innerHTML,/WireGuard VIP owner deskb1x/);
+assert.doesNotMatch(svg.innerHTML,/dc-wire-pool/);assert.match(svg.innerHTML,/dc-wire-halo/);
+assert.doesNotMatch(svg.innerHTML,/d="[^"]* C /);assert.match(svg.innerHTML,/d="M [^"]+ V [^"]+ H [^"]+ V /);
+context.state.selectedService='vpn';context.drawTopology();
+assert.doesNotMatch(svg.innerHTML,/Xiaozhi VIP owner|DNS VIP owner/);
+assert.match(svg.innerHTML,/WireGuard ready standby deskb2x/);assert.match(svg.innerHTML,/WireGuard ready standby deskb3x/);
+assert.equal((svg.innerHTML.match(/class="dc-wire-vpn/g)||[]).length,3);
+context.currentTopology.model.eligible=new Set(['deskb1x','deskb2x','deskb3x']);
+context.state.selectedService='dns';context.drawTopology();
+assert.match(svg.innerHTML,/DNS eligible backend deskb1x/);assert.doesNotMatch(svg.innerHTML,/WireGuard VIP owner/);
+assert.match(source,/dc-topology-key vpn"><\/i>VPN owner/);
+console.log('PASS topology owner lines, isolated DNS/VPN readiness and stale standby exclusion');
