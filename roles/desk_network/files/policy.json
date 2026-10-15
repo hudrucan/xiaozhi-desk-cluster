@@ -1,0 +1,41 @@
+{
+  "SCAN_SUBNETS": [
+    "192.168.1.0/24 --interface=wlan0"
+  ],
+  "TIMEZONE": "Asia/Ho_Chi_Minh",
+  "BACKEND_API_URL": "/network/server",
+  "LOADED_PLUGINS": [
+    "ARPSCAN",
+    "UI",
+    "CUSTPROP",
+    "DBCLNP",
+    "INTRNT",
+    "MAINT",
+    "NEWDEV",
+    "SETPWD",
+    "SYNC",
+    "VNDRPDT",
+    "WORKFLOWS"
+  ],
+  "ARPSCAN_RUN": "schedule",
+  "ARPSCAN_ARGS": "sudo arp-scan --ignoredups --retry=3",
+  "NSLOOKUP_RUN": "disabled",
+  "AVAHISCAN_RUN": "disabled",
+  "NBTSCAN_RUN": "disabled",
+  "DIGSCAN_RUN": "disabled",
+  "INTRNT_RUN": "disabled",
+  "SYNC_RUN": "disabled",
+  "VNDRPDT_RUN": "disabled",
+  "WORKFLOWS_RUN": "disabled",
+  "MAINT_RUN": "schedule",
+  "MAINT_RUN_SCHD": "17 3 * * *",
+  "MAINT_PERF_DAYS": 0,
+  "DBCLNP_RUN": "schedule",
+  "DBCLNP_RUN_SCHD": "37 3 * * *",
+  "DAYS_TO_KEEP_EVENTS": 14,
+  "DEV_HIST_DAYS": 7,
+  "LOG_LEVEL": "minimal",
+  "SETPWD_enable_password": false,
+  "DEEP_SLEEP": false,
+  "REPORT_DASHBOARD_URL": "http://192.168.1.186/network"
+}

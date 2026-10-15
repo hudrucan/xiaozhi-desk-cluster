@@ -1,0 +1,30 @@
+const fs=require('fs'),vm=require('vm'),assert=require('node:assert/strict'),path=require('path');
+const source=fs.readFileSync(path.join(__dirname,'../files/settings-policy.js'),'utf8');
+const attrs={};let badge=null,ajaxSend,ajaxComplete,reloads=0,ajaxError,observerCallback,selectRefreshes=0,falseDirty=0,hidden=0;const listeners={},timers=[];
+const sync={id:'SYNC_RUN',tagName:'SELECT',multiple:false,options:[{value:'unused'}],value:'unused',onchange:()=>falseDirty++,disabled:false,append(option){this.options.push(option)},setAttribute(k,v){attrs[k]=v}};
+const metadata={id:'SYNC_RUN__metadata',tagName:'TEXTAREA',disabled:false,setAttribute(){}};const metadataRow={querySelector:()=>control,querySelectorAll:selector=>selector.startsWith('input')?[metadata]:[]};
+const cron={value:'*/1 * * * *',disabled:false};
+const label={querySelector:()=>badge,append:b=>badge=b};
+let managedClass=false;const control={classList:{add:name=>{assert.equal(name,'desk-managed-control');managedClass=true}}};
+const row={querySelector:selector=>selector==='.setting_input'?control:label,querySelectorAll:selector=>selector.startsWith('input')?[sync]:[]};
+const notice={textContent:'managed settings notice',style:{},setAttribute(k,v){attrs['notice_'+k]=v}};
+let insertedStyle;const document={head:{append:s=>insertedStyle=s},body:{},baseURI:'http://192.168.1.186/network/settings.php',getElementById:id=>({'row_SYNC_RUN':row,'row_SYNC_RUN__metadata':metadataRow,'ARPSCAN_RUN_SCHD':cron,'desk-settings-policy':notice}[id]||null),createElement:()=>({style:{}})};
+const jquery=el=>el===document?{ajaxError:fn=>ajaxError=fn,ajaxSend:fn=>ajaxSend=fn,ajaxComplete:fn=>ajaxComplete=fn}:{trigger:name=>{assert.equal(name,'change.select2');selectRefreshes++;el.onchange?.()}};
+const context={deskManagedKeys:['SYNC_RUN'],document,setTimeout:fn=>timers.push(fn),window:{clearCache:()=>reloads++,addEventListener:(name,fn)=>listeners[name]=fn,hideSpinner:()=>hidden++,getSetting:key=>{assert.equal(key,'SYNC_RUN');return 'disabled'},jQuery:jquery},MutationObserver:class{constructor(fn){observerCallback=fn}observe(){}},requestAnimationFrame:fn=>fn(),URL,URLSearchParams};
+vm.runInNewContext(source,context);
+assert.equal(managedClass,true);assert.match(insertedStyle.textContent,/::after\{content:'Cluster managed'/);assert.match(insertedStyle.textContent,/pointer-events:auto;cursor:not-allowed/);assert.match(insertedStyle.textContent,/:disabled\{opacity:1/);
+assert.equal(sync.value,'disabled');assert.equal(sync.disabled,true);assert.equal(sync.options.length,2);assert.match(sync.options[1].textContent,/cluster managed/);assert.equal(selectRefreshes,1);assert.equal(falseDirty,0,'Managed widget correction triggered unsaved-settings guard');sync.onchange();assert.equal(falseDirty,1,'Real change handler lost');
+assert.equal(metadata.disabled,true,'Managed metadata remained editable');assert.equal(cron.disabled,false);assert.equal(cron.value,'*/1 * * * *');
+observerCallback();assert.equal(sync.options.length,2,'Managed value added twice');
+ajaxError(null,{responseJSON:{error:'Cluster-managed setting cannot be changed: SCAN_SUBNETS'}},{url:'php/server/util.php',data:'function=savesettings'});
+assert.match(notice.textContent,/SCAN_SUBNETS/);assert.equal(attrs.notice_role,'alert');
+console.log('PASS native dropdown override round-trip, editable cron, idempotent labels and visible rejected-save error');
+
+listeners.beforeunload();assert.equal(hidden,0);timers.shift()();assert.equal(hidden,1,'Cancelled navigation overlay not dismissed');listeners.pageshow({persisted:false});assert.equal(hidden,1);listeners.pageshow({persisted:true});assert.equal(hidden,2);console.log('PASS no false dirty state, cancelled-navigation recovery and back-forward restoration');
+
+const saveOptions={url:'php/server/util.php',data:'function=savesettings'};
+ajaxSend(null,{},saveOptions);context.window.clearCache();assert.equal(reloads,0,'SSE aborted in-flight Save');
+ajaxComplete(null,{status:200},saveOptions);assert.equal(reloads,0);timers.shift()();assert.equal(reloads,1,'Cache reload lost after Save acknowledgment');
+ajaxSend(null,{},saveOptions);context.window.clearCache();ajaxComplete(null,{status:400},saveOptions);assert.equal(timers.length,0,'Rejected Save discarded its visible error');
+context.window.clearCache();assert.equal(reloads,2,'Normal cache refresh was disabled');
+console.log('PASS settings import waits for Save acknowledgment; rejected saves retain error UI');

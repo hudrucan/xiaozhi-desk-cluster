@@ -104,6 +104,14 @@ class MonitoringTests(unittest.TestCase):
         self.assertIn('use_backend desk_vpn_ui',rerun)
         self.assertEqual(rerun.count('backend desk_vpn_ui\n'),1)
 
+    def test_network_survives_other_service_route_composition(self):
+        current='frontend xiaozhi_settings\n    default_backend xiaozhi_control_planes\n'
+        updated=proxy.candidate(current,'backend desk_monitoring_hubs','backend desk_adguard_ui','backend desk_dashboard','backend desk_vpn_ui','backend desk_network')
+        rerun=proxy.candidate(updated,'backend desk_monitoring_hubs')
+        self.assertEqual(updated,rerun)
+        self.assertEqual(rerun.count('use_backend desk_network '),1)
+        self.assertIn('path_beg /dns /monitor /network /vpn',rerun)
+
     def test_only_monitoring_haproxy_changes_are_allowed(self):
         snapshot = {'units': {'keepalived': {'MainPID': '1', 'ActiveState': 'active'}}, 'digests': {'/etc/haproxy/haproxy.cfg': 'old', '/etc/resolv.conf': 'same'}, 'haproxy_base': 'same'}
         new = {**snapshot, 'digests': {**snapshot['digests'], '/etc/haproxy/haproxy.cfg': 'new'}}

@@ -42,3 +42,9 @@ xiaozhi_panel_worker_activity_enabled: true
 
 # Independent wg-easy UI replicas behind the shared dashboard ingress.
 desk_vpn_ui_enabled: true
+
+# New Beszel sessions prefer a stable lightly loaded hub; cookies retain existing sessions.
+desk_monitoring_load_aware_enabled: true
+
+# One LAN-only discovery owner; replicated checkpoints on all three nodes.
+desk_network_enabled: true

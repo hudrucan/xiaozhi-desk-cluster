@@ -5,6 +5,7 @@ from pathlib import Path
 import unittest
 import jinja2
 import yaml
+from ansible.module_utils.parsing.convert_bool import boolean
 
 ROOT = Path(__file__).resolve().parents[3]
 
@@ -48,6 +49,7 @@ class DashboardTests(unittest.TestCase):
         env = jinja2.Environment(undefined=jinja2.StrictUndefined)
         import json
         env.filters['to_json'] = json.dumps
+        env.filters['bool'] = boolean
         template = env.from_string(ROOT.joinpath('roles/desk_ui/templates/index.html.j2').read_text())
         members = [{'id':f'deskb{i}x', 'private':f'10.10.10.{i+10}', 'management':f'192.168.1.{i+100}'} for i in (1,2,3)]
         page = template.render(desk_dashboard_enabled=True, dashboard_members=members)

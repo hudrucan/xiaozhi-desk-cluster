@@ -20,7 +20,7 @@ frontend xiaozhi_settings
     http-request deny deny_status 404 if { path_beg /internal/ }
 {% if xiaozhi_ingress_unified_ui_enabled | default(false) %}
 # BEGIN DESK DNS UI ROUTE
-    http-request deny unless { src 192.168.1.0/24 127.0.0.1 } or !{ path_beg /dns /monitor{% if desk_dashboard_enabled | default(false) %} /api/cluster/status /api/cluster/operations{% endif %} } !{ path / }
+    http-request deny unless { src 192.168.1.0/24 127.0.0.1 } or !{ path_beg /dns /monitor{% if desk_network_enabled | default(false) %} /network{% endif %}{% if desk_dashboard_enabled | default(false) %} /api/cluster/status /api/cluster/operations{% endif %} } !{ path / }
 {% if not (desk_dashboard_enabled | default(false)) %}
     http-request return status 200 content-type text/html file /etc/desk-ui/index.html if { path / }
 {% endif %}
@@ -48,6 +48,12 @@ frontend xiaozhi_settings
     use_backend desk_monitoring_hubs if { path_beg /monitor/ }
 # END DESK MONITORING ROUTE
 {% endif %}
+{% if desk_network_enabled | default(false) %}
+# BEGIN DESK NETWORK ROUTE
+    http-request redirect location /network/ code 302 if { path /network }
+    use_backend desk_network if { path_beg /network/ }
+# END DESK NETWORK ROUTE
+{% endif %}
     default_backend xiaozhi_control_planes
 
 backend xiaozhi_control_planes
@@ -70,7 +76,11 @@ backend desk_monitoring_hubs
     http-check expect status 200
     http-request replace-path ^/monitor/(.*)$ /\1
 {% for node in groups.get('desk_monitoring', []) | sort %}
+{% if desk_monitoring_load_aware_enabled | default(false) %}
+    server {{ node }} {{ hostvars[node].cluster_ip }}:{{ desk_monitoring_proxy_port | default(8091) if desk_monitoring_sync_enabled | default(false) else 8090 }} cookie {{ node }} check inter 5s fall 2 rise 2 weight 100 agent-check agent-addr {{ cluster_ip }} agent-port 8012 agent-inter 30s agent-send "{{ node }}\n"
+{% else %}
     server {{ node }} {{ hostvars[node].cluster_ip }}:{{ desk_monitoring_proxy_port | default(8091) if desk_monitoring_sync_enabled | default(false) else 8090 }} cookie {{ node }} check inter 5s fall 2 rise 2
+{% endif %}
 {% endfor %}
 # END DESK MONITORING BACKEND
 {% endif %}
@@ -110,4 +120,22 @@ backend desk_node_control
 {% endfor %}
 {% endif %}
 # END DESK DASHBOARD BACKEND
+{% endif %}
+
+{% if desk_network_enabled | default(false) %}
+# BEGIN DESK NETWORK BACKEND
+backend desk_network
+    mode http
+    balance first
+    retries 2
+    option redispatch
+    retry-on conn-failure empty-response response-timeout 503 504
+    http-request disable-l7-retry unless { method GET HEAD }
+    option httpchk GET /health
+    http-check expect status 200
+    timeout server 60s
+{% for node in groups['deskboxes'] | sort %}
+    server {{ node }} {{ hostvars[node].cluster_ip }}:20213 check inter 3s fall 2 rise 1
+{% endfor %}
+# END DESK NETWORK BACKEND
 {% endif %}

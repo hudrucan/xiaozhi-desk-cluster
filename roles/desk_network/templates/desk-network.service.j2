@@ -1,0 +1,35 @@
+[Unit]
+Description=Desk LAN discovery majority lease and checkpoint replication
+Wants=network-online.target desk-dashboard.service
+After=network-online.target desk-dashboard.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /usr/local/libexec/desk-network/ha.py --config /etc/desk-network/config.json
+ExecStopPost=/usr/bin/python3 /usr/local/libexec/desk-network/ha.py --stop
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=12
+RuntimeDirectory=desk-network
+RuntimeDirectoryMode=0755
+UMask=0077
+Nice=15
+CPUWeight=1
+IOWeight=1
+MemoryMax=256M
+TasksMax=160
+LimitNOFILE=256
+ProtectHome=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+LockPersonality=true
+RestrictRealtime=true
+Environment=PYTHONDONTWRITEBYTECODE=1
+# Bound glibc arena retention in the threaded UI proxy. Large response buffers
+# must return to the kernel instead of raising the long-lived controller's RSS.
+Environment=MALLOC_ARENA_MAX=2
+Environment=MALLOC_MMAP_THRESHOLD_=131072
+Environment=MALLOC_TRIM_THRESHOLD_=131072
+
+[Install]
+WantedBy=multi-user.target

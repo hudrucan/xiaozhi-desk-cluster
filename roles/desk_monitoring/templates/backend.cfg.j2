@@ -8,5 +8,9 @@ backend desk_monitoring_hubs
     http-check expect status 200
     http-request replace-path ^/monitor/(.*)$ /\1
 {% for node in groups['desk_monitoring'] | sort %}
+{% if desk_monitoring_load_aware_enabled | default(false) %}
+    server {{ node }} {{ hostvars[node].cluster_ip }}:{{ desk_monitoring_proxy_port if desk_monitoring_sync_enabled | default(false) else desk_monitoring_hub_port }} cookie {{ node }} check inter 5s fall 2 rise 2 weight 100 agent-check agent-addr {{ cluster_ip }} agent-port 8012 agent-inter 30s agent-send "{{ node }}\n"
+{% else %}
     server {{ node }} {{ hostvars[node].cluster_ip }}:{{ desk_monitoring_proxy_port if desk_monitoring_sync_enabled | default(false) else desk_monitoring_hub_port }} cookie {{ node }} check inter 5s fall 2 rise 2
+{% endif %}
 {% endfor %}

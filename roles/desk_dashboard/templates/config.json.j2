@@ -1,1 +1,1 @@
-{{ {'node': inventory_hostname, 'port': desk_dashboard_port, 'members': dashboard_members, 'client_url': desk_dashboard_client_url | default('')} | to_nice_json }}
+{{ {'node': inventory_hostname, 'port': desk_dashboard_port, 'members': dashboard_members, 'client_url': desk_dashboard_client_url | default(''), 'monitoring_placement': desk_monitoring_load_aware_enabled | default(false)} | to_nice_json }}

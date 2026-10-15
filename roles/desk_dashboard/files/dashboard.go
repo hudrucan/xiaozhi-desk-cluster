@@ -35,10 +35,11 @@ type Member struct {
 	Management string `json:"management"`
 }
 type Config struct {
-	Node      string   `json:"node"`
-	Port      int      `json:"port"`
-	Members   []Member `json:"members"`
-	ClientURL string   `json:"client_url,omitempty"`
+	Node                string   `json:"node"`
+	Port                int      `json:"port"`
+	Members             []Member `json:"members"`
+	ClientURL           string   `json:"client_url,omitempty"`
+	MonitoringPlacement bool     `json:"monitoring_placement,omitempty"`
 }
 type Firmware struct {
 	URL       string    `json:"url"`
@@ -52,6 +53,80 @@ type SyncStatus struct {
 	WorkerRevision *int   `json:"worker_revision,omitempty"`
 	CoreRevision   *int   `json:"core_revision,omitempty"`
 }
+type NetworkRevision struct {
+	Term     int    `json:"term"`
+	Node     string `json:"node"`
+	Sequence int    `json:"sequence"`
+}
+type NetworkStatus struct {
+	State        string           `json:"state"`
+	Sync         string           `json:"sync"`
+	Revision     *NetworkRevision `json:"revision,omitempty"`
+	At           time.Time        `json:"observed_at"`
+	Subnet       string           `json:"subnet"`
+	ScanMinutes  int              `json:"scan_minutes"`
+	ScanSchedule string           `json:"scan_schedule,omitempty"`
+	VoterReady   bool             `json:"voter_ready"`
+}
+
+func validNetwork(n *NetworkStatus) bool {
+	if n == nil {
+		return true
+	}
+	if n.State != "active" && n.State != "starting" && n.State != "standby" {
+		return false
+	}
+	if n.Sync != "synced" && n.Sync != "pending" {
+		return false
+	}
+	if n.At.IsZero() || n.Subnet != "192.168.1.0/24" || n.ScanMinutes < 0 || n.ScanMinutes > 60 || len(n.ScanSchedule) > 128 || strings.ContainsAny(n.ScanSchedule, "\r\n\x00") {
+		return false
+	}
+	r := n.Revision
+	return r == nil || (r.Term >= 0 && r.Term <= 1000000000 && r.Sequence >= 0 && r.Sequence <= 1000000000 && (r.Node == "deskb1x" || r.Node == "deskb2x" || r.Node == "deskb3x"))
+}
+
+// Only bounded public metadata is read; stale Network state does not hide node telemetry.
+func networkMetadata(meta map[string]any, node string, now time.Time) *NetworkStatus {
+	stamp, ok := meta["observed_at"].(float64)
+	if !ok || math.IsNaN(stamp) || math.IsInf(stamp, 0) || meta["protocol"] != "desk-network-v1" || meta["node"] != node {
+		return nil
+	}
+	age := float64(now.UnixNano())/1e9 - stamp
+	if age < -5 || age >= 15 {
+		return nil
+	}
+	ready, ok := meta["voter_ready"].(bool)
+	if !ok {
+		return nil
+	}
+	state, _ := meta["state"].(string)
+	sync, _ := meta["sync"].(string)
+	subnet, _ := meta["subnet"].(string)
+	scan := number(meta["scan_minutes"])
+	schedule, _ := meta["scan_schedule"].(string)
+	if scan == nil {
+		return nil
+	}
+	result := &NetworkStatus{State: state, Sync: sync, At: time.Unix(0, int64(stamp*1e9)).UTC(), Subnet: subnet, ScanMinutes: *scan, ScanSchedule: schedule, VoterReady: ready}
+	if meta["revision"] != nil {
+		r, ok := meta["revision"].([]any)
+		if !ok || len(r) != 3 {
+			return nil
+		}
+		term, seq := number(r[0]), number(r[2])
+		owner, ok := r[1].(string)
+		if term == nil || seq == nil || !ok {
+			return nil
+		}
+		result.Revision = &NetworkRevision{Term: *term, Node: owner, Sequence: *seq}
+	}
+	if !validNetwork(result) {
+		return nil
+	}
+	return result
+}
+
 type Node struct {
 	Protocol             string                `json:"protocol"`
 	ID                   string                `json:"id"`
@@ -79,6 +154,10 @@ type Node struct {
 	Components           map[string]string     `json:"components"`
 	Config               map[string]SyncStatus `json:"configuration"`
 	Events               []Event               `json:"events,omitempty"`
+	ServiceRoles         map[string]string     `json:"service_roles,omitempty"`
+	MonitoringPreferred  string                `json:"monitoring_preferred,omitempty"`
+	MonitoringReady      bool                  `json:"monitoring_ready,omitempty"`
+	Network              *NetworkStatus        `json:"network,omitempty"`
 }
 type DNSProbe struct {
 	State   string    `json:"state"`
@@ -258,27 +337,32 @@ type Snapshot struct {
 }
 type cpuSample struct{ total, idle uint64 }
 type Dashboard struct {
-	config      Config
-	member      Member
-	client      *http.Client
-	mu          sync.RWMutex
-	local       Node
-	snapshot    Snapshot
-	cpu         cpuSample
-	dnsHealth   DNSHealth
-	dnsInstance string
-	dnsCount    int64
-	dnsAt       float64
-	slowAt      time.Time
-	slowConfig  map[string]SyncStatus
-	events      []Event
-	sequence    int
-	started     time.Time
-	transitions map[string]eventTransition
-	boots       map[string]string
-	collectors  map[string]time.Time
-	telemetry   map[string]eventTransition
-	firmware    Firmware
+	config           Config
+	member           Member
+	client           *http.Client
+	mu               sync.RWMutex
+	local            Node
+	snapshot         Snapshot
+	cpu              cpuSample
+	dnsHealth        DNSHealth
+	dnsInstance      string
+	dnsCount         int64
+	dnsAt            float64
+	slowAt           time.Time
+	slowConfig       map[string]SyncStatus
+	events           []Event
+	sequence         int
+	started          time.Time
+	transitions      map[string]eventTransition
+	boots            map[string]string
+	collectors       map[string]time.Time
+	telemetry        map[string]eventTransition
+	firmware         Firmware
+	monitorHealthy   bool
+	preferredMonitor string
+	preferredSince   time.Time
+	monitorCandidate string
+	candidateSince   time.Time
 }
 
 func unknown(member Member) Node {
@@ -508,7 +592,8 @@ func (d *Dashboard) slow(ctx context.Context) {
 	}
 	d.slowAt = time.Now()
 	ip := d.member.Private
-	values := parallelGets(ctx, d, []string{"http://" + ip + ":8004/api/cluster", "http://127.0.0.1:3003/control/desk_policy", "http://" + ip + ":8092/api/desk-config/status", "http://" + ip + ":8004/api/settings/runtime"})
+	values := parallelGets(ctx, d, []string{"http://" + ip + ":8004/api/cluster", "http://127.0.0.1:3003/control/desk_policy", "http://" + ip + ":8092/api/desk-config/status", "http://" + ip + ":8004/api/settings/runtime", "http://" + ip + ":8091/api/health"})
+	d.monitorHealthy = values[4]["code"] == float64(200)
 	result := map[string]SyncStatus{}
 	state := desiredSync(values[0], d.config.Node)
 	result["xiaozhi"] = state
@@ -686,6 +771,12 @@ func (d *Dashboard) collect(ctx context.Context) {
 		s.State = "pending"
 	}
 	n.Config["xiaozhi"] = s
+	n.ServiceRoles = map[string]string{}
+	n.MonitoringReady = d.monitorHealthy
+	n.Network = networkMetadata(readJSON("/run/desk-network/public.json", 2048), d.config.Node, time.Now())
+	if n.Network != nil && n.Network.State == "active" {
+		n.ServiceRoles["network"] = "active"
+	}
 	d.mu.Lock()
 	n.Events = append([]Event{}, d.local.Events...)
 	d.local = n
@@ -979,6 +1070,17 @@ func validateNode(n Node, m Member, now time.Time) bool {
 			return false
 		}
 	}
+	if n.MonitoringPreferred != "" && n.MonitoringPreferred != "deskb1x" && n.MonitoringPreferred != "deskb2x" && n.MonitoringPreferred != "deskb3x" {
+		return false
+	}
+	if !validNetwork(n.Network) {
+		return false
+	}
+	for key, value := range n.ServiceRoles {
+		if key != "network" || value != "trial" && value != "active" {
+			return false
+		}
+	}
 	for key, count := range n.Sessions {
 		switch key {
 		case "idle", "asr", "asr_restarting", "llm", "tts", "done", "error", "aborted":
@@ -1032,6 +1134,21 @@ func (d *Dashboard) aggregate(ctx context.Context) {
 		}(i, m)
 	}
 	wg.Wait()
+	d.mu.Lock()
+	if d.config.MonitoringPlacement {
+		d.selectMonitoring(nodes, time.Now())
+	}
+	if d.local.VIP["xiaozhi"] != nil && *d.local.VIP["xiaozhi"] {
+		d.local.MonitoringPreferred = d.preferredMonitor
+	} else {
+		d.local.MonitoringPreferred = ""
+	}
+	for i := range nodes {
+		if nodes[i].ID == d.config.Node {
+			nodes[i].MonitoringPreferred = d.local.MonitoringPreferred
+		}
+	}
+	d.mu.Unlock()
 	old := map[string]Node{}
 	for _, n := range previous.Nodes {
 		old[n.ID] = n
@@ -1465,6 +1582,9 @@ func main() {
 			}
 		}
 	}()
+	if config.MonitoringPlacement {
+		go d.monitorAgent(ctx)
+	}
 	server := &http.Server{Addr: net.JoinHostPort(d.member.Private, strconv.Itoa(config.Port)), Handler: http.HandlerFunc(d.handle), ReadHeaderTimeout: 2 * time.Second, ReadTimeout: 3 * time.Second, WriteTimeout: 3 * time.Second, IdleTimeout: 15 * time.Second, MaxHeaderBytes: 8192}
 	go func() {
 		<-ctx.Done()
@@ -1475,5 +1595,131 @@ func main() {
 	if e := server.ListenAndServe(); e != nil && e != http.ErrServerClosed {
 		fmt.Fprintln(os.Stderr, "Dashboard listener unavailable")
 		os.Exit(1)
+	}
+}
+
+// Only initial session weights change; healthy sticky sessions remain on their hub.
+func monitorScore(n Node, now time.Time) (float64, bool) {
+	if !n.Online || n.At.IsZero() || now.Sub(n.At) > staleAfter || n.At.Sub(now) > 5*time.Second || !n.MonitoringReady || n.CPU == nil || math.IsNaN(*n.CPU) || *n.CPU < 0 || *n.CPU > 100 {
+		return 0, false
+	}
+	for _, paused := range n.Admission {
+		if paused != nil && *paused {
+			return 0, false
+		}
+	}
+	score := *n.CPU
+	for role, cost := range map[string]float64{"xiaozhi": 20, "dns": 10, "vpn": 5} {
+		if n.VIP[role] != nil && *n.VIP[role] {
+			score += cost
+		}
+	}
+	for _, job := range []string{"asr", "llm", "tts"} {
+		if count := n.Activity[job]; count != nil && *count > 0 {
+			score += 30
+		}
+	}
+	if n.ServiceRoles["network"] != "" {
+		score += 10
+	}
+	return score, true
+}
+func (d *Dashboard) selectMonitoring(nodes []Node, now time.Time) {
+	best := ""
+	lowest := math.MaxFloat64
+	current := math.MaxFloat64
+	for _, n := range nodes {
+		score, ok := monitorScore(n, now)
+		if !ok {
+			continue
+		}
+		if n.ID == d.preferredMonitor {
+			current = score
+		}
+		if score < lowest || score == lowest && n.ID < best {
+			best = n.ID
+			lowest = score
+		}
+	}
+	if best == "" {
+		d.preferredMonitor = ""
+		d.monitorCandidate = ""
+		return
+	}
+	if current == math.MaxFloat64 {
+		d.preferredMonitor = best
+		d.preferredSince = now
+		d.monitorCandidate = ""
+		return
+	}
+	if best == d.preferredMonitor || current-lowest < 15 {
+		d.monitorCandidate = ""
+		return
+	}
+	if d.monitorCandidate != best {
+		d.monitorCandidate = best
+		d.candidateSince = now
+		return
+	}
+	if now.Sub(d.candidateSince) >= 3*time.Minute && now.Sub(d.preferredSince) >= 3*time.Minute {
+		d.preferredMonitor = best
+		d.preferredSince = now
+		d.monitorCandidate = ""
+	}
+}
+func (d *Dashboard) agentWeight(node string, now time.Time) string {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	if d.preferredMonitor == "" || now.Sub(d.snapshot.At) > staleAfter {
+		return "100%\n"
+	}
+	if node == d.preferredMonitor {
+		return "100%\n"
+	}
+	return "10%\n"
+}
+func (d *Dashboard) monitorAgent(ctx context.Context) {
+	listener, err := net.Listen("tcp", net.JoinHostPort(d.member.Private, "8012"))
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "Monitoring preference agent unavailable")
+		return
+	}
+	defer listener.Close()
+	go func() { <-ctx.Done(); listener.Close() }()
+	for {
+		conn, err := listener.Accept()
+		if err != nil {
+			return
+		}
+		func() {
+			defer conn.Close()
+			conn.SetDeadline(time.Now().Add(time.Second))
+			host, _, err := net.SplitHostPort(conn.RemoteAddr().String())
+			allowed := false
+			for _, m := range d.config.Members {
+				if host == m.Private {
+					allowed = true
+				}
+			}
+			if err != nil || !allowed {
+				return
+			}
+			raw := make([]byte, 64)
+			count, err := conn.Read(raw)
+			if err != nil {
+				return
+			}
+			node := strings.TrimSpace(string(raw[:count]))
+			valid := false
+			for _, m := range d.config.Members {
+				if node == m.ID {
+					valid = true
+				}
+			}
+			if !valid {
+				return
+			}
+			io.WriteString(conn, d.agentWeight(node, time.Now()))
+		}()
 	}
 }

@@ -1,2 +1,5 @@
 # Unified patches contain required space-prefixed blank context lines.
 roles/desk_vpn_ui/files/upstream.patch -whitespace
+
+# Keep the self-contained HAProxy HTTP response framing intact.
+roles/desk_network/files/recovering.http -text -whitespace

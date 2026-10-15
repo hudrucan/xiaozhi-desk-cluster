@@ -1,0 +1,21 @@
+backend desk_network
+    mode http
+    balance first
+    retries 2
+    option redispatch
+    retry-on conn-failure empty-response response-timeout 503 504
+    http-request disable-l7-retry unless { method GET HEAD }
+    # Browser-private, short caching only for immutable-source assets in the pinned image.
+    http-request set-var(txn.network_static) bool(true) if { method GET HEAD } { path_reg -i ^/network/(js|css|lib|img|images)/.*\.(js|css|woff2?|ttf|png|jpe?g|gif|svg|ico)$ }
+    http-response set-header Cache-Control "private, max-age=300" if { var(txn.network_static) -m bool } { status 200 }
+    # Serve a self-contained recovery page even when no collector is native-ready.
+    # HTTP 503/Retry-After remain truthful for API clients and health monitoring.
+    errorfile 503 /etc/desk-network/recovering.http
+    http-request set-var(txn.network_document) bool(true) if { method GET HEAD } { req.hdr(Accept) -m sub text/html } { path_reg ^/network/([A-Za-z0-9_-]+\.php)?$ }
+    http-response return status 503 errorfile /etc/desk-network/recovering.http if { status 503 } { var(txn.network_document) -m bool }
+    option httpchk GET /health
+    http-check expect status 200
+    timeout server 60s
+{% for node in groups['deskboxes'] | sort %}
+    server {{ node }} {{ hostvars[node].cluster_ip }}:20213 check inter 3s fall 2 rise 1
+{% endfor %}

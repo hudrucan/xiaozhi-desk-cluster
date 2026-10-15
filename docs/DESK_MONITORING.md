@@ -10,8 +10,8 @@ All three nodes run one independent hub and one agent. Each hub monitors all
 three private agent endpoints. Each agent accepts only the three hubs' public
 SSH trust keys; this listener provides Beszel metrics, not a shell. The agent
 listens on its private IP at 45876 and the hub on its private IP at 8090.
-HAProxy routes only `/monitor/` to the hub pool, uses round-robin for new browser
-sessions and a cookie to retain the selected healthy hub. The Settings VIP owner
+HAProxy routes only `/monitor/` to the hub pool, uses weighted round-robin for new
+browser sessions and a cookie to retain the selected healthy hub. The UI VIP owner
 only provides the frontend: it does not own monitoring data, and the selected hub
 may be another node. A failed hub is removed
 from the pool; monitoring sessions switch to another independent hub on failure.
@@ -276,3 +276,30 @@ three VIP-selected hubs with HTTP 200 and coverage 3/3, at revision 25.
 All hubs reported the same committed/applied revision and retained their three
 existing monitors. The original administrator/password and native metrics were
 preserved. Idle encrypted checkpoint metadata stayed unchanged on every node.
+
+## Load preference for new sessions
+
+With `desk_monitoring_load_aware_enabled`, the existing dashboard collector
+provides a private TCP weight agent on port 8012, restricted to cluster peers.
+It uses cached, fresh telemetry and native monitoring health; it does not probe
+per request or access the HAProxy administrative socket. The local ingress
+collector chooses the preferred hub. All three hubs remain running and healthy
+sticky sessions stay on their selected hub.
+
+The score is CPU percentage plus role costs: UI/Xiaozhi owner 20, DNS owner 10,
+VPN owner 5, network collector 10 and 30 for each active ASR/LLM/TTS stage.
+Offline, stale, unhealthy and maintenance nodes are excluded from preference.
+An unavailable preferred hub is replaced immediately; switching between healthy
+hubs requires an improvement of at least 15 points sustained for three minutes,
+and three minutes since the previous selection.
+
+HAProxy receives only weights: 100% for the preferred hub and 10% for each other
+hub. This is a preference, not exclusive ownership. Native backend checks still
+control availability. Missing or stale placement data returns neutral weights.
+Existing cookies retain healthy sessions even when their hub is not preferred.
+The dashboard displays **Monitoring preferred** on the choice reported by the
+single current UI VIP owner; conflicting/missing owners suppress the badge.
+
+An optional NetAlertX CPU canary is labelled **Network trial**, only while its
+private frontend is reachable and its RAM marker is present. This does not mean
+NetAlertX has HA or that it manages the modem's DHCP configuration.

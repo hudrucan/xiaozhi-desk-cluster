@@ -12,6 +12,9 @@
       register: dashboard_before
       changed_when: false
       no_log: true
+    - name: Preserve the applied management VIP in the root page
+      ansible.builtin.set_fact:
+        dashboard_management_vip: "{{ (dashboard_before.stdout | from_json).vip }}"
     - name: Install the independent read-only collector
       ansible.builtin.include_role:
         name: desk_dashboard

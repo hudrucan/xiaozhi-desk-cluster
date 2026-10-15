@@ -1,0 +1,36 @@
+HTTP/1.1 503 Service Unavailable
+Content-Type: text/html; charset=utf-8
+Cache-Control: no-store
+Retry-After: 3
+Content-Length: 4024
+
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Network is starting - Desk Cluster</title>
+<style>
+:root{color-scheme:light dark;font:16px/1.55 system-ui,sans-serif;background:#f4f6f9;color:#30343b}*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px}.card{width:min(100%,500px);padding:32px;border:1px solid #d2d6de;border-radius:10px;background:#fff;box-shadow:0 6px 24px #0000000a}.brand{margin:0 0 24px;color:#65717e;font-size:13px;font-weight:600;letter-spacing:.08em;text-transform:uppercase}.heading{display:flex;align-items:center;gap:14px}h1{font-size:24px;line-height:1.25;margin:0}p{margin:16px 0;color:#65717e}.spinner{flex:none;width:24px;height:24px;border:3px solid #3c8dbc35;border-top-color:#3c8dbc;border-radius:50%;animation:spin 1s linear infinite}.status{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-top:24px;padding-top:18px;border-top:1px solid #e5e7eb;font-size:13px;color:#65717e}.actions{display:flex;align-items:center;gap:12px;margin-top:24px;flex-wrap:wrap}a,button{font:inherit;font-size:14px;min-height:42px;padding:9px 15px;border-radius:5px;border:1px solid #c5cbd1;text-decoration:none;color:inherit;background:transparent;cursor:pointer}a{background:#3c8dbc;color:white;border-color:#3c8dbc}button:disabled{opacity:.55;cursor:wait}.hint{font-size:13px;margin-bottom:0}#detail{min-height:50px}@keyframes spin{to{transform:rotate(360deg)}}@media(prefers-color-scheme:dark){:root{background:#252525;color:#e8e8e8}.card{background:#333;border-color:#494949}.brand,p,.status{color:#adb5bd}.status{border-color:#494949}button{border-color:#5b6269}}@media(prefers-reduced-motion:reduce){.spinner{animation:none}}@media(max-width:420px){.card{padding:24px}h1{font-size:21px}}
+</style></head><body><main class="card" aria-labelledby="title"><div class="brand">Desk Cluster / Network</div><div class="heading"><span class="spinner" aria-hidden="true"></span><h1 id="title">Network is starting</h1></div><p id="detail" role="status" aria-live="polite">Waiting for the Network collector. This can take a couple of minutes during a node change.</p><div class="status"><span id="status">Reconnecting automatically</span><span id="elapsed">0s</span></div><div class="actions"><a href="/">Open cluster dashboard</a><button type="button" id="retry">Check again</button></div><p class="hint">This page will reopen automatically when Network is ready.</p><noscript><p>JavaScript is disabled. Reload this page to check again.</p></noscript></main>
+<script>
+(()=>{
+const started=Date.now(),status=document.getElementById('status'),detail=document.getElementById('detail'),elapsed=document.getElementById('elapsed'),retry=document.getElementById('retry');
+let timer,busy=false,opening=false;
+async function check(){
+ if(busy||opening)return;clearTimeout(timer);busy=true;retry.disabled=true;
+ const abort=new AbortController(),deadline=setTimeout(()=>abort.abort(),4000);
+ try{
+  const response=await fetch('/network/desk/status',{cache:'no-store',credentials:'same-origin',signal:abort.signal});
+  if(!response.ok)throw Error('Not ready');const value=await response.json();
+  if(value.state==='active'){
+   opening=true;status.textContent='Ready - opening Network';location.reload();return;
+  }
+  status.textContent='Waiting for Network';
+ }catch{status.textContent='Reconnecting automatically';}
+ finally{
+  clearTimeout(deadline);busy=false;retry.disabled=opening;
+  if(!opening)timer=setTimeout(check,document.hidden?10000:3000);
+ }
+}
+retry.addEventListener('click',check);
+setInterval(()=>{const seconds=Math.floor((Date.now()-started)/1000);elapsed.textContent=seconds<60?seconds+'s':Math.floor(seconds/60)+'m '+seconds%60+'s';if(seconds>=180&&!opening)detail.textContent='Network is taking longer than usual. Checking will continue; you can inspect node status from the cluster dashboard.';},1000);
+check();
+})();
+</script></body></html>
