@@ -1,0 +1,42 @@
+[Unit]
+Description=Desk Network owner-routed Core NATS LAN scan worker
+After=network-online.target nats-server.service desk-dashboard.service
+Wants=network-online.target
+
+[Service]
+User=desk-network-scan
+Group=desk-network-runtime
+ExecStart=/opt/desk-network-scan/bin/python /usr/local/libexec/desk-network/scan_service.py
+LoadCredential=config.json:/etc/desk-network-scan/config.json
+Restart=on-failure
+RestartSec=5
+RuntimeDirectory=desk-network-scan
+RuntimeDirectoryMode=0750
+# Preserve the directory inode mounted into the active native container.
+RuntimeDirectoryPreserve=yes
+UMask=0007
+NoNewPrivileges=true
+CapabilityBoundingSet=CAP_NET_RAW
+AmbientCapabilities=CAP_NET_RAW
+ProtectSystem=strict
+ProtectHome=true
+InaccessiblePaths=/var/lib -/etc/desk-network -/etc/nats-server.conf -/etc/nats-network-scan.json
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictRealtime=true
+RestrictAddressFamilies=AF_INET AF_UNIX AF_PACKET AF_NETLINK
+CPUQuota=15%
+CPUWeight=1
+Nice=19
+MemoryMax=64M
+TasksMax=16
+LimitNOFILE=128
+LimitFSIZE=64K
+Environment=PYTHONDONTWRITEBYTECODE=1
+
+[Install]
+WantedBy=multi-user.target

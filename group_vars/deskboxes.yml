@@ -48,3 +48,8 @@ desk_monitoring_load_aware_enabled: true
 
 # One LAN-only discovery owner; replicated checkpoints on all three nodes.
 desk_network_enabled: true
+
+# Owner selects a lightweight scan worker through node-specific Core NATS subjects.
+desk_network_scan_enabled: true
+# All replicas retain imports while standby; only the leased owner runs native jobs.
+desk_network_warm_nodes: [deskb1x, deskb2x, deskb3x]

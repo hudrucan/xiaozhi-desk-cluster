@@ -1,0 +1,88 @@
+---
+- name: Require pre-created ignored scan credentials
+  ansible.builtin.set_fact:
+    network_scan_secret: "{{ lookup('file',playbook_dir+'/secret/network/scan-nats.json') | from_json }}"
+  no_log: true
+- name: Install Python isolated runtime support
+  ansible.builtin.apt:
+    name: [python3-venv, arp-scan]
+    state: present
+- name: Create shared runtime group matching the native container GID
+  ansible.builtin.group:
+    name: desk-network-runtime
+    gid: 20211
+    system: true
+- name: Create unprivileged scan worker account
+  ansible.builtin.user:
+    name: desk-network-scan
+    system: true
+    shell: /usr/sbin/nologin
+    create_home: false
+- name: Create root-only credential directory
+  ansible.builtin.file:
+    path: /etc/desk-network-scan
+    state: directory
+    mode: '0700'
+- name: Install bounded scan helpers
+  ansible.builtin.copy:
+    src: '{{ playbook_dir }}/roles/desk_network/files/{{ item }}'
+    dest: '/usr/local/libexec/desk-network/{{ item }}'
+    mode: '0755'
+    validate: /usr/bin/python3 -c "import ast,sys; ast.parse(open(sys.argv[1]).read())" %s
+  loop: [mdns.py, arp.py, discovery.py, bootstrap.py, scan_protocol.py, scan_service.py, install_nats_scan.py]
+  register: scan_helpers
+- name: Install hash-pinned Python requirements
+  ansible.builtin.copy:
+    src: '{{ playbook_dir }}/roles/desk_network/files/scan-requirements.txt'
+    dest: /usr/local/libexec/desk-network/scan-requirements.txt
+    mode: '0644'
+- name: Install hash-verified packages in dedicated worker venv
+  ansible.builtin.pip:
+    requirements: /usr/local/libexec/desk-network/scan-requirements.txt
+    virtualenv: /opt/desk-network-scan
+    virtualenv_command: /usr/bin/python3 -m venv
+    extra_args: '--require-hashes --only-binary=:all:'
+  register: scan_packages
+- name: Install dedicated NATS credential list for scoped server reload
+  ansible.builtin.copy:
+    content: '{{ network_scan_secret | to_nice_json }}'
+    dest: /etc/nats-network-scan.json
+    mode: '0600'
+  no_log: true
+- name: Install only this node's worker and coordinator credentials
+  ansible.builtin.copy:
+    content: "{{ {'node':inventory_hostname,'key':network_scan_secret.key,'members':{'deskb1x':hostvars['deskb1x'].cluster_ip,'deskb2x':hostvars['deskb2x'].cluster_ip,'deskb3x':hostvars['deskb3x'].cluster_ip},'servers':groups['deskboxes'] | map('extract',hostvars,'cluster_ip') | map('regex_replace','^(.*)$','nats://\\1:4222') | list,'worker':network_scan_secret.workers[inventory_hostname],'coordinator':network_scan_secret.coordinators[inventory_hostname]} | to_nice_json }}"
+    dest: /etc/desk-network-scan/config.json
+    mode: '0600'
+  register: scan_credentials
+  no_log: true
+- name: Add validated NATS users by config reload without service restart
+  ansible.builtin.command:
+    argv: [python3, /usr/local/libexec/desk-network/install_nats_scan.py, --secret, /etc/nats-network-scan.json]
+  register: scan_nats
+  changed_when: scan_nats.stdout == 'changed'
+  no_log: true
+- name: Install resource-bounded scan worker service
+  ansible.builtin.template:
+    src: '{{ playbook_dir }}/roles/desk_network/templates/desk-network-scan.service.j2'
+    dest: /etc/systemd/system/desk-network-scan.service
+    mode: '0644'
+  register: scan_unit
+- name: Start or refresh scan worker only when changed
+  ansible.builtin.systemd_service:
+    name: desk-network-scan
+    state: "{{ 'restarted' if scan_helpers.changed or scan_packages.changed or scan_credentials.changed or scan_unit.changed else 'started' }}"
+    enabled: true
+    daemon_reload: true
+
+- name: Require a live dispatcher socket and both NATS connections
+  ansible.builtin.command:
+    argv:
+      - python3
+      - -c
+      - "import socket,json; s=socket.socket(socket.AF_UNIX); s.settimeout(2); s.connect('/run/desk-network-scan/dispatch.sock'); s.sendall(b'{\"health\":true}\\n'); v=json.loads(s.recv(1024)); s.close(); assert v['state']=='ready'; print('Scan transport ready')"
+  register: scan_transport_ready
+  until: scan_transport_ready.rc == 0
+  retries: 20
+  delay: 1
+  changed_when: false

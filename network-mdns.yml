@@ -38,8 +38,13 @@
         dest: '/usr/local/libexec/desk-network/{{ item }}'
         mode: '0755'
         validate: /usr/bin/python3 -c "import ast,sys; ast.parse(open(sys.argv[1]).read())" %s
-      loop: [mdns.py, ha.py]
+      loop: [mdns.py, arp.py, discovery.py, bootstrap.py, ha.py]
       register: mdns_helpers
+    - name: Install native scan status UI
+      ansible.builtin.copy:
+        src: roles/desk_network/files/scan-ui.js
+        dest: /usr/local/libexec/desk-network/scan-ui.js
+        mode: '0644'
     - name: Install the native mDNS naming policy
       ansible.builtin.copy:
         src: roles/desk_network/files/policy.json

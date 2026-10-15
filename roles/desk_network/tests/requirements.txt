@@ -1,1 +1,2 @@
 dnspython==2.8.0
+nats-py==2.13.1

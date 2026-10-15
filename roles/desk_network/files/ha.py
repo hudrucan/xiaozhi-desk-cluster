@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """One LAN collector, majority leases, certified consistent SQLite checkpoints."""
 from contextlib import closing
+import discovery,bootstrap
 import ast, signal, argparse, base64, concurrent.futures, gzip, hashlib, hmac, http.client, http.server, io, json, logging, os, pathlib, re, secrets, socket, sqlite3, ssl, subprocess, sys, threading, time, urllib.parse, urllib.request
 LOG = logging.getLogger('desk-network')
 TTL, MARGIN, LIMIT, DBLIMIT = 15., 5., 16*1024*1024, 64*1024*1024
@@ -20,10 +21,11 @@ def read_bounded(stream,limit):
   if size>limit:raise Unavailable('Response exceeds byte limit')
   out.write(part)
  return out.getvalue()
-def atomic(p,b):
+def atomic(p,b,mode=0o600):
  p=pathlib.Path(p);p.parent.mkdir(parents=True,exist_ok=True);tmp=p.with_name(p.name+'.tmp-'+secrets.token_hex(4))
  fd=os.open(tmp,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
  try:
+  os.fchmod(fd,mode)
   with os.fdopen(fd,'wb') as f: f.write(b);f.flush();os.fsync(f.fileno())
   os.replace(tmp,p)
   d=os.open(p.parent,os.O_RDONLY|os.O_DIRECTORY)
@@ -109,8 +111,8 @@ def snapshot_worker(action,*,data=None,run=None,blob=None):
 POLICY={
  'SCAN_SUBNETS':['192.168.1.0/24 --interface=wlan0'], 'TIMEZONE':'Asia/Ho_Chi_Minh',
  'BACKEND_API_URL':'/network/server', 'LOADED_PLUGINS':['ARPSCAN','AVAHISCAN','UI','CUSTPROP','DBCLNP','INTRNT','MAINT','NEWDEV','SETPWD','SYNC','VNDRPDT','WORKFLOWS'],
- 'ARPSCAN_RUN':'schedule','ARPSCAN_ARGS':'sudo arp-scan --ignoredups --retry=3',
- 'NSLOOKUP_RUN':'disabled','AVAHISCAN_RUN':'schedule','AVAHISCAN_RUN_SCHD':'*/5 * * * *','AVAHISCAN_CMD':'python3 /app/desk_network/mdns.py','AVAHISCAN_RUN_TIMEOUT':10,'AVAHISCAN_SET_ALWAYS':[],'AVAHISCAN_SET_EMPTY':['devName','devFQDN'],'AVAHISCAN_WATCH':['watchedValue2'],'AVAHISCAN_REPORT_ON':[],'NBTSCAN_RUN':'disabled','DIGSCAN_RUN':'disabled',
+ 'ARPSCAN_CMD':'python3 /app/desk_network/arp.py userSubnets={subnets}','ARPSCAN_RUN_TIMEOUT':60,'ARPSCAN_RUN':'schedule','ARPSCAN_ARGS':'sudo arp-scan --ignoredups --retry=3',
+ 'NSLOOKUP_RUN':'disabled','AVAHISCAN_RUN':'schedule','AVAHISCAN_RUN_SCHD':'*/5 * * * *','AVAHISCAN_CMD':'python3 /app/desk_network/mdns.py','AVAHISCAN_RUN_TIMEOUT':30,'AVAHISCAN_SET_ALWAYS':[],'AVAHISCAN_SET_EMPTY':['devName','devFQDN'],'AVAHISCAN_WATCH':['watchedValue2'],'AVAHISCAN_REPORT_ON':[],'NBTSCAN_RUN':'disabled','DIGSCAN_RUN':'disabled',
  'INTRNT_RUN':'disabled','SYNC_RUN':'disabled','VNDRPDT_RUN':'disabled','WORKFLOWS_RUN':'disabled',
  'MAINT_RUN':'schedule','MAINT_RUN_SCHD':'17 3 * * *','MAINT_PERF_DAYS':0,'DBCLNP_RUN':'schedule','DBCLNP_RUN_SCHD':'37 3 * * *',
  'DAYS_TO_KEEP_EVENTS':14,'DEV_HIST_DAYS':7,'LOG_LEVEL':'minimal','SETPWD_enable_password':False,'DEEP_SLEEP':False,
@@ -197,18 +199,21 @@ class Cluster:
  def __init__(self,c):
   self.c=c;self.key=base64.b64decode(c['key']);self.node=c['node'];self.members=c['members'];self.root=pathlib.Path('/var/lib/desk-network');self.run=pathlib.Path('/run/desk-network');self.run.mkdir(exist_ok=True)
   self.store=Store(self.root/'state',self.key,self.members);self.lease=Lease(self.root/'state/vote.json')
-  self.term=None;self.until=0.;self.running=False;self.ready=False;self.starting=False;self.sync_state='synced';self.last_snapshot=0.;self.last_health=0.;self.last_local=0.;self.local={};self.sequence=0;self.pid=None;self.cooldown=0.;self.container_started=0.;self.unhealthy_since=0.
-  self.oplock=threading.RLock();self.snaplock=threading.Lock();self.pool=concurrent.futures.ThreadPoolExecutor(max_workers=8);self.stop=threading.Event();self.nonces={};self.authlock=threading.Lock()
+  self.term=None;self.until=0.;self.running=False;self.ready=False;self.starting=False;self.sync_state='synced';self.last_snapshot=0.;self.last_health=0.;self.last_local=0.;self.local={};self.sequence=0;self.pid=None;self.cooldown=0.;self.container_started=0.;self.boot_ready_seconds=None;self.unhealthy_since=0.
+  self.warm=self.c.get("warm_standby") is True;self.generation=None;self.promotion_started=0.;self.promotion_seconds=None;self.warm_path=self.run/"warm"
+  self.budget=bootstrap.Budget(clock);self.oplock=threading.RLock();self.snaplock=threading.Lock();self.pool=concurrent.futures.ThreadPoolExecutor(max_workers=8);self.stop=threading.Event();self.nonces={};self.authlock=threading.Lock();self.scan_lock=threading.Lock();self.scan_queued_at=0.;self.scan_cache={};self.scan_cache_at=0.
   context=ssl.create_default_context(cafile=c['certificate']);self.opener=urllib.request.build_opener(urllib.request.ProxyHandler({}),urllib.request.HTTPSHandler(context=context))
  def owned(self):return self.running and clock()<self.until
  def status(self):
   return {'node':self.node,'lease':self.lease.status(),'active':self.owned(),'ready':self.owned() and self.ready,'head':self.store.head,'eligible':self.eligible(),'score':self.score(),'sync':self.sync_state}
  def eligible(self):
+  if self.warm and ((self.run/'warm-drain').exists() or (not self.owned() and self.warm_state().get('state')!='inactive')):return False
   if clock()<self.cooldown or not self.local or clock()-self.last_local>20 or not self.local.get('online'):return False
   return not any(v is True for v in self.local.get('admission',{}).values())
  def score(self):
   n=self.local;score=n.get('cpu')
   if not isinstance(score,(int,float)):score=100
+  if self.warm and self.warm_state().get('state')=='inactive':score-=100
   return score+sum(cost for k,cost in {'xiaozhi':20,'dns':10,'vpn':5}.items() if n.get('vip',{}).get(k))+sum(30 for k in ('asr','llm','tts') if (n.get('activity',{}).get(k) or 0)>0)
  def refresh_local(self):
   try:
@@ -265,25 +270,81 @@ class Cluster:
    self.last_snapshot=clock();self.sync_state='synced'
  def command(self,*args,timeout=12):
   return subprocess.run(args,check=True,capture_output=True,timeout=timeout)
- def start_container(self):
+ def warm_control(self,active=False):
+  self.warm_path.mkdir(mode=0o755,parents=True,exist_ok=True);os.chmod(self.warm_path,0o755)
+  atomic(self.warm_path/'control.json',encoded({'generation':self.generation or '0'*32,'until':self.until if active else 0}),mode=0o644)
+ def renew(self,stamp,term):
   with self.oplock:
-   if self.running or clock()>=self.until:return
+   if not self.owned() or self.term!=term:return False
+   self.until=max(self.until,stamp+TTL-MARGIN)
+   if self.warm:self.warm_control(True)
+   return True
+ def warm_state(self):
+  if not self.warm or not self.pid:return {}
+  try:
+   pid,start=self.pid;process=pathlib.Path(f'/proc/{pid}')
+   if process.joinpath('stat').read_text().split(') ',1)[1].split()[19]!=start:return {}
+   path=process/'root/tmp/desk-warm-status.json'
+   if path.stat().st_size>2048:return {}
+   value=json.loads(path.read_text())
+   return value if isinstance(value,dict) else {}
+  except (OSError,ValueError,IndexError):return {}
+ def deactivate_warm(self):
+  self.until=0.;self.ready=False;self.warm_control()
+  deadline=clock()+1.5
+  while clock()<deadline:
+   value=self.warm_state()
+   if value.get('state')=='inactive' and value.get('groups')==[]:
+    with self.scan_lock:self.scan_queued_at=0.;self.scan_cache_at=0.
+    self.generation=None
+    return True
+   time.sleep(.05)
+  return False
+ def start_container(self,preload=False):
+  with self.oplock:
+   if not preload and clock()>=self.until:return
+   if self.running:
+    if self.warm and not preload:
+     self.activate_warm()
+    return
+   if self.warm:self.warm_control()
    restore(self.store.blob(self.store.head['digest']),self.root/'data',self.run,self.c['api_token'])
    cmd=['podman','run','-d','--replace','--name',NAME,'--network=host','--read-only','--cpus=0.5','--cpu-shares=128','--memory=512m','--pids-limit=256','--log-driver=k8s-file','--log-opt=max-size=5mb','--cap-drop=ALL','--tmpfs','/tmp:rw,noexec,nosuid,nodev,mode=1700,size=256m','-v',str(self.root/'data')+':/data:rw','-v','/usr/local/libexec/desk-network/api-loopback.py:/app/server/api_server/api_server_start.py:ro','-v','/etc/desk-network/policy.json:/data/config/app_conf_override.json:ro','-v','/usr/local/libexec/desk-network/override-policy.sh:/entrypoint.d/35-apply-conf-override.sh:ro','-v','/usr/local/libexec/desk-network/lang-cached.php:/app/front/php/templates/language/lang.php:ro','-v','/usr/local/libexec/desk-network/opcache.so:/usr/lib/php83/modules/opcache.so:ro','-v','/usr/local/libexec/desk-network/opcache.ini:/etc/php83/conf.d/10_desk_opcache.ini:ro','-e','LISTEN_ADDR='+self.members[self.node],'-e','PORT=20211','-e','GRAPHQL_PORT=20212']
-   cmd+=['-v','/usr/local/libexec/desk-network/mdns.py:/app/desk_network/mdns.py:ro']
+   cmd+=['-v','/usr/local/libexec/desk-network/mdns.py:/app/desk_network/mdns.py:ro','-v','/usr/local/libexec/desk-network/arp.py:/app/desk_network/arp.py:ro','-v','/usr/local/libexec/desk-network/discovery.py:/app/desk_network/discovery.py:ro']
+   if self.c.get('scan_distributed'):
+    cmd+=['-v','/run/desk-network-scan:/run/desk-network-scan:ro','-e','DESK_NETWORK_DISTRIBUTED=1']
    for cap in ('NET_ADMIN','NET_RAW','NET_BIND_SERVICE','CHOWN','SETUID','SETGID'):cmd+=['--cap-add='+cap]
-   cmd.append(IMAGE);self.running=True;self.ready=False;self.container_started=clock()
+   if self.warm:
+    cmd+=['-v',str(self.warm_path)+':/run/desk-network-warm:ro','-v','/usr/local/libexec/desk-network/warm_runtime.py:/app/desk_network/warm_runtime.py:ro','-v','/usr/local/libexec/desk-network/warm-backend.sh:/services/start-backend.sh:ro','-v','/usr/local/libexec/desk-network/warm-idle.sh:/services/start-php-fpm.sh:ro','-v','/usr/local/libexec/desk-network/warm-idle.sh:/services/start-cron.sh:ro']
+   cmd.append(IMAGE);self.running=True;self.ready=False;self.container_started=clock();self.boot_ready_seconds=None
    try:
     self.command(*cmd,timeout=5)
     info=json.loads(self.command('podman','inspect',NAME,timeout=1).stdout)[0];pid=info['State']['Pid']
     self.pid=(pid,pathlib.Path(f'/proc/{pid}/stat').read_text().split(') ',1)[1].split()[19])
+    if self.budget.start(self.pid,self.local,clock()-self.last_local<15):LOG.info('Collector bootstrap budget: at most one core for 60 seconds')
    except Exception:
     self.kill_container();raise
-   if clock()>=self.until:self.kill_container();raise Unavailable('Lease expired while starting')
+   if not preload and clock()>=self.until:self.kill_container();raise Unavailable('Lease expired while starting')
    self.last_snapshot=clock()
    LOG.info('LAN collector started on %s',self.node)
- def kill_container(self):
+ def activate_warm(self):
+  if not self.owned() or self.warm_state().get('state')!='inactive':raise Unavailable('Warm runtime not inactive')
+  # No PHP/backend/database handles survive this boundary. The preloaded parent
+  # contains imports only; restore the latest majority-certified data first.
+  restore(self.store.blob(self.store.head['digest']),self.root/'data',self.run,self.c['api_token'])
+  if not self.owned():raise Unavailable('Lease expired during warm restore')
+  self.generation=secrets.token_hex(16);self.promotion_started=clock();self.promotion_seconds=None
+  self.boot_ready_seconds=None;self.container_started=clock();self.last_snapshot=clock();self.last_health=0.;self.unhealthy_since=0.
+  self.warm_control(True)
+ def kill_container(self,force=False):
+  if self.warm and self.running and not force and not self.stop.is_set():
+   self.until=0.;self.ready=False
+   with self.oplock:
+    if self.deactivate_warm():return
+   LOG.warning('Warm fencing failed; destroying the native namespace')
+  self.budget.settle(True)
   self.until=0.;self.ready=False
+  with self.scan_lock:self.scan_queued_at=0.;self.scan_cache_at=0.
   # Kill the namespace init immediately, before potentially slow Podman cleanup.
   # Linux kills every process in a PID namespace when its init exits.
   try:
@@ -297,12 +358,16 @@ class Cluster:
   except Exception:pass
   try:self.command('podman','rm','-f',NAME,timeout=2)
   except Exception:pass
-  self.running=False;self.pid=None
+  self.running=False;self.pid=None;self.budget.close()
   (self.run/'public.json').unlink(missing_ok=True)
  def fence(self):
   while not self.stop.wait(.5):
-   if self.running and clock()>=self.until:self.kill_container();LOG.warning('Collector fenced after lease expiration')
+   self.budget.settle(self.ready or (not self.owned() and not self.warm) or (self.warm and self.warm_state().get('state')=='inactive') or not bootstrap.quiet(self.local) or clock()-self.last_local>15)
+   if self.running and clock()>=self.until and (not self.warm or self.generation is not None):self.kill_container();LOG.warning('Collector fenced after lease expiration')
  def native_health(self):
+  if self.warm:
+   state=self.warm_state()
+   if state.get('state')!='active' or state.get('generation')!=self.generation:return False
   try:
    req=urllib.request.Request('http://127.0.0.1:20212/auth',headers={'Authorization':'Bearer '+self.c['api_token']})
    with self.opener.open(req,timeout=2) as r: ok=r.status==200 and json.loads(r.read(32768)).get('success') is True
@@ -318,25 +383,38 @@ class Cluster:
     self.scan_value=scan_schedule(path.read_bytes()) if stat.st_size<=1024*1024 else ('',0);self.scan_version=version
    return self.scan_value
   except OSError:return '',0
+ def scan_status(self):
+  now=time.time()
+  with self.scan_lock:
+   if now-self.scan_cache_at<2:return self.scan_cache
+   root=pathlib.Path(f'/proc/{self.pid[0]}/root/tmp') if self.pid and self.owned() else None
+   value=discovery.status(self.root/'data/db/app.db',root,'/run/desk-network-scan/owner-state.json',self.node,list(self.term) if self.term else None,self.live_scan()[1],self.scan_queued_at,now)
+   value['service_state']='active' if self.owned() and self.ready else 'starting' if self.owned() else 'standby'
+   self.scan_cache=value;self.scan_cache_at=now
+   return value
  def public(self):
   schedule,minutes=self.live_scan()
-  return {'node':self.node,'state':'active' if self.owned() and self.ready else 'starting' if self.owned() else 'standby','protocol':'desk-network-v1','observed_at':time.time(),'voter_ready':clock()>=self.lease.quarantine,'revision':self.store.head['revision'] if self.store.head else None,'sync':self.sync_state,'subnet':'192.168.1.0/24','scan_minutes':minutes,'scan_schedule':schedule}
+  return {'node':self.node,'state':'active' if self.owned() and self.ready else 'starting' if self.owned() else 'standby','protocol':'desk-network-v1','lease_term':list(self.term) if self.owned() else None,'observed_at':time.time(),'voter_ready':clock()>=self.lease.quarantine,'revision':self.store.head['revision'] if self.store.head else None,'sync':self.sync_state,'subnet':'192.168.1.0/24','scan_minutes':minutes,'scan_schedule':schedule,'boot_ready_seconds':self.boot_ready_seconds,'bootstrap_budget':'boosted' if self.budget.fd is not None else 'steady','standby_mode':'warm' if self.warm else 'cold','warm_state':self.warm_state().get('state') if self.warm else None,'preload_seconds':self.warm_state().get('preload_seconds') if self.warm else None,'promotion_seconds':self.promotion_seconds}
  def run_loop(self):
-  self.kill_container();threading.Thread(target=self.fence,daemon=True).start()
+  self.kill_container(force=True);threading.Thread(target=self.fence,daemon=True).start()
   while not self.stop.is_set():
    try:
     self.refresh_local();heads=self.fanout('status')
     if self.owned():
-     if any(v is True for v in self.local.get('admission',{}).values()):
+     if any(v is True for v in self.local.get('admission',{}).values()) or (self.warm and (self.run/'warm-drain').exists()):
       try:self.snapshot()
       except Exception:pass
       self.kill_container();self.term=None
      else:
       stamp=clock();votes=self.fanout('lease',{'term':self.term})
-      if len(votes)>=2:self.until=stamp+TTL-MARGIN
+      if len(votes)>=2:self.renew(stamp,self.term)
       if clock()-self.last_health>3:
        healthy=self.native_health();self.last_health=clock()
-       if healthy:self.unhealthy_since=0.
+       if healthy:
+        self.unhealthy_since=0.
+        if self.boot_ready_seconds is None:
+         self.boot_ready_seconds=round(clock()-self.container_started,2)
+         if self.warm:self.promotion_seconds=round(clock()-self.promotion_started,2)
        elif not self.unhealthy_since:self.unhealthy_since=clock()
        self.ready=healthy
        if not healthy and clock()-self.container_started>120 and clock()-self.unhealthy_since>20:
@@ -346,6 +424,9 @@ class Cluster:
        if not self.snaplock.locked():threading.Thread(target=self.try_snapshot,daemon=True).start()
     else:
      self.catchup(heads)
+     if self.warm and self.running and clock()-self.container_started>150 and self.warm_state().get('state') not in ('inactive','active'):
+      self.kill_container(force=True);self.cooldown=clock()+90;LOG.warning('Warm preload failed; canary withdrawn')
+     if self.warm and not self.running and clock()>=self.cooldown and self.local.get('online') and not any(v is True for v in self.local.get('admission',{}).values()):self.start_container(preload=True)
      active=any(h.get('active') or h['lease']['holder'] for h in heads.values())
      candidates=[(h.get('score',200),n) for n,h in heads.items() if h.get('eligible') and h['lease']['remaining']==0]
      if not active and len(heads)>=2 and candidates and min(candidates)[1]==self.node:
@@ -356,7 +437,7 @@ class Cluster:
     atomic_public(self.run/'public.json',self.public())
    except Exception as e:LOG.warning('Network reconciliation pending (%s)',type(e).__name__)
    self.stop.wait(2)
-  self.kill_container()
+  self.kill_container(force=True)
  def try_snapshot(self):
   try:self.snapshot()
   except Exception: self.sync_state='pending';self.last_snapshot=clock()-270;LOG.warning('Checkpoint replication pending')
@@ -422,20 +503,20 @@ def rewrite_text(raw,ctype,node='',path=''):
   # Guard only inline handlers; do not alter the actual function declaration.
   text=re.sub(r'onclick="([^"]*\binitializeTabs\(\)[^"]*)"',lambda m:'onclick="'+m[1].replace('initializeTabs()',"(typeof initializeTabs==='function'&&initializeTabs())")+'"',text)
   storage="""<script>(()=>{function isolated(storage){const prefix='desk_network:';const keys=()=>Object.keys(storage).filter(k=>k.startsWith(prefix));return {getItem:k=>storage.getItem(prefix+k),setItem:(k,v)=>storage.setItem(prefix+k,v),removeItem:k=>storage.removeItem(prefix+k),clear:()=>keys().forEach(k=>storage.removeItem(k)),key:n=>keys()[n]?.slice(prefix.length)??null,get length(){return keys().length}};}window.deskNetworkLocalStorage=isolated(window.localStorage);window.deskNetworkSessionStorage=isolated(window.sessionStorage);})();</script>"""
-  layout="""<style id="desk-network-layout">#desk-network-tools .desk-network-meta{margin:0 10px 8px;display:flex;align-items:center;gap:6px;font-size:11px}#desk-network-status{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;opacity:.8}#desk-network-scan{flex-shrink:0}.sidebar-collapse #desk-network-tools .desk-network-meta{display:none}</style>"""
+  layout="""<style id="desk-network-layout">#desk-network-tools .desk-network-meta{margin:0 10px 8px;display:flex;align-items:center;gap:6px;font-size:11px}#desk-network-status{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;opacity:.8}#desk-network-scan{flex-shrink:0}.sidebar-collapse #desk-network-tools .desk-network-meta,.sidebar-collapse #desk-network-discovery{display:none}#desk-network-discovery{margin:0 10px 10px;font-size:11px;border-top:1px solid #8883;padding-top:7px}#desk-network-discovery summary{cursor:pointer;display:flex;justify-content:space-between;gap:6px}#desk-network-discovery .desk-discovery-content{padding:8px 0 0;line-height:1.5;overflow-wrap:anywhere}#desk-network-discovery p{margin:0 0 5px}#desk-network-discovery small{display:block;opacity:.8;margin-bottom:8px}#desk-network-scan:disabled{opacity:.75}</style>"""
   text=text.replace('<head>','<head>'+storage+layout,1)
   text=text.replace('src="lib/treeviz/treeviz.iife.js"','src="lib/treeviz/treeviz.iife.js?desk=library-only-v1"')
   text=text.replace('js/api.js?v=','js/api.js?desk=base-v1&v=')
-  banner='<li id="desk-network-tools"><a href="/"><i class="fa fa-fw fa-home"></i><span>Desk Cluster</span></a><div class="desk-network-meta"><span id="desk-network-status">HA</span><button type="button" id="desk-network-scan" class="btn btn-default btn-xs">Scan now</button></div></li>'
+  banner='<li id="desk-network-tools"><a href="/"><i class="fa fa-fw fa-home"></i><span>Desk Cluster</span></a><div class="desk-network-meta"><span id="desk-network-status">HA</span><button type="button" id="desk-network-scan" class="btn btn-default btn-xs">Scan now</button></div><details id="desk-network-discovery"><summary>Discovery <span id="desk-discovery-freshness">Unknown</span></summary><div class="desk-discovery-content"><p id="desk-discovery-owner">Owner unconfirmed</p><p id="desk-discovery-arp">ARP · Waiting</p><small id="desk-discovery-result"></small><p id="desk-discovery-mdns">mDNS · Waiting</p><small id="desk-discovery-age">Freshness unknown</small></div></details></li>'
   text,placed=re.subn(r'(<ul\b[^>]*class="[^"]*\bsidebar-menu\b[^"]*"[^>]*>)',lambda m:m[1]+banner,text,count=1)
   if not placed:text=re.sub(r'(<body[^>]*>)',lambda m:m[1]+'<ul>'+banner+'</ul>',text,count=1)
   if urllib.parse.urlsplit(path).path=='/network/settings.php':
    notice='<aside id="desk-settings-policy" style="padding:10px 15px;background:#3c8dbc18;border-bottom:1px solid #3c8dbc40;font-size:13px">Cluster-managed controls are marked and locked. Other settings, including the scan schedule, can be saved here.</aside><script defer src="/network/desk/settings-policy.js"></script>'
    text,inserted=re.subn(r'(<div\b[^>]*\bclass="[^"]*\bcontent-wrapper\b[^"]*"[^>]*>)',lambda m:m[1]+notice,text,count=1)
    if not inserted:text=text.replace(banner,banner+notice,1)
-  script='''<script>(()=>{const initialOwner=OWNER_JSON;let wasUnavailable=false;const out=document.getElementById('desk-network-status'),b=document.getElementById('desk-network-scan');async function status(){try{const r=await fetch('/network/desk/status');if(!r.ok)throw Error('Recovering');const s=await r.json();if(s.node!==initialOwner||wasUnavailable){location.reload();return;}out.textContent=s.sync==='synced'?'Synced':'Pending';out.title=`Network · ${s.node} · LAN only · ${s.sync==='synced'?'Synced':'Sync pending'}`;}catch{wasUnavailable=true;out.textContent='Reconnecting';out.title='Network · reconnecting';}}b?.addEventListener('click',async()=>{b.disabled=true;try{const r=await fetch('/network/desk/scan',{method:'POST',headers:{'X-Desk-Action':'scan'}});b.textContent=r.ok?'Queued':'Try again';}catch{b.textContent='Try again';}setTimeout(()=>{b.disabled=false;b.textContent='Scan now';},5000);});status();setInterval(status,10000);})();</script>'''
+  script='''<script>(()=>{const initialOwner=OWNER_JSON;let wasUnavailable=false;const out=document.getElementById('desk-network-status'),b=document.getElementById('desk-network-scan');async function status(){try{const r=await fetch('/network/desk/status');if(!r.ok)throw Error('Recovering');const s=await r.json();if(s.node!==initialOwner||wasUnavailable){location.reload();return;}out.textContent=s.sync==='synced'?'Synced':'Pending';out.title=`Network · ${s.node} · LAN only · ${s.sync==='synced'?'Synced':'Sync pending'}`;}catch{wasUnavailable=true;out.textContent='Reconnecting';out.title='Network · reconnecting';}}status();setInterval(status,10000);})();</script>'''
   script=script.replace('OWNER_JSON',json.dumps(node))
-  text=text.replace('</body>',script+'</body>')
+  text=text.replace('</body>',script+'<script defer src="/network/desk/scan-ui.js"></script></body>')
  return text.encode()
 class UI(http.server.BaseHTTPRequestHandler):
  protocol_version='HTTP/1.1'
@@ -446,6 +527,8 @@ class UI(http.server.BaseHTTPRequestHandler):
    if self.client_address[0] not in set(c.members.values())|{'127.0.0.1'}:return write_response(self,403,b'Forbidden','text/plain')
    if self.path=='/health':return write_response(self,200 if c.owned() and c.ready else 503,encoded(c.public()))
    if self.path=='/network/desk/status':return write_response(self,200,encoded(c.public()))
+   if self.path=='/network/desk/scan-status' and self.command in ('GET','HEAD'):return write_response(self,200,encoded(c.scan_status()))
+   if self.path=='/network/desk/scan-ui.js' and self.command in ('GET','HEAD'):return write_response(self,200,pathlib.Path('/usr/local/libexec/desk-network/scan-ui.js').read_bytes(),'application/javascript')
    if self.path=='/network/desk/settings-policy.js' and self.command in ('GET','HEAD'):
     keys=encoded(list(POLICY)+['API_TOKEN']);script=pathlib.Path('/usr/local/libexec/desk-network/settings-policy.js').read_bytes()
     return write_response(self,200,b'const deskManagedKeys='+keys+b';\n'+script,'application/javascript')
@@ -461,11 +544,21 @@ class UI(http.server.BaseHTTPRequestHandler):
    if mutation:
     stamp=clock();term=list(c.term);votes=c.fanout('lease',{'term':term})
     if len(votes)<2 or not c.owned() or c.term!=term:return write_response(self,503,b'Network edit requires two available replicas','text/plain',{'Retry-After':'3'})
-    c.until=max(c.until,stamp+TTL-MARGIN)
+    if not c.renew(stamp,term):return write_response(self,503,b'Network lease expired','text/plain')
    if self.path=='/network/desk/scan':
     if self.command!='POST' or self.headers.get('X-Desk-Action')!='scan':return write_response(self,405,b'POST scan required','text/plain')
+    current=c.scan_status();phase=current['scans']['arp']['phase']
+    with c.scan_lock:
+     if phase in ('queued','selecting','running','retrying','importing') or time.time()-c.scan_queued_at<5:return write_response(self,202,encoded({'state':'queued','requested_at':c.scan_queued_at or time.time()}))
+     requested=time.time();c.scan_queued_at=requested;c.scan_cache_at=0
     req=urllib.request.Request('http://127.0.0.1:20212/plugin/ARPSCAN/run',data=b'{}',headers={'Authorization':'Bearer '+c.c['api_token'],'Content-Type':'application/json'})
-    with c.opener.open(req,timeout=5) as r:return write_response(self,r.status,r.read(32768))
+    try:
+     with c.opener.open(req,timeout=5) as r:
+      if r.status!=200:raise Unavailable('Native queue unavailable')
+     return write_response(self,202,encoded({'state':'queued','requested_at':requested}))
+    except Exception:
+     with c.scan_lock:c.scan_queued_at=0;c.scan_cache_at=0
+     return write_response(self,503,encoded({'error':'Native scan queue unavailable'}))
    path=self.path[len('/network'):];headers={k:v for k,v in self.headers.items() if k.lower() not in ('host','connection','transfer-encoding','content-length','accept-encoding')};headers['Host']='192.168.1.186';headers['Accept-Encoding']='identity'
    conn=http.client.HTTPConnection(c.members[c.node],20211,timeout=20);conn.request(self.command,path,body=raw or None,headers=headers);r=conn.getresponse();ctype=r.getheader('Content-Type','application/octet-stream')
    if 'text/event-stream' in ctype:

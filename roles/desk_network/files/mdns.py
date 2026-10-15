@@ -236,11 +236,37 @@ def run(database=DATABASE, cache_path=CACHE, lookup=resolve):
     return result, dict(stats, eligible=len(targets), queried=len(batch), resolved=len(result))
 
 
+def distributed_lookup(targets, address):
+    # The socket is local, but only the fenced Network owner may dispatch work.
+    # Failure must not become a negative hostname cache entry.
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+        client.settimeout(23)
+        client.connect('/run/desk-network-scan/dispatch.sock')
+        client.sendall(json.dumps({'targets':targets}).encode() + b'\n')
+        raw = bytearray()
+        while not raw.endswith(b'\n'):
+            part = client.recv(4096)
+            if not part or len(raw) + len(part) > 32768:
+                raise OSError('Invalid scan response')
+            raw.extend(part)
+    value = json.loads(raw)
+    if value.get('state') != 'ready':
+        raise OSError('Distributed scan unavailable')
+    found, stats = value['found'], value['stats']
+    if not isinstance(found,dict) or len(found)>len(targets) or not isinstance(stats,dict):
+        raise ValueError('Invalid scan result')
+    for ip, row in found.items():
+        if ip not in targets or not isinstance(row,list) or len(row)!=2 or not isinstance(row[0],str) or hostname(dns.name.from_text(row[0]))!=row[0] or type(row[1]) is not int or not 0<row[1]<=600:
+            raise ValueError('Invalid scan identity/name')
+    return found, stats
+
+
 def main():
     sys.path[:0] = ['/app/server', '/app/server/plugins']
     from plugin_helper import Plugin_Objects
     from const import logPath
     result = Plugin_Objects(str(Path(logPath) / 'plugins/last_result.AVAHISCAN.log'))
+    started_at = time.time()
     start, cpu = time.monotonic(), time.process_time()
     with open('/tmp/desk-mdns.lock', 'w') as lock:
         try:
@@ -250,14 +276,14 @@ def main():
         # Always clear old results, including when fresh input is unavailable.
         result.write_result_file()
         try:
-            names, stats = run()
+            names, stats = run(lookup=distributed_lookup if os.getenv('DESK_NETWORK_DISTRIBUTED') == '1' else resolve)
             for mac, ip, name in names:
                 result.add_object(primaryId=mac, secondaryId=ip, watched2=name, foreignKey=mac)
             result.write_result_file()
             stats['state'] = 'ready'
         except (OSError, sqlite3.Error, ValueError) as e:
             stats = {'state':'unavailable', 'error':type(e).__name__}
-        stats.update(wall_seconds=round(time.monotonic()-start,3), cpu_seconds=round(time.process_time()-cpu,4), peak_rss_kib=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
+        stats.update(started_at=started_at, finished_at=time.time(), wall_seconds=round(time.monotonic()-start,3), cpu_seconds=round(time.process_time()-cpu,4), peak_rss_kib=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
         save_json(STATUS, stats)
         print('Desk mDNS ' + json.dumps(stats, sort_keys=True))
     return 0

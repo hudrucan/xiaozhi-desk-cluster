@@ -1,8 +1,9 @@
 # LAN-only Network service
 
 Open `http://192.168.1.186/network/`. All three existing UI proxies preserve the
-route. One NetAlertX collector scans `192.168.1.0/24` on `wlan0`; two cold standby
-replicas retain certified checkpoints and do not run scans. No new LAN VIP,
+route. One NetAlertX collector scans `192.168.1.0/24` on `wlan0`; two standby replicas
+retain certified checkpoints and do not run owner scans. All three nodes are configured
+for warm standby; exactly one runs the active native backend/PHP/cron groups. No new LAN VIP,
 modem DHCP change or WireGuard discovery is involved.
 
 ## Deployment
@@ -81,13 +82,14 @@ are periodic (five minutes); unreplicated observations can be lost if the owner
 disappears. Live SQLite/WAL files are never copied between running collectors.
 
 Standbys download and verify committed checkpoints. Promotion restores the
-latest verified database/config before starting the native service. Because
-standbys are cold, failover includes native bootstrap time; it is not seamless
-session migration. One remaining node cannot elect a collector or acknowledge
+latest verified database/config before starting the active native runtime. Cold
+replicas include full native bootstrap time; warm replicas retain imports
+between activations as described below. Neither mode is seamless session
+migration. One remaining node cannot elect a collector or acknowledge
 shared edits. Returning nodes catch up without preempting a healthy owner.
 
 The dashboard shows `Network owner` only for fresh public metadata from a
-native-ready owner. Each node's details also shows collector/starting/cold standby,
+native-ready owner. Each node's details also shows collector/starting/standby,
 LAN scope, the collector scan interval, and its certified checkpoint sync status.
 The dashboard reads the bounded public metadata every collection cycle; data older
 than 15 seconds is unavailable. A replica behind another observed checkpoint is
@@ -555,7 +557,7 @@ normalized before decoding. Query IDs, reply source/port, TTL and LAN/MAC identi
 are checked; native name matching by IP alone is disabled to avoid DHCP reuse; identity and manual-name eligibility are checked again after lookup.
 
 Two receive windows total at most five seconds, with a 256-packet limit.
-The native plugin timeout is ten seconds, and the existing 0.5 CPU/512 MiB
+The native plugin timeout is thirty seconds (including distributed retries), and the existing 0.5 CPU/512 MiB
 container limits are unchanged. Failed lookups are cached for ten minutes;
 positive entries expire at the shortest PTR/A TTL, capped at ten minutes. Cache
 is RAM-only, keyed by MAC plus IP, and disappears on owner restart/failover.
@@ -588,3 +590,315 @@ A measured lookup body took 5.147 s wall / 0.0953 s CPU (excluding Python/module
 startup). The entire native container, not just mDNS, was ~141.7 MiB current /
 204.8 MiB peak with zero OOM/oom_kill events, under the unchanged 512 MiB and
 0.5 CPU limits. This is bounded rollout verification, not a long-term soak test.
+
+## Owner-routed distributed LAN scans over Core NATS
+
+Enable `desk_network_scan_enabled` and create ignored credentials once with
+`python3 scripts/create-network-scan-secret.py`. Deploy existing nodes using
+`ansible-playbook -i inventory.ini network-distributed.yml`; new installations
+use the same worker tasks from `network.yml`. The NATS role template retains
+these users when reapplied. Existing Xiaozhi users, credentials and routes are
+preserved. The narrow rollout validates the existing broker config and reloads
+authorization with SIGHUP; it does not restart NATS.
+
+Each node has one `desk-network-scan` service with two scoped connections:
+coordinator credentials may publish only scan/status requests and subscribe
+to replies addressed to that node; worker credentials subscribe only to that
+node's scan/status subjects and may send one response per delivered request.
+Subjects are `desk.network.scan.<node>`, `desk.network.status.<node>` and
+`desk.network.reply.<owner>.<random>`. Jobs/results are bounded HMAC-signed JSON,
+with fresh attempt IDs, current owner lease term, selected worker, plugin,
+LAN-only target MAC/IPs and an eight-second mDNS / eighteen-second ARP deadline. These signatures provide
+integrity; the existing private Core NATS transport is not encrypted. No
+JetStream, durable task queue or second NetAlertX instance is introduced.
+
+The native AVAHISCAN adapter sends eligible cache misses through a group-limited
+Unix socket into the local coordinator. Only the current Network owner can
+dispatch. It queries worker availability and fresh node telemetry in parallel,
+rejects stale/offline/missing-admission, maintenance and active voice nodes, then
+selects the lowest CPU/role-cost score with a preference for off-owner work. It
+publishes to that node's exact subject, without queue-group selection. Workers
+recheck the live owner lease and their own admission before and after scanning.
+They run only the mDNS and fixed LAN ARP allowlist entries, at most one job per node, and have no
+access to the NetAlertX database or modem credentials.
+
+A failed attempt may be retried on one other eligible node after the first
+attempt deadline, preventing overlapping retries. Replies from the old term,
+wrong attempt/worker, expired jobs or malformed results are discarded. A failed
+transport/worker never creates negative hostname cache entries or device-offline
+events. No eligible workers leaves existing names untouched until a later cycle.
+The owner adapter rechecks current MAC/IP and user-name eligibility before
+feeding the unchanged native naming/checkpoint pipeline. Ownership and durable
+state continue to use the existing quorum lease and certified checkpoints; NATS
+is only the execution transport.
+
+The worker runs as a separate non-root user with only CAP_NET_RAW for arp-scan, with
+CPUQuota=15%, MemoryMax=64 MiB, TasksMax=16 and a RAM-only runtime directory.
+The dedicated venv pins SHA256-verified nats-py 2.13.1 and dnspython 2.8.0 wheels.
+Existing native container CPU/RAM limits are unchanged. Both mDNS and ARPSCAN
+are owner-routed over the same NATS transport. ARP always scans only
+192.168.1.0/24 on wlan0, using three retries, 128 kbit/s bandwidth and a
+12-second subprocess timeout. Host vendor files are deliberately skipped; the
+native VNDRPDT cached MAC lookup still enriches vendors after import. On the
+canary, bypassing redundant OUI parsing reduced the scan from a 12-second
+timeout under CPUQuota=15% to 4.20 seconds (~0.136 seconds child CPU).
+No worker accepts arbitrary command arguments.
+The native ARPSCAN CMD adapter retains the user schedule and imports the same
+Plugin_Objects / CurrentScan format. It clears the previous result before dispatch.
+A failed worker, malformed result or scan missing gateway 192.168.1.1 produces
+no rows, so the pinned native execute_plugin skips CurrentScan promotion rather
+than fabricating an all-offline cycle. Successful scans deduplicate VIP aliases
+by MAC, prefer physical node IPs, and include the scanning node's verified local
+interface identity (ARP cannot discover itself). An inconclusive cycle retains
+last-known presence until a later successful scan; this is not fresh health.
+ARP jobs get at most two sequential 18-second attempts (45-second local socket
+timeout, 60-second native plugin timeout). Scheduled mDNS remains cached.
+If distributed execution is disabled, the adapter delegates to the unchanged
+native ARPSCAN script and subnet parameter.
+
+Validation includes offline protocol/selection/retry/fencing/admission tests
+and `roles/desk_network/tests/verify_nats_transport.py`, which uses an isolated
+loopback NATS broker, fake credentials and fake resolver. It tests real directed
+request/reply and rejects worker/coordinator access to foreign subjects. It does
+not connect to the production broker or perform a LAN scan.
+
+Distributed rollout verification (2026-10-15): all three scan workers are active;
+Network owner deskb3x dispatched a real zerow lookup to deskb1x in 5.58 s wall
+(~0.041 s worker CPU). With deskb1x's scan service temporarily stopped, the owner
+selected deskb2x and resolved the same name in 5.39 s (~0.039 s worker CPU).
+The stopped worker was restored. After restarting the dispatcher, an explicit
+health handshake and a call from the existing native container both passed;
+RuntimeDirectoryPreserve keeps its mounted socket directory valid across restarts.
+A socket file's existence alone is not used as readiness evidence.
+
+Final five-second idle samples measured 18.18 / 17.96 / 18.36 MiB worker memory
+and 0.039 / 0.000 / 0.000 percent of one CPU core on nodes 1/2/3, respectively,
+with no OOM events. These short samples are not a long-term CPU/RAM soak test.
+The focused offline suite passed 53 tests; isolated real-NATS routing and ACL
+checks passed. All three Network replicas agreed on certified revision
+[35, "deskb3x", 2] with three receipts, one active HAProxy backend, and all seven
+existing UI/health routes returned HTTP 200. Protected service/VIP guards passed.
+
+The rollout also exposed slow native collector coldboot across promotions before
+it became ready. Coldboot remains a separate limitation of the cold-standby
+NetAlertX lifecycle; the distributed execution result above measures a ready
+system and must not be interpreted as collector failover/recovery time.
+
+ARPSCAN rollout verification (2026-10-15): owner deskb1x routed a real scan
+to deskb3x in 4.80 seconds (~0.134 seconds child CPU plus ~0.031 seconds
+worker Python CPU). With that off-owner worker temporarily stopped, the owner
+selected deskb2x and completed in 4.92 seconds; the stopped worker was restored.
+Both observations included the gateway and all three physical node addresses.
+The native Scan now action returned 200 and produced a ready distributed result
+(22 devices in that observation); ARPSCAN_RUN_SCHD remained */1 * * * *.
+The native database retained 37 ARPSCAN objects and 33 known-vendor devices
+(these inventory totals include earlier observations, not only this scan).
+
+The updated focused suite passed 59 tests. The pinned native execute_plugin
+check verified successful serialization/import and that unavailable/empty output
+skips CurrentScan promotion; the real isolated NATS test passed directed ARP,
+mDNS, invalid signatures and subject ACL checks. Workers used
+18.54 / 18.20 / 18.27 MiB current memory with zero OOM events. A five-second
+sample measured 0.256 / 0 / 3.455 percent of one CPU core, including an ARP job
+on node 3; these are short samples, not a sustained utilization benchmark.
+All three replicas agreed on certified revision [36, "deskb1x", 1] with three
+receipts; one Network backend was UP and all seven existing UI/health routes
+returned 200. Protected service guards passed.
+
+Use network-scan-workers.yml for subsequent worker-only refreshes: it preserves
+the mounted runtime directory and does not restart the native UI. Changes to
+the container mounts/policy still require the guarded network-distributed.yml
+rollout and can incur the native coldboot delay described above.
+
+## Scan progress and inventory freshness
+
+`GET /network/desk/scan-status` exposes only bounded public discovery metadata:
+owner, ARP/mDNS phase, selected worker, timings, counts and the age of the last
+native inventory import. It never exposes MAC/IP lists, arbitrary errors or
+credentials. Coordinator observations live in RAM and are fenced by owner term.
+A job cannot remain Running indefinitely after its observer disappears.
+
+Inventory freshness comes from the native SQLite `Online_History` record, not
+the last HTTP 200 or NATS result. That record already travels in certified
+checkpoints; a new owner can label restored data as stale without inventing a
+fresh scan. A missing/unreadable timestamp remains Unknown. For a uniform cron,
+freshness expires after three scan intervals, with a three-minute floor; custom
+cron uses a fifteen-minute threshold. A failed scan retains the previous import
+timestamp. It never refreshes presence by itself.
+
+Scan now returns 202 with a request timestamp and suppresses overlapping requests.
+Progress distinguishes Queued, Selecting worker, Scanning, Retrying, Importing
+and Complete. Complete requires native history to confirm import, not just a
+worker response. New-device/IP-change counts compare the observation to the
+owner's inventory read-only; they are shown as results after native import.
+Native presence processing can finish after the worker scan because it follows
+the upstream scheduler. Polling pauses when hidden and uses request deadlines.
+
+The native sidebar has an expandable Discovery section; no extra sticky header
+is added. The root dashboard puts the same information only in the Network
+owner's node details. Other node cards and the resource-monitoring UI remain
+unchanged. mDNS cache-only cycles are labeled Cached, without implying another
+LAN scan was dispatched.
+
+## Conditional bootstrap CPU budget
+
+An isolated, no-network startup profile of the pinned backend measured 48.68 s
+wall / 21.84 s CPU at 0.5 core. The one-core candidate measured 30.49 s wall /
+25.46 s CPU. These profiled backend-initialization samples exclude container
+prechecks and are not end-to-end HA recovery figures. Imports/API/schema setup
+accounted for most of the measured work; normal ARP scan time is a separate cost.
+
+The container is still created at 0.5 core. On a node with fresh telemetry,
+CPU below 50% and no ASR/LLM/TTS activity, the controller may temporarily raise
+only that verified container's cgroup to one core. It pins an open descriptor
+after checking PID start identity and the libpod cgroup path. Other cgroups or
+unexpected existing quotas are left untouched. The existing watchdog restores
+0.5 core on readiness, voice activity, stale telemetry or the 60-second deadline;
+container stop closes the descriptor. The burst's own CPU usage does not cancel
+itself. No added service, dependency, image rebuild, relaxed memory limit or
+steady-state CPU increase is required. `boot_ready_seconds` in Network metadata
+reports actual local native readiness time for the current container.
+
+Validation (2026-10-15): 74 focused Python tests, native settings/scan JS checks,
+dashboard template/route tests and the isolated pinned-native import/NATS ACL
+checks passed. A real Scan now request progressed through queue, off-owner
+execution and native import in 24.8 seconds; a second immediate request reused
+the same acknowledgment. The final rollout reported native readiness after
+60.05 seconds on deskb1x. Kernel verification found `50000 100000` in the actual
+container `cpu.max`; the enclosing scope has `max 100000`. Checking only the
+parent scope would not establish the effective container limit on this platform.
+Browser checks confirmed Complete/Fresh after a UI-triggered scan, no JavaScript
+errors and no horizontal overflow at desktop and 480-pixel portrait widths.
+
+
+## Initial warm standby canary (historical)
+
+The first canary used `desk_network_warm_nodes: [deskb2x]`; it preceded the
+three-node rollout below. `network-warm-canary.yml` installs only that standby,
+retains root-only original controller/config files for rollback, and verifies
+that protected services and the existing owner remain unchanged during preload.
+The role installs the helpers and renders the opt-in flag for reproducibility.
+
+The digest-pinned image is unchanged. Read-only service-script bind mounts let
+`warm_runtime.py` preload upstream Python modules and OpenAPI/schema registration
+without calling `main()`. It suppresses only import-time asynchronous logging,
+then verifies exactly one OS/Python thread and no open native database handles.
+The parent retains imports in RAM; it is not a paused live database connection or
+a checkpoint of a running process. Idle nginx remains available only on the
+existing internal listener; the HA proxy never routes to an inactive replica.
+PHP, cron, native API, backend jobs and owner scans are inactive on that replica.
+The separate distributed scan worker remains usable by the current owner.
+
+Promotion first restores the newest majority-certified checkpoint while all
+writer groups are stopped. A pristine fork then runs native `main()` with fresh
+SQLite/config/cache state, and new PHP/cron process groups start. Settings/API
+initialization still runs on each activation; full application initialization
+is not cached. Readiness requires the current activation identity, the normal
+authenticated API health check and regenerated settings/language API files.
+A root-owned, read-only mounted control file carries an absolute BOOTTIME lease
+deadline. The native parent checks it independently of the controller. Expiry or
+demotion kills and reaps all three writer groups before acknowledging inactive;
+RAM API files are then cleared. If the host cannot obtain that acknowledgment
+within 1.5 seconds, it destroys the entire native PID namespace instead of
+preserving an uncertain warm process. Expired/superseded leases cannot be
+reauthorized by a late UI request or renewal response.
+
+A local root-only `touch /run/desk-network/warm-drain` requests a canary handoff:
+the controller checkpoints, withdraws readiness, stops writers, retains the
+preloaded parent and excludes itself from election. Removing that file makes it
+eligible again without preempting a healthy owner. Loss of lease still uses the
+existing majority/expiry rules; planned handoff does not bypass voter TTLs.
+Warm-ready replicas have a candidate preference; existing maintenance/admission
+checks still apply. A cold start or controller restart must preload again.
+
+Measured on 2026-10-15, with only deskb2x configured warm:
+
+| Observation | Result |
+| --- | --- |
+| Initial import preload | 43.08 s (paid once per native container lifetime) |
+| Warm activation to authenticated native readiness | 19.03 s |
+| Stop old Network controller to devices.php HTTP 200 on warm owner | 43.37 s |
+| Graceful return to a cold owner to devices.php HTTP 200 | 81.14 s |
+| Settled inactive container CPU, 60.27 s sample | 1.39% of one CPU core (about 0.35% of four cores) |
+| Settled inactive container memory.current | 65.09 MiB |
+| Inactive native API listener / database changes / OOM kills | None / none / zero |
+
+The first post-preload minute reported 31.89% of one core for the container;
+it was not a settled-idle measurement. A later process sample was about 1.1%,
+followed by the separate 60-second settled sample above. Initial/background
+startup work can therefore still consume CPU and must not be presented as flat
+idle usage. Memory includes the resident preloader/nginx and container accounting;
+it is not the resource usage of a fully initialized active collector.
+
+The round trip retained the same container init PID and preloaded-parent PID,
+with one activation and no second import phase. Both healthy voters remained
+available for elections. Only the Network controller on the old owner was
+stopped temporarily; it was restored in `finally`. This tests service-level
+failover and graceful demotion, not removal of node power. The warm and cold
+end-to-end numbers are individual handoff measurements, not a latency guarantee
+or a controlled benchmark across identical owners. Lease/election, restore,
+health polling and HAProxy admission add time beyond native initialization.
+
+
+## Warm standby on all three nodes
+
+The user authorized the full rollout after the single-node round trip.
+`group_vars/deskboxes.yml` now declares:
+
+```yaml
+desk_network_warm_nodes: [deskb1x, deskb2x, deskb3x]
+```
+
+Reproduce the guarded rollout with:
+
+```sh
+ansible-playbook -i inventory.ini network-warm.yml
+```
+
+The playbook requires one ready owner and synced voters, saves existing runtime
+files and credentials under a root-only rollback directory on each node, warms
+standbys serially, then refreshes the original owner. An already current warm
+standby is left running. Each standby must finish import preloading and voter
+quarantine before continuing. A failed phase restores its prior runtime; shared
+VIP configuration and Xiaozhi/DNS/VPN service state are guarded. It does not build
+an image, reboot nodes, change memory/CPU ceilings or bypass lease expiry.
+
+On the 2026-10-15 rollout, deskb2x retained its canary import cache, deskb3x was
+warmed first, and the original deskb1x owner was refreshed last. deskb2x became the
+new ready Network owner while deskb1x completed its own preload. All three
+finished in warm mode with one active backend and two inactive import parents;
+protected-service guards passed on all nodes.
+
+| Same observable milestone | Earlier cold measurement | Full warm rollout measurement | Reduction |
+| --- | --- | --- | --- |
+| Native authenticated API/settings readiness, after launch/activation | 60.05 s | 19.95 s | 40.10 s |
+| Handoff action to devices.php HTTP 200 from new owner | 81.14 s | 38.89 s | 42.25 s (52.08%) |
+
+The handoff timer starts immediately before restarting the original Network
+controller. An independent observer records the first complete HTTP 200 response
+from a different, confirmed warm owner. This includes election/lease wait, restore,
+native initialization, health observation and routing. It is a service-level
+handoff measurement, not a node-power-loss test. These are separate observed
+handoffs rather than a statistical latency guarantee or a controlled benchmark
+on identical owners. Native and end-to-end savings overlap and must not be added.
+
+Warm imports live in RAM. Restarting the native container/controller or removing
+power loses that cache; the first startup must preload again. The improvement
+applies to later owner changes while the other nodes remain running.
+
+Final read-only checks confirmed one ready owner, all three voters synced to
+checkpoint `41/deskb2x/1` with three certificate receipts, and all seven UI/API
+routes HTTP 200. A real Scan now request completed through a distributed worker
+and native import, including duplicate-click suppression and fresh inventory.
+
+| Node | Final role | Initial import preload | Container memory.current | 20-second sample, CPU as % of one core |
+| --- | --- | --- | --- | --- |
+| deskb1x | standby / inactive | 89.49 s | 60.84 MiB | 1.37% |
+| deskb2x | active / active | 43.25 s | 178.45 MiB | 36.80% |
+| deskb3x | standby / inactive | 42.83 s | 60.74 MiB | 1.43% |
+
+Both inactive database/WAL sets remained unchanged during the sample, their native
+API ports were closed, and all container OOM-kill counters were zero. The active
+CPU sample includes verification/scan work and is not a steady-idle benchmark.
+The initial preload durations vary with startup load and the conditional CPU
+budget; they are not the warm activation times shown in the handoff table.

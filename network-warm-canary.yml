@@ -1,0 +1,106 @@
+---
+- name: Warm standby canary on one existing Network standby
+  hosts: deskb2x
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  vars:
+    source: '{{ playbook_dir }}'
+    backup: /var/lib/desk-network/warm-canary-backup
+  tasks:
+    - name: Read original Network state
+      ansible.builtin.uri:
+        url: 'http://{{ cluster_ip }}:20213/network/desk/status'
+        use_proxy: false
+        timeout: 3
+      register: before
+    - name: Require a synced standby
+      ansible.builtin.assert:
+        that:
+          - before.json.state == 'standby'
+          - before.json.sync == 'synced'
+          - before.json.voter_ready | bool
+    - name: Freeze protected services
+      ansible.builtin.command:
+        argv: [python3, '-c', "{{ lookup('file',source+'/roles/desk_ui/files/ui_guard.py') }}", freeze]
+      register: protected
+      no_log: true
+      changed_when: false
+    - name: Keep original controller and configuration for rollback
+      ansible.builtin.file:
+        path: '{{ backup }}'
+        state: directory
+        mode: '0700'
+    - name: Save original files without overwriting prior canary backup
+      ansible.builtin.copy:
+        src: '{{ item.src }}'
+        dest: '{{ backup }}/{{ item.name }}'
+        remote_src: true
+        force: false
+        mode: '0600'
+      loop:
+        - {src: /usr/local/libexec/desk-network/ha.py, name: ha.py}
+        - {src: /etc/desk-network/config.json, name: config.json}
+      no_log: true
+    - block:
+        - name: Install tested canary lifecycle
+          ansible.builtin.copy:
+            src: '{{ source }}/roles/desk_network/files/{{ item }}'
+            dest: '/usr/local/libexec/desk-network/{{ item }}'
+            mode: '0755'
+          loop: [ha.py, warm_runtime.py, warm-backend.sh, warm-idle.sh]
+        - name: Enable warm mode on this node only
+          ansible.builtin.command:
+            argv:
+              - python3
+              - -c
+              - "import json,pathlib,os; p=pathlib.Path('/etc/desk-network/config.json'); c=json.loads(p.read_text()); c['warm_standby']=True; t=p.with_suffix('.tmp'); t.write_text(json.dumps(c)); os.chmod(t,0o600); os.replace(t,p)"
+          no_log: true
+        - name: Restart only the standby Network controller
+          ansible.builtin.systemd_service:
+            name: desk-network
+            state: restarted
+        - name: Wait for import preloading without starting a collector
+          ansible.builtin.uri:
+            url: 'http://{{ cluster_ip }}:20213/network/desk/status'
+            use_proxy: false
+            timeout: 3
+          register: warm
+          until: warm.json.warm_state | default('') == 'inactive' and warm.json.voter_ready | default(false)
+          retries: 65
+          delay: 3
+          changed_when: false
+        - name: Require canary to remain a synced standby
+          ansible.builtin.assert:
+            that:
+              - warm.json.state == 'standby'
+              - warm.json.sync == 'synced'
+        - name: Verify protected services
+          ansible.builtin.command:
+            argv: [python3, '-c', "{{ lookup('file',source+'/roles/desk_ui/files/ui_guard.py') }}", guard]
+            stdin: '{{ protected.stdout }}'
+          changed_when: false
+        - name: Show only public canary metrics
+          ansible.builtin.debug:
+            msg: "{{ {'node':warm.json.node,'mode':warm.json.standby_mode,'state':warm.json.warm_state,'preload_seconds':warm.json.preload_seconds} }}"
+      rescue:
+        - name: Stop the failed canary
+          ansible.builtin.systemd_service:
+            name: desk-network
+            state: stopped
+        - name: Restore original files
+          ansible.builtin.copy:
+            src: '{{ backup }}/{{ item.name }}'
+            dest: '{{ item.dest }}'
+            remote_src: true
+            mode: '{{ item.mode }}'
+          loop:
+            - {name: ha.py, dest: /usr/local/libexec/desk-network/ha.py, mode: '0755'}
+            - {name: config.json, dest: /etc/desk-network/config.json, mode: '0600'}
+          no_log: true
+        - name: Restore the cold standby
+          ansible.builtin.systemd_service:
+            name: desk-network
+            state: started
+        - ansible.builtin.fail:
+            msg: Canary failed; original cold standby restored. Existing owner was not modified.

@@ -53,8 +53,13 @@
     dest: '/usr/local/libexec/desk-network/{{ item }}'
     mode: '0755'
     validate: /usr/bin/python3 -c "import ast,sys; ast.parse(open(sys.argv[1]).read())" %s
-  loop: [ha.py, seed.py, api-loopback.py, verify_ready.py, mdns.py]
+  loop: [ha.py, seed.py, api-loopback.py, verify_ready.py, mdns.py, arp.py, discovery.py, bootstrap.py]
   register: network_helpers
+- name: Install native scan progress UI
+  ansible.builtin.copy:
+    src: scan-ui.js
+    dest: /usr/local/libexec/desk-network/scan-ui.js
+    mode: '0644'
 - name: Install explicit managed-setting labels and read-only UI controls
   ansible.builtin.copy:
     src: settings-policy.js
@@ -131,6 +136,14 @@
   loop: [peer.crt, peer.key]
   no_log: true
   register: network_tls
+- name: Install opt-in warm standby lifecycle helpers
+  ansible.builtin.copy:
+    src: '{{ item }}'
+    dest: '/usr/local/libexec/desk-network/{{ item }}'
+    mode: '0755'
+  loop: [warm_runtime.py, warm-backend.sh, warm-idle.sh]
+  register: network_warm_helpers
+
 - name: Install bounded cluster configuration
   ansible.builtin.template:
     src: config.json.j2
@@ -190,6 +203,9 @@
     force: false
   loop: ['{{ network_seed_head.digest }}.gz', 'head.json']
   no_log: true
+- name: Prepare owner-routed NATS scan runtime
+  ansible.builtin.include_tasks: distributed.yml
+  when: desk_network_scan_enabled | default(false) | bool
 - name: Install persistent lease controller and container cleanup
   ansible.builtin.template:
     src: desk-network.service.j2
@@ -214,7 +230,7 @@
   changed_when: false
 - name: Remember whether the controller requires a rolling refresh
   ansible.builtin.set_fact:
-    network_restart: '{{ network_helpers.changed or network_config.changed or network_policy.changed or network_unit.changed or network_startup_hook.changed or network_language.changed or network_tls.changed or network_opcache_module.changed or network_opcache_config.changed }}'
+    network_restart: '{{ network_helpers.changed or network_warm_helpers.changed or network_config.changed or network_policy.changed or network_unit.changed or network_startup_hook.changed or network_language.changed or network_tls.changed or network_opcache_module.changed or network_opcache_config.changed }}'
 - name: Require protected voice DNS and VIP state to remain unchanged
   ansible.builtin.command:
     argv: [python3, '-c', "{{ lookup('file',playbook_dir+'/roles/desk_ui/files/ui_guard.py') }}", guard]

@@ -34,3 +34,37 @@ disabled, and source timestamps are checked on every request.
 CMD override and Plugin_Objects format. It uses dnspython already in the image,
 without modifying upstream plugin code or installing a daemon. Native name
 resolution and USER/LOCKED field-authority rules remain responsible for updates.
+
+## Distributed execution
+
+The AVAHISCAN adapter can forward cache misses over a group-limited local Unix
+socket. The owner coordinator selects a node-specific Core NATS subject; workers
+reuse the same bounded mDNS resolver without a database or another NetAlertX
+instance. Native result imports and checkpoints remain unchanged. A dedicated
+venv pins nats-py 2.13.1 and dnspython 2.8.0 with wheel SHA256 requirements;
+package files and credentials are not vendored in this role.
+
+`files/arp.py` adapts fixed-LAN distributed ARP results to the same ARPSCAN
+Plugin_Objects schema. Empty/unavailable results clear the old result file and
+are skipped by the pinned native execute_plugin path before CurrentScan
+promotion. No upstream server/plugin code or image is changed. Host workers
+use the distribution's arp-scan package with CAP_NET_RAW only; no modem login.
+
+`discovery.py` reads native Online_History and adapter observations; it changes
+neither native database schema nor checkpoint format. `scan-ui.js` adds a
+compact sidebar disclosure and tracks native import completion. `bootstrap.py`
+manages only a temporary verified libpod CPU budget; upstream startup code and
+its services are unchanged.
+
+
+## Opt-in warm import preloader
+
+`warm_runtime.py` is a cluster-owned lifecycle adapter around the pinned
+`server.__main__` module. `warm-backend.sh` replaces the native backend launcher
+only on configured warm nodes; `warm-idle.sh` defers PHP/cron launch to that
+lease-gated adapter. The image and upstream Python module sources are unchanged.
+Forking is restricted to a checked, single-threaded import-only parent with no
+open native database descriptor. Upgrade reviews must recheck import-time
+threads/side effects, child process groups, native PHP/cron commands, API cache
+paths and the normal native readiness contract. This is a warm import cache,
+not upstream's scan-pause feature or a supported upstream HA mode.

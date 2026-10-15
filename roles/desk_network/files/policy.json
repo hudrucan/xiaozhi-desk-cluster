@@ -41,7 +41,7 @@
   "REPORT_DASHBOARD_URL": "http://192.168.1.186/network",
   "AVAHISCAN_RUN_SCHD": "*/5 * * * *",
   "AVAHISCAN_CMD": "python3 /app/desk_network/mdns.py",
-  "AVAHISCAN_RUN_TIMEOUT": 10,
+  "AVAHISCAN_RUN_TIMEOUT": 30,
   "AVAHISCAN_SET_ALWAYS": [],
   "AVAHISCAN_SET_EMPTY": [
     "devName",
@@ -51,5 +51,7 @@
     "watchedValue2"
   ],
   "AVAHISCAN_REPORT_ON": [],
-  "NEWDEV_IP_MATCH_NAME": false
+  "NEWDEV_IP_MATCH_NAME": false,
+  "ARPSCAN_CMD": "python3 /app/desk_network/arp.py userSubnets={subnets}",
+  "ARPSCAN_RUN_TIMEOUT": 60
 }

@@ -1,0 +1,9 @@
+---
+- name: Refresh distributed scan workers without restarting the Network UI
+  hosts: deskboxes
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  serial: 1
+  tasks:
+    - ansible.builtin.include_tasks: roles/desk_network/tasks/distributed.yml

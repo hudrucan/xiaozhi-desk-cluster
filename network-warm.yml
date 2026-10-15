@@ -1,0 +1,212 @@
+---
+- name: Prepare verified warm lifecycle without changing the active owner
+  hosts: deskboxes
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  vars:
+    warm_backup: /var/lib/desk-network/warm-rollout-backup
+  tasks:
+    - name: Require the full three-node rollout
+      ansible.builtin.assert:
+        that:
+          - ansible_play_hosts_all | sort == ['deskb1x', 'deskb2x', 'deskb3x']
+          - desk_network_warm_nodes | sort == ['deskb1x', 'deskb2x', 'deskb3x']
+    - name: Read current Network state
+      ansible.builtin.uri:
+        url: 'http://{{ cluster_ip }}:20213/network/desk/status'
+        use_proxy: false
+        timeout: 3
+      register: warm_before
+    - name: Require one owner with synced replicas and ready voters
+      ansible.builtin.assert:
+        that:
+          - "[hostvars['deskb1x'].warm_before.json.state, hostvars['deskb2x'].warm_before.json.state, hostvars['deskb3x'].warm_before.json.state] | select('equalto','active') | list | length == 1"
+          - warm_before.json.state in ['active','standby']
+          - warm_before.json.sync == 'synced'
+          - warm_before.json.voter_ready | bool
+    - name: Record original owner and standby groups
+      ansible.builtin.group_by:
+        key: "network_warm_{{ 'owner' if warm_before.json.state == 'active' else 'standby' }}"
+      changed_when: false
+    - name: Freeze protected service state
+      ansible.builtin.command:
+        argv: [python3, '-c', "{{ lookup('file',playbook_dir+'/roles/desk_ui/files/ui_guard.py') }}", freeze]
+      register: warm_protected
+      changed_when: false
+      no_log: true
+    - name: Keep root-only rollback directory
+      ansible.builtin.file:
+        path: '{{ warm_backup }}'
+        state: directory
+        mode: '0700'
+    - name: Inspect rollback files
+      ansible.builtin.stat:
+        path: '{{ item }}'
+      loop:
+        - /etc/desk-network/config.json
+        - /usr/local/libexec/desk-network/ha.py
+        - /usr/local/libexec/desk-network/warm_runtime.py
+        - /usr/local/libexec/desk-network/warm-backend.sh
+        - /usr/local/libexec/desk-network/warm-idle.sh
+      register: warm_originals
+    - name: Save this rollout's existing files
+      ansible.builtin.copy:
+        src: '{{ item.item }}'
+        dest: '{{ warm_backup }}/{{ item.item | basename }}'
+        remote_src: true
+        mode: '0600'
+      loop: '{{ warm_originals.results }}'
+      when: item.stat.exists
+      no_log: true
+    - name: Install the tested warm lifecycle
+      ansible.builtin.copy:
+        src: 'roles/desk_network/files/{{ item }}'
+        dest: '/usr/local/libexec/desk-network/{{ item }}'
+        mode: '0755'
+      loop: [ha.py, warm_runtime.py, warm-backend.sh, warm-idle.sh]
+      register: warm_helpers
+    - name: Enable warm mode while retaining existing credentials and membership
+      ansible.builtin.command:
+        argv:
+          - python3
+          - -c
+          - "import json,pathlib,os; p=pathlib.Path('/etc/desk-network/config.json'); c=json.loads(p.read_text()); changed=c.get('warm_standby') is not True; c['warm_standby']=True; t=p.with_suffix('.tmp'); t.write_text(json.dumps(c)) if changed else None; os.chmod(t,0o600) if changed else None; os.replace(t,p) if changed else None; print('changed' if changed else 'unchanged')"
+      register: warm_config
+      changed_when: warm_config.stdout == 'changed'
+      no_log: true
+    - name: Record whether a controller needs refresh
+      ansible.builtin.set_fact:
+        warm_restart: '{{ warm_helpers.changed or warm_config.changed }}'
+
+- name: Warm standby nodes one at a time before changing owner
+  hosts: network_warm_standby
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  serial: 1
+  tasks:
+    - name: Refresh and validate one standby
+      block:
+        - name: Refresh the changed standby controller
+          ansible.builtin.systemd_service:
+            name: desk-network
+            state: restarted
+          when: warm_restart | bool
+        - name: Wait for inactive preload and recovered voter
+          ansible.builtin.uri:
+            url: 'http://{{ cluster_ip }}:20213/network/desk/status'
+            use_proxy: false
+            timeout: 3
+          register: warm_standby
+          until: warm_standby.json.state | default('') == 'standby' and warm_standby.json.warm_state | default('') == 'inactive' and warm_standby.json.voter_ready | default(false) and warm_standby.json.sync | default('') == 'synced'
+          retries: 65
+          delay: 3
+          changed_when: false
+        - name: Require the original ready owner to remain available
+          ansible.builtin.command:
+            argv: [python3, /usr/local/libexec/desk-network/verify_ready.py]
+          changed_when: false
+      rescue:
+        - name: Stop the failed standby only
+          ansible.builtin.systemd_service:
+            name: desk-network
+            state: stopped
+        - name: Restore the previous runtime and configuration
+          ansible.builtin.copy:
+            src: '/var/lib/desk-network/warm-rollout-backup/{{ item.item | basename }}'
+            dest: '{{ item.item }}'
+            remote_src: true
+            mode: "{{ '0600' if item.item.endswith('config.json') else '0755' }}"
+          loop: '{{ warm_originals.results }}'
+          when: item.stat.exists
+          no_log: true
+        - name: Restore the standby service
+          ansible.builtin.systemd_service:
+            name: desk-network
+            state: started
+        - ansible.builtin.fail:
+            msg: Warm standby failed; its previous runtime restored. Original owner has not been restarted.
+
+- name: Refresh original owner after both warm replicas are ready
+  hosts: network_warm_owner
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  tasks:
+    - name: Refresh and validate the original owner
+      block:
+        - name: Record handoff start and refresh only Network controller
+          ansible.builtin.command:
+            argv:
+              - python3
+              - -c
+              - "import time,subprocess,json; t=time.time(); subprocess.run(['systemctl','restart','desk-network'],check=True,timeout=25); print(json.dumps({'started_at':t}))"
+          register: warm_switch
+          when: warm_restart | bool
+        - name: Show handoff timing marker
+          ansible.builtin.debug:
+            msg: '{{ warm_switch.stdout | default("unchanged") }}'
+        - name: Wait for one native-ready Network owner
+          ansible.builtin.command:
+            argv: [python3, /usr/local/libexec/desk-network/verify_ready.py]
+          register: warm_owner_ready
+          until: warm_owner_ready.rc == 0
+          retries: 60
+          delay: 3
+          changed_when: false
+        - name: Wait for the original owner's import cache to become inactive or active
+          ansible.builtin.uri:
+            url: 'http://{{ cluster_ip }}:20213/network/desk/status'
+            use_proxy: false
+            timeout: 3
+          register: warm_original_ready
+          until: warm_original_ready.json.warm_state | default('') in ['inactive','active'] and warm_original_ready.json.voter_ready | default(false)
+          retries: 65
+          delay: 3
+          changed_when: false
+      rescue:
+        - name: Stop only the failed original Network controller
+          ansible.builtin.systemd_service:
+            name: desk-network
+            state: stopped
+        - name: Restore previous owner files
+          ansible.builtin.copy:
+            src: '/var/lib/desk-network/warm-rollout-backup/{{ item.item | basename }}'
+            dest: '{{ item.item }}'
+            remote_src: true
+            mode: "{{ '0600' if item.item.endswith('config.json') else '0755' }}"
+          loop: '{{ warm_originals.results }}'
+          when: item.stat.exists
+          no_log: true
+        - name: Restore the original service
+          ansible.builtin.systemd_service:
+            name: desk-network
+            state: started
+        - ansible.builtin.fail:
+            msg: Original owner upgrade failed; restored its previous runtime. Prepared warm replicas remain available.
+
+- name: Verify warm state and protected services on every node
+  hosts: deskboxes
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  tasks:
+    - name: Require a synced warm replica
+      ansible.builtin.uri:
+        url: 'http://{{ cluster_ip }}:20213/network/desk/status'
+        use_proxy: false
+        timeout: 3
+      register: warm_final
+      until: warm_final.json.standby_mode | default('') == 'warm' and warm_final.json.warm_state | default('') in ['inactive','active'] and warm_final.json.sync | default('') == 'synced' and warm_final.json.voter_ready | default(false)
+      retries: 15
+      delay: 2
+      changed_when: false
+    - name: Verify protected services stayed unchanged
+      ansible.builtin.command:
+        argv: [python3, '-c', "{{ lookup('file',playbook_dir+'/roles/desk_ui/files/ui_guard.py') }}", guard]
+        stdin: '{{ warm_protected.stdout }}'
+      changed_when: false
+    - name: Show public runtime state only
+      ansible.builtin.debug:
+        msg: "{{ {'node':warm_final.json.node,'state':warm_final.json.state,'mode':warm_final.json.standby_mode,'warm_state':warm_final.json.warm_state,'revision':warm_final.json.revision,'preload_seconds':warm_final.json.preload_seconds,'promotion_seconds':warm_final.json.promotion_seconds} }}"
