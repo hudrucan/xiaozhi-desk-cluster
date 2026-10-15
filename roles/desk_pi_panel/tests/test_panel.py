@@ -26,6 +26,33 @@ def network_fixture():
     return v
 
 class PanelTests(unittest.TestCase):
+    def test_settings_taps_open_only_the_touched_row(self):
+        menu=panel.SettingsMenu()
+        menu.begin((30,80));self.assertEqual(menu.end((33,82)),'calibration')
+        menu.begin((30,150));self.assertEqual(menu.end((30,150)),'timeout')
+        menu.begin((30,230));self.assertIsNone(menu.end((30,230)))
+        # Small motion across a divider must not open the adjacent row.
+        menu.begin((30,120));self.assertIsNone(menu.end((30,125)))
+    def test_settings_scroll_reaches_later_rows_and_clamps_at_both_ends(self):
+        items=tuple((str(i),'Item','Details') for i in range(6))
+        menu=panel.SettingsMenu(items)
+        menu.begin((50,200));self.assertTrue(menu.move((50,56)))
+        self.assertIsNone(menu.end((50,56)))
+        menu.begin((50,90));self.assertEqual(menu.end((50,90)),'2')
+        menu.begin((50,200));menu.move((50,-200))
+        self.assertEqual(menu.offset,menu.max_offset)
+        # Releasing a drag over bottom navigation must not select a list item.
+        self.assertIsNone(menu.end((50,300)))
+        menu.begin((50,100));menu.move((50,500));self.assertEqual(menu.offset,0)
+        self.assertIsNone(menu.end((50,500)))
+    def test_settings_drag_is_consumed_even_when_list_fits_or_returns_to_start(self):
+        menu=panel.SettingsMenu()
+        menu.begin((30,80));menu.move((30,40));menu.move((30,80))
+        self.assertEqual(menu.offset,0);self.assertIsNone(menu.end((30,80)))
+        menu.begin((30,80));self.assertIsNone(menu.end((60,80)))
+        for point in ((20,20),(20,290)):
+            menu.begin(point);menu.move((20,100));self.assertIsNone(menu.end((20,100)))
+        menu.begin((30,80));menu.cancel();self.assertIsNone(menu.end((30,80)))
     def test_overview_monitor_marks_only_fresh_preference_from_ui_owner(self):
         v=network_fixture();v['monitoring_preferred']='deskb3x'
         for n in v['nodes']:n['monitoring_ready']=True;n['vip']={'xiaozhi':False,'dns':False,'vpn':False}

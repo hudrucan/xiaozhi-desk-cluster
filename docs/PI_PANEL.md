@@ -128,9 +128,42 @@ calibration; nine focused data/format/touch tests pass. Only this Pi's client
 configuration and service were updated. No cluster or LCD driver change.
 
 
+## Picture timeout
+
+In **Settings → Screen timeout**, choose **Off**, **30 sec**, **1 min**,
+**2 min**, **5 min** or **10 min**. Off is the default. A selection is saved
+immediately and atomically in `/var/lib/desk-cluster-panel/display.json`, mode
+0600, independently of calibration. A failed save leaves the previous timeout
+active and shows an error. Ansible does not overwrite this local preference.
+
+After inactivity, the client writes one black frame and suspends rendering.
+The existing cached API polling continues. Touch-down wakes the display and
+redraws the latest cached state; that entire first gesture is consumed so it
+cannot activate a button. A held touch keeps the display awake. Calibration
+temporarily suspends the idle countdown. Restarting starts with the screen awake
+and restores the saved timeout.
+
+This blanks the picture only: the LED backlight stays on. LCDWiki's MPI3501
+pinout provides no BL/PWM signal, and the current Linux `fb_ili9486` driver
+does not implement the fbtft blank callback. No GPIO, driver, kernel or boot
+change is made. References: [LCDWiki](https://www.lcdwiki.com/3.5inch_RPi_Display),
+[ILI9486 driver](https://raw.githubusercontent.com/raspberrypi/linux/rpi-6.12.y/drivers/staging/fbtft/fb_ili9486.c),
+[fbtft blank handling](https://raw.githubusercontent.com/raspberrypi/linux/rpi-6.12.y/drivers/staging/fbtft/fbtft-core.c).
+
 ## On-screen recalibration
 
-Open **Settings → Calibrate touch → Start** on the Pi LCD. Hold each gold
+Settings has separate **Touch calibration** and **Screen timeout** menu entries.
+Each opens only its own options, with **Back** returning to the Settings menu.
+The menu uses list rows separated by dividers. Adding an entry to `SETTINGS_ITEMS`
+automatically extends the scrollable list; its header and bottom navigation stay
+fixed. Swipe vertically to scroll when the rows exceed the viewport. A scrollbar
+indicates position, and a swipe never opens an item on release.
+
+Settings/timeout validation: all 40 panel tests pass, and the Pi service is
+active after deployment. The saved calibration and 10-minute timeout were
+retained. Physical touch/wake and scrolling checks remain NOT RUN.
+
+Open **Settings → Touch calibration → Calibrate touch → Start** on the Pi LCD. Hold each gold
 target briefly (at least 120 ms and five sensor samples), then lift. Four corner
 medians fit an affine mapping; the centre is an independent validation point.
 Corner residual and centre error must both be ≤16 pixels. Unstable or brief taps
