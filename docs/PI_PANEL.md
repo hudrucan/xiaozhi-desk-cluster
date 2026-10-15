@@ -1,7 +1,7 @@
 # External Raspberry Pi LCD panel
 
-A dedicated read-only client for Raspberry Pi Zero W / Waveshare 3.5inch RPi LCD
-(C), 480×320 RGB565. It runs on the display Pi, never on the three cluster nodes.
+A dedicated read-only client for Raspberry Pi Zero W / LCDWiki/goodtft MPI3501
+(ILI9486 + XPT2046), 480×320 RGB565. It runs on the display Pi, never on the three cluster nodes.
 The current device is `zerow`, `192.168.1.115`, user `pi`.
 
 Deploy explicitly:
@@ -14,6 +14,16 @@ The separate `pi_panels` inventory is not included in the normal cluster site
 play. The role retains the installed LCD/touch overlays and OS configuration;
 it does not flash, reboot or change network settings. Existing framebuffer
 `/dev/fb1` and the stable ADS7846 `/dev/input/by-path` symlink are required.
+This is an application deployment role, not provisioning for a fresh OS image.
+Before any package/file changes, a read-only preflight verifies the overlay
+SHA-256 pinned in `host_vars/zerow.yml`, live driver bindings, SPI/GPIO settings,
+RGB565 framebuffer geometry and the touch input's SPI parent. It also runs in
+check mode. An unexpected driver/overlay change requires an audit, not a bypass.
+Run only that check with:
+
+```sh
+ansible-playbook -i pi-panel.ini pi-panel.yml --tags panel-preflight
+```
 
 The application reads only `GET /api/cluster/panel` from the management VIP,
 at five-second intervals, with an 8 KiB body cap and a three-second request
@@ -21,6 +31,49 @@ budget. It rejects redirects and does not inherit proxy settings. Overview,
 node details and the last three observations are rendered locally. The client
 has no POST, reboot or maintenance action. The API remains independently hosted
 by the existing cluster; this Pi is not a fourth HA participant.
+
+The five bottom tabs are Overview, Nodes, Network, Events and Settings. Network
+shows the fresh collector owner, LAN scope and actual scan schedule, plus each
+replica's collector/starting/cold-standby role, checkpoint and Synced/Pending/
+Warming up status. A replica behind the newest observed checkpoint is Pending.
+Network metadata expires independently at 15 seconds, even while node telemetry
+remains current. Missing Network data does not hide the other telemetry.
+No device list, scan action or extra polling endpoint is added to the Pi.
+Overview puts all held roles (Xiaozhi, DNS, VPN, Network collector and Monitor) inside
+each node card, wrapping into at most two lines. The old two owner-summary rows
+are removed. Multiple roles on one node are all retained; `!` marks conflicting
+owner claims. Network labels expire independently of VIP/node telemetry.
+Monitor identifies the ready hub preferred by the current fresh UI owner, using
+the same placement metadata as the web dashboard. All monitoring hubs can run
+simultaneously; this label is a preference rather than exclusive ownership.
+If needed, Network/Monitor are shortened to Net/Mon to keep all five roles within two rows.
+RAM and temperature share one 13-pixel, high-contrast line on Overview;
+the format is `30% RAM - 42°C`, without a Temp suffix.
+CPU remains 16 pixels, with room retained for two role-label rows.
+In Nodes, **Status** shows resources, five service-readiness columns (including
+VPN) and configuration sync. **Services** shows each VIP's Owner/Standby/
+Unconfirmed role, VPN eligibility, and that node's Network role, LAN/scan scope,
+checkpoint and sync/warmup state. Both views use the same node selection.
+Both views leave 10 pixels above and below the Status/Services selector. Resource values
+use 14-pixel text so the three metric cells have more breathing room.
+
+The compact endpoint includes optional Network metadata from the collector's
+existing cache, within the same 8 KiB limit. For an existing cluster, deploy only
+that collector projection (including monitoring preference) before updating the Pi:
+
+```sh
+ansible-playbook -i inventory.ini panel-network.yml
+ansible-playbook -i pi-panel.ini pi-panel.yml
+```
+
+`panel-network.yml` rolls through the three dashboard collectors with binary
+backups and protected-service checks. It does not change routes or restart
+the Network controller. The Pi role backs up changed `panel.py` versions;
+its local calibration override is preserved.
+For later renderer-only changes, `ansible-playbook -i pi-panel.ini pi-panel.yml
+--tags panel-ui` runs preflight and updates/restarts only the Pi client, skipping
+package installation and native compilation. An unchanged renderer does not
+restart the service.
 
 Pillow rasterizes the UI without a desktop/browser. A small native RGB565
 packing helper avoids per-pixel Python conversion. The renderer skips unchanged
@@ -30,7 +83,9 @@ locally during request failures; expired nodes lose owner/activity claims and
 become unavailable, rather than displaying zero CPU or idle jobs as live state.
 
 Systemd runs the application as `pi`, with access to display/input devices,
-a 64 MiB memory ceiling and 30% one-core CPU ceiling. Its fixed pre/post helpers
+without CPU quota or memory limit: this Pi is dedicated to the panel.
+`Nice=10` and `CPUWeight=10` remain scheduling preferences, not CPU ceilings.
+The task-count limit and service sandbox remain in place. Its fixed pre/post helpers
 switch only tty1 between graphics/text to keep the fbcon cursor out of the UI;
 those helpers require `CAP_SYS_TTY_CONFIG`. The main Python process runs without
 ambient capabilities. Stop the service to return to the console:
@@ -49,11 +104,12 @@ Focused tests:
 python3 -m unittest discover -s roles/desk_pi_panel/tests -v
 ```
 
-Pi live check: native red/green/blue/white packing and panel API validation
+Historical Waveshare checks (2026-10-13, before the MPI3501 replacement):
+native red/green/blue/white packing and panel API validation
 passed. Three full UI rasterizations used a median 237.8 ms CPU time on the
 original ARMv6 Zero W (excluding framebuffer I/O). This is an initial measurement,
 not a whole-device or touch latency guarantee. Mounting rotation is confirmed as 180 degrees in `host_vars/zerow.yml`.
-Physical touch alignment is checked by four-point calibration, using three
+The old manual helper checks touch alignment by four-point calibration, using three
 points for an affine raw-to-framebuffer transform and a fourth independent
 check (reject above 30 pixels). The transform is saved with the Pi host variables
 after user input; touch mapping applies mounting rotation afterward.
@@ -62,8 +118,8 @@ These measurements are specific to this installed Pi and current snapshots.
 
 
 Mounting/calibration rollout on 2026-10-13: the user supplied four touch points.
-The affine transform is persisted in `host_vars/zerow.yml`, together with a
-180-degree mounting rotation, and matches the applied Pi configuration. The
+The historical affine transform was persisted in `host_vars/zerow.yml`, together with a
+180-degree mounting rotation. It has since been replaced by MPI3501 calibration. The
 fourth independent point had 23.72 pixels of error (accepted threshold 30);
 the user subsequently verified the mounted image orientation and all three
 Overview/Nodes/Events buttons as correct (physical check PASS). The
@@ -108,7 +164,66 @@ Panel buttons use compact 48-pixel action heights (44 pixels for target Cancel),
 centred text based on glyph bounds, and shared rectangles for rendering and
 touch hit areas. Navigation and node tabs also centre labels on both axes.
 
-LCD layout: all three data tabs share 14-pixel outer padding, a vertically
+LCD layout: all data tabs share 14-pixel outer padding, a vertically
 centred header with right-aligned state, and centred navigation/node labels.
 Node details separate resource, service and configuration columns into three
 outlined blocks. Events use evenly spaced rows with aligned timestamps.
+
+## MPI3501 audit and cleanup — 2026-10-15
+
+The live kernel is `6.12.109+rpt-rpi-v6`. The LCD-show `tft35a.dtbo` binds
+`fb_ili9486` at SPI0 CS0 and `ads7846` at CS1. LCD SPI remains 16 MHz, touch SPI
+2 MHz, LCD rotation 270 degrees, with reset GPIO25, DC GPIO24 and touch IRQ17.
+The client mounting rotation remains 180 degrees. No driver, pinout, kernel,
+network or package change was needed.
+
+The failed `fbcp` launch and its `sleep 7` were removed from `/etc/rc.local`.
+The unused binary `/usr/local/bin/fbcp`, legacy `/etc/inittab` and both X11
+`99-calibration.conf` files were archived. Only the overridden `hdmi_mode=1`
+line was removed from boot config; HDMI mode87 and fb0 remain to preserve fb1
+numbering. No reboot has been performed to validate the boot edit.
+
+Backups, including the original service, boot/client config and calibration,
+are in `/var/backups/mpi3501-20261015T120056Z`. To restore the complete
+pre-cleanup state over SSH:
+
+```sh
+ssh pi@192.168.1.115 'sudo sh /var/backups/mpi3501-20261015T120056Z/rollback.sh'
+```
+
+That rollback also restores the old Waveshare touch mapping and CPU quota;
+it is not a way to retain the new MPI3501 calibration.
+
+Both `CPUQuota=30%` and `MemoryMax=64M` were removed at the user's request.
+The old memory limit had not been enforced: the running kernel disables the
+memory cgroup controller. No memory-cgroup boot setting was changed.
+
+The user completed five-point calibration and chose Apply. The recovery session
+saved 10.33 px error; a subsequent on-screen Apply saved an improved 3.01 px,
+which is the current maximum of corner residual and independent centre error
+(limit 16 px), with `calibration.json` owned by `pi` and mode0600. The latest transform is also
+the Ansible fallback in `host_vars/zerow.yml`; the local override still wins.
+The panel resumed automatically with no automatic restarts. This confirms
+calibration completion; it is not a new physical validation of every panel button
+or a resolution of backlight flicker. The pre-driver backlight flicker remains
+unresolved; the overlay exposes no backlight GPIO/PWM.
+The [LCDWiki MPI3501 documentation](https://www.lcdwiki.com/3.5inch_RPi_Display)
+lists LED backlight current as 120 mA but no backlight control pin or software
+brightness procedure; physical pin12 (GPIO18) is NC. Here MPI3501 is the actual
+LCDWiki/goodtft board replacing the Waveshare LCD, not an unidentified MPI3501
+copy. Any added dimming control requires inspecting the backlight circuit before
+considering hardware modification; assigning PWM to an NC pin cannot provide it.
+
+APT/dpkg consistency checks passed during the audit. Xorg/calibrator packages
+remain installed pending a separate dependency review; none are needed by this
+evdev/framebuffer client. The LCD-show checkout and its original backups are
+retained as provenance, not executed during deployment.
+
+The Network projection rollout passed on all three dashboard collectors with
+protected-service guards passing and Network controller PIDs/restart counters
+unchanged. The Pi rollout changed only the Python renderer and restarted its
+service; the native packing helper was not rebuilt. All 30 panel/calibration
+unit tests and the Go collector tests passed. The Network layout was inspected
+at 480×320 for current, lagging, warming and expired metadata, along with the
+Overview role labels and both Nodes views. Physical use of the new Network tab
+and Nodes Status/Services controls remains a user check.

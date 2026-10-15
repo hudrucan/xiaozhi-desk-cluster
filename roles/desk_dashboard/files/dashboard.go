@@ -1213,24 +1213,36 @@ type PanelSync struct {
 	State    string `json:"state"`
 	Revision *int   `json:"revision"`
 }
+type PanelNetwork struct {
+	State        string           `json:"state"`
+	Sync         string           `json:"sync"`
+	Revision     *NetworkRevision `json:"revision"`
+	AgeMS        *int64           `json:"age_ms"`
+	Subnet       string           `json:"subnet"`
+	ScanMinutes  int              `json:"scan_minutes"`
+	ScanSchedule string           `json:"scan_schedule,omitempty"`
+	VoterReady   bool             `json:"voter_ready"`
+}
 type PanelNode struct {
-	ID          string               `json:"id"`
-	IP          string               `json:"ip"`
-	Online      bool                 `json:"online"`
-	AgeMS       *int64               `json:"age_ms"`
-	CPU         *float64             `json:"cpu_percent"`
-	Memory      *float64             `json:"memory_percent"`
-	Temperature *float64             `json:"temperature_c"`
-	VIP         map[string]*bool     `json:"vip"`
-	VPNReady    *bool                `json:"vpn_ready"`
-	Jobs        PanelJobs            `json:"jobs"`
-	MQTT        *int                 `json:"mqtt_clients"`
-	Core        *int                 `json:"conversations"`
-	DNS         *bool                `json:"dns_eligible"`
-	DNSRate     *float64             `json:"dns_queries_per_second"`
-	Admission   map[string]*bool     `json:"admission_paused"`
-	Components  map[string]string    `json:"components"`
-	Config      map[string]PanelSync `json:"configuration"`
+	ID              string               `json:"id"`
+	IP              string               `json:"ip"`
+	Online          bool                 `json:"online"`
+	AgeMS           *int64               `json:"age_ms"`
+	CPU             *float64             `json:"cpu_percent"`
+	Memory          *float64             `json:"memory_percent"`
+	Temperature     *float64             `json:"temperature_c"`
+	VIP             map[string]*bool     `json:"vip"`
+	VPNReady        *bool                `json:"vpn_ready"`
+	MonitoringReady *bool                `json:"monitoring_ready,omitempty"`
+	Jobs            PanelJobs            `json:"jobs"`
+	MQTT            *int                 `json:"mqtt_clients"`
+	Core            *int                 `json:"conversations"`
+	DNS             *bool                `json:"dns_eligible"`
+	DNSRate         *float64             `json:"dns_queries_per_second"`
+	Admission       map[string]*bool     `json:"admission_paused"`
+	Components      map[string]string    `json:"components"`
+	Config          map[string]PanelSync `json:"configuration"`
+	Network         *PanelNetwork        `json:"network,omitempty"`
 }
 type PanelDNS struct {
 	Mode     string   `json:"mode"`
@@ -1248,17 +1260,18 @@ type PanelClient struct {
 	Connected *bool  `json:"server_connected"`
 }
 type Panel struct {
-	Protocol string                `json:"protocol"`
-	State    string                `json:"state"`
-	At       *time.Time            `json:"observed_at"`
-	AgeMS    *int64                `json:"age_ms"`
-	PollMS   int                   `json:"poll_after_ms"`
-	StaleMS  int                   `json:"stale_after_ms"`
-	Owners   map[string]PanelOwner `json:"owners"`
-	DNS      PanelDNS              `json:"dns"`
-	Nodes    []PanelNode           `json:"nodes"`
-	Client   PanelClient           `json:"client"`
-	Events   []PanelEvent          `json:"events"`
+	Protocol            string                `json:"protocol"`
+	State               string                `json:"state"`
+	At                  *time.Time            `json:"observed_at"`
+	AgeMS               *int64                `json:"age_ms"`
+	PollMS              int                   `json:"poll_after_ms"`
+	StaleMS             int                   `json:"stale_after_ms"`
+	Owners              map[string]PanelOwner `json:"owners"`
+	DNS                 PanelDNS              `json:"dns"`
+	Nodes               []PanelNode           `json:"nodes"`
+	Client              PanelClient           `json:"client"`
+	Events              []PanelEvent          `json:"events"`
+	MonitoringPreferred *string               `json:"monitoring_preferred"`
 }
 
 func panelAge(at, now time.Time) *int64 {
@@ -1284,9 +1297,17 @@ func panelMetric(value *float64) *float64 {
 	}
 	return &v
 }
+func panelNetwork(value *NetworkStatus, now time.Time) *PanelNetwork {
+	if value == nil || !validNetwork(value) || !panelFresh(value.At, now, 15*time.Second) || now.Sub(value.At) >= 15*time.Second {
+		return nil
+	}
+	return &PanelNetwork{State: value.State, Sync: value.Sync, Revision: value.Revision,
+		AgeMS: panelAge(value.At, now), Subnet: value.Subnet, ScanMinutes: value.ScanMinutes,
+		ScanSchedule: value.ScanSchedule, VoterReady: value.VoterReady}
+}
 func panelSnapshot(snapshot Snapshot, members []Member, now time.Time) Panel {
 	p := Panel{Protocol: panelProtocol, State: "unavailable", AgeMS: panelAge(snapshot.At, now), PollMS: int(interval / time.Millisecond), StaleMS: int(staleAfter / time.Millisecond),
-		Owners: map[string]PanelOwner{"xiaozhi": {State: "unknown"}, "dns": {State: "unknown"}, "vpn": {State: "unknown"}}, DNS: PanelDNS{Mode: "unknown", Eligible: []string{}}, Nodes: []PanelNode{}, Client: PanelClient{State: "unknown"}, Events: []PanelEvent{}}
+		Owners: map[string]PanelOwner{"xiaozhi": {State: "unknown"}, "dns": {State: "unknown"}, "vpn": {State: "unknown"}, "network": {State: "unknown"}}, DNS: PanelDNS{Mode: "unknown", Eligible: []string{}}, Nodes: []PanelNode{}, Client: PanelClient{State: "unknown"}, Events: []PanelEvent{}}
 	if !snapshot.At.IsZero() {
 		at := snapshot.At
 		p.At = &at
@@ -1325,6 +1346,27 @@ func panelSnapshot(snapshot Snapshot, members []Member, now time.Time) Panel {
 		}
 		if len(owners) == 0 && current && key != "vpn" {
 			p.State = "degraded"
+		}
+	}
+	for _, m := range members {
+		if value, ok := fresh[m.ID]; ok {
+			info := panelNetwork(value.Network, now)
+			if info == nil || info.State != "active" || !info.VoterReady {
+				continue
+			}
+			if p.Owners["network"].State == "unknown" {
+				id := m.ID
+				p.Owners["network"] = PanelOwner{State: "known", Node: &id}
+			} else {
+				p.Owners["network"] = PanelOwner{State: "conflict"}
+			}
+		}
+	}
+	if owner := p.Owners["xiaozhi"]; owner.Node != nil {
+		preferred := fresh[*owner.Node].MonitoringPreferred
+		if target, ok := fresh[preferred]; ok && target.MonitoringReady {
+			id := preferred
+			p.MonitoringPreferred = &id
 		}
 	}
 	if owner := p.Owners["dns"]; owner.Node != nil {
@@ -1381,6 +1423,9 @@ func panelSnapshot(snapshot Snapshot, members []Member, now time.Time) Panel {
 			n.MQTT = value.MQTT
 			n.Core = value.Core
 			n.VPNReady = value.VPNReady
+			monitorReady := value.MonitoringReady
+			n.MonitoringReady = &monitorReady
+			n.Network = panelNetwork(value.Network, now)
 			n.Components["vpn"] = value.Components["vpn"]
 			for _, key := range []string{"xiaozhi", "dns", "vpn"} {
 				n.VIP[key] = value.VIP[key]

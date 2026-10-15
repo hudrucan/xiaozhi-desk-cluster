@@ -1,4 +1,9 @@
 ---
 desk_pi_panel_rotation: 180
 
-desk_pi_panel_touch_transform: [0.006915940204781007, -0.13461186014585716, 508.3087310287114, 0.08641467285873847, -0.0019751925224854605, -9.027405796249482]
+# Audited LCD-show tft35a overlay for MPI3501; fail preflight on unexpected drift.
+desk_pi_panel_overlay_sha256: 601ea7056da5d7864648798fd3656b4205f01d6b9a6a8a5cfad6ca5601bbbe1e
+
+# MPI3501 five-point UI calibration, 2026-10-15; latest validated error 3.01 px.
+# The on-device calibration.json remains authoritative when present.
+desk_pi_panel_touch_transform: [0.00250501805942906, 0.13777330113324093, -59.4656062710941, -0.10888712789847557, 0.005188459493199009, 384.3950009241034]

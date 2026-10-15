@@ -513,6 +513,84 @@ func TestPanelVPNOwnerProjectionAndConflict(t *testing.T) {
 	}
 }
 
+func TestPanelMonitoringPreferenceUsesFreshUIOwnerAndReadyTarget(t *testing.T) {
+	now := time.Now()
+	s, members := panelFixture(now)
+	s.Nodes[0].MonitoringPreferred = "deskb3x"
+	s.Nodes[1].MonitoringPreferred = "deskb2x"
+	s.Nodes[2].MonitoringReady = true
+	p := panelSnapshot(s, members, now)
+	if p.MonitoringPreferred == nil || *p.MonitoringPreferred != "deskb3x" || p.Nodes[2].MonitoringReady == nil || !*p.Nodes[2].MonitoringReady {
+		t.Fatal("Monitoring preference must come from the current UI owner")
+	}
+	s.Nodes[2].MonitoringReady = false
+	if panelSnapshot(s, members, now).MonitoringPreferred != nil {
+		t.Fatal("Unavailable hub advertised as preferred")
+	}
+	s.Nodes[2].MonitoringReady = true
+	s.Nodes[0].At = now.Add(-time.Minute)
+	if panelSnapshot(s, members, now).MonitoringPreferred != nil {
+		t.Fatal("Stale UI owner retained monitoring preference")
+	}
+	s.Nodes[0].At = now
+	s.Nodes[2].At = now.Add(-time.Minute)
+	if panelSnapshot(s, members, now).MonitoringPreferred != nil {
+		t.Fatal("Stale target advertised as preferred")
+	}
+	s.Nodes[2].At = now
+	yes := true
+	s.Nodes[1].VIP["xiaozhi"] = &yes
+	if panelSnapshot(s, members, now).MonitoringPreferred != nil {
+		t.Fatal("Conflicting UI owners advertised a monitoring preference")
+	}
+}
+
+func TestPanelNetworkProjectionKeepsFreshOwnerAndBoundedReplicaMetadata(t *testing.T) {
+	now := time.Now()
+	s, members := panelFixture(now)
+	for i := range s.Nodes {
+		state := "standby"
+		if i == 0 {
+			state = "active"
+		}
+		s.Nodes[i].Network = &NetworkStatus{State: state, Sync: "synced", At: now.Add(-time.Second),
+			Subnet: "192.168.1.0/24", ScanMinutes: 1, ScanSchedule: "*/1 * * * *", VoterReady: true,
+			Revision: &NetworkRevision{Term: 33, Node: "deskb1x", Sequence: 40}}
+	}
+	p := panelSnapshot(s, members, now)
+	if p.Owners["network"].Node == nil || *p.Owners["network"].Node != "deskb1x" || p.Nodes[1].Network.State != "standby" || *p.Nodes[0].Network.AgeMS != 1000 {
+		t.Fatalf("Network owner or replica data lost: %+v", p)
+	}
+	for i := 0; i < 3; i++ {
+		s.Events = append(s.Events, Event{At: now, Node: "deskb1x", Kind: "node", Message: strings.Repeat("x", 256)})
+		s.Nodes[i].Network.ScanSchedule = strings.Repeat("*", 128)
+	}
+	raw, err := json.Marshal(panelSnapshot(s, members, now))
+	if err != nil || len(raw) > panelMaxBytes {
+		t.Fatal("Network exceeded the existing 8 KiB panel budget")
+	}
+	s.Nodes[1].Network.State = "active"
+	if panelSnapshot(s, members, now).Owners["network"].State != "conflict" {
+		t.Fatal("Duplicate Network owner hidden")
+	}
+	s.Nodes[1].Network.State = "standby"
+	s.Nodes[0].Network.VoterReady = false
+	if panelSnapshot(s, members, now).Owners["network"].State != "unknown" {
+		t.Fatal("Warming owner advertised")
+	}
+	s.Nodes[0].Network.VoterReady = true
+	s.Nodes[0].Network.At = now.Add(-15 * time.Second)
+	p = panelSnapshot(s, members, now)
+	if p.Owners["network"].State != "unknown" || p.Nodes[0].Network != nil || !p.Nodes[0].Online {
+		t.Fatal("Stale Network must disappear without hiding healthy node telemetry")
+	}
+	s.Nodes[0].At = now.Add(-time.Minute)
+	s.Nodes[0].Network.At = now
+	if panelSnapshot(s, members, now).Nodes[0].Network != nil {
+		t.Fatal("Offline node retained Network claims")
+	}
+}
+
 func TestValidateNodeAcceptsVPNComponentAndRejectsUnknownFields(t *testing.T) {
 	now := time.Now()
 	s, members := panelFixture(now)

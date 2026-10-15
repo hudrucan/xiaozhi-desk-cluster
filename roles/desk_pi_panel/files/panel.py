@@ -22,12 +22,16 @@ from calibration_ui import Calibration, TARGETS, restore as restore_calibration
 
 WIDTH, HEIGHT = 480, 320
 MEMBERS = ('deskb1x', 'deskb2x', 'deskb3x')
+NAVIGATION = (('Overview','overview'),('Nodes','node'),('Network','network'),('Events','events'),('Settings','settings'))
 BG, SURFACE, BORDER = '#100d08', '#211b12', '#443721'
 TEXT, MUTED, GOLD, GREEN, RED = '#f3ead8', '#baad95', '#d5a85e', '#96c9a0', '#de927f'
 CALIBRATE_BUTTON = (130, 195, 350, 243)
 START_BUTTON, CONFIRM_CANCEL_BUTTON = (100, 243, 228, 291), (252, 243, 380, 291)
 APPLY_BUTTON, RETRY_BUTTON, CANCEL_BUTTON = (32, 243, 160, 291), (176, 243, 304, 291), (320, 243, 448, 291)
 COLLECT_CANCEL_BUTTON = (358, 275, 466, 319)
+NODE_TAB_TOP, NODE_TAB_BOTTOM = 45, 75
+OVERVIEW_CARD_TOP, OVERVIEW_CARD_BOTTOM = 45, 224
+NODE_STATUS_BUTTON, NODE_SERVICES_BUTTON = (238,85,344,115), (356,85,466,115)
 
 def inside(point, box):
     return box[0] <= point[0] <= box[2] and box[1] <= point[1] <= box[3]
@@ -62,12 +66,34 @@ def validate(value):
         for field in ('jobs','components','configuration','admission_paused','vip'):
             if not isinstance(n.get(field),dict):
                 raise ValueError('Invalid node metadata')
+        if n.get('vpn_ready') is not None and type(n['vpn_ready']) is not bool:
+            raise ValueError('Invalid VPN readiness')
+        if n.get('monitoring_ready') is not None and type(n['monitoring_ready']) is not bool:
+            raise ValueError('Invalid monitoring readiness')
+        if any(n['vip'].get(k) is not None and type(n['vip'][k]) is not bool for k in ('xiaozhi','dns','vpn')):
+            raise ValueError('Invalid VIP ownership')
         for v in n['jobs'].values():
             if v is not None and (type(v) is not int or not 0<=v<=2):
                 raise ValueError('Invalid activity')
+        info=n.get('network')
+        if info is not None:
+            if not isinstance(info,dict) or info.get('state') not in ('active','standby','starting') or info.get('sync') not in ('synced','pending'):
+                raise ValueError('Invalid Network state')
+            if type(info.get('voter_ready')) is not bool or info.get('subnet')!='192.168.1.0/24' or type(info.get('scan_minutes')) is not int or not 0<=info['scan_minutes']<=60:
+                raise ValueError('Invalid Network metadata')
+            schedule=info.get('scan_schedule','')
+            if not isinstance(schedule,str) or len(schedule)>128 or any(c in schedule for c in '\r\n\0'):
+                raise ValueError('Invalid Network schedule')
+            if not finite(info.get('age_ms')) or not 0<=info['age_ms']<=1e12:
+                raise ValueError('Invalid Network age')
+            revision=info.get('revision')
+            if revision is not None and (not isinstance(revision,dict) or revision.get('node') not in MEMBERS or any(type(revision.get(k)) is not int or not 0<=revision[k]<=1e9 for k in ('term','sequence'))):
+                raise ValueError('Invalid Network checkpoint')
     if not isinstance(value.get('owners'),dict) or not isinstance(value.get('dns'),dict):
         raise ValueError('Invalid routing metadata')
-    for key in ('dns','xiaozhi'):
+    if value.get('monitoring_preferred') is not None and value['monitoring_preferred'] not in MEMBERS:
+        raise ValueError('Invalid monitoring preference')
+    for key in ('dns','xiaozhi')+tuple(k for k in ('vpn','network') if k in value['owners']):
         o=value['owners'].get(key)
         if not isinstance(o,dict) or o.get('state') not in ('known','conflict','unknown') or (o.get('node') is not None and o['node'] not in MEMBERS):
             raise ValueError('Invalid owner')
@@ -125,6 +151,28 @@ def node_live(n,live,elapsed):
     age=n.get('age_ms')
     return live and n['online'] and finite(age) and age+elapsed<=20000
 
+def network_live(n,live,elapsed):
+    info=n.get('network')
+    return node_live(n,live,elapsed) and bool(info) and info['age_ms']+elapsed<15000
+
+def network_detail(n,value,live,elapsed):
+    if not network_live(n,live,elapsed):
+        return {'role':'Unavailable','label':'Unknown','revision':'No fresh metadata','ok':False}
+    info=n['network'];revision=info.get('revision')
+    def key(r):return r['term'],r['node'],r['sequence']
+    revisions=[peer['network']['revision'] for peer in value['nodes'] if network_live(peer,live,elapsed) and peer['network'].get('revision')]
+    ok=info['sync']=='synced' and info['voter_ready'] and revision is not None and key(revision)==max(map(key,revisions))
+    return {'role':{'active':'Collector','standby':'Cold standby','starting':'Starting'}[info['state']],
+            'label':'Warming up' if not info['voter_ready'] else 'Synced' if ok else 'Pending',
+            'revision':f'Checkpoint {revision["term"]}.{revision["sequence"]}' if revision else 'No checkpoint','ok':ok}
+
+def navigation_page(x):
+    return NAVIGATION[min(len(NAVIGATION)-1,max(0,int(x)*len(NAVIGATION)//WIDTH))][1]
+
+def vip_role(n,key):
+    value=n['vip'].get(key)
+    return 'Owner' if value is True else 'Standby' if value is False else 'Unconfirmed'
+
 class Renderer:
     def __init__(self,font_root='/usr/share/fonts/truetype/dejavu'):
         root=Path(font_root)
@@ -137,7 +185,7 @@ class Renderer:
             while value and d.textlength(value,font=font)>width:
                 value=value[:-2]+'…' if not value.endswith('…') else value[:-2]+'…'
         d.text(xy,value,font=font,fill=color)
-    def draw(self,value,received,ok,page='overview',selected=0,now=None):
+    def draw(self,value,received,ok,page='overview',selected=0,now=None,node_view='status'):
         now=time.monotonic() if now is None else now
         live,elapsed=freshness(value,received,now)
         image=Image.new('RGB',(WIDTH,HEIGHT),BG);d=ImageDraw.Draw(image)
@@ -147,7 +195,8 @@ class Renderer:
         self.right_text(d,(330,0,466,35),status,12,GREEN if live and ok and value['state']=='ready' else RED)
         d.line((14,35,466,35),fill=BORDER)
         if page=='overview':self.overview(d,value,live,elapsed)
-        elif page=='node':self.node(d,value,live,elapsed,selected)
+        elif page=='node':self.node(d,value,live,elapsed,selected,node_view)
+        elif page=='network':self.network(d,value,live,elapsed)
         else:self.events(d,value,live)
         self.navigation(d,page)
         return image
@@ -185,9 +234,11 @@ class Renderer:
         return image
     def navigation(self,d,page):
         d.line((0,275,480,275),fill=BORDER)
-        for i,(label,target) in enumerate((('Overview','overview'),('Nodes','node'),('Events','events'),('Settings','settings'))):
-            if page==target:d.rectangle((i*120,276,(i+1)*120-1,319),fill=SURFACE)
-            self.center_text(d,(i*120,276,(i+1)*120-1,319),label,13,GOLD if page==target else MUTED,bold=page==target)
+        width=WIDTH//len(NAVIGATION)
+        for i,(label,target) in enumerate(NAVIGATION):
+            box=(i*width,276,(i+1)*width-1,319)
+            if page==target:d.rectangle(box,fill=SURFACE)
+            self.center_text(d,box,label,13,GOLD if page==target else MUTED,bold=page==target)
     def calibration(self,cal):
         image=Image.new('RGB',(WIDTH,HEIGHT),BG);d=ImageDraw.Draw(image)
         self.text(d,(14,10),'Touch calibration',16,TEXT,True)
@@ -231,65 +282,138 @@ class Renderer:
     def owner(self,value,key,live,elapsed):
         o=(value or {}).get('owners',{}).get(key,{})
         node=next((n for n in (value or {}).get('nodes',[]) if n['id']==o.get('node')),None)
+        if key=='network':
+            if o.get('state')=='conflict':
+                active=[n for n in (value or {}).get('nodes',[]) if network_live(n,live,elapsed) and n['network']['state']=='active' and n['network']['voter_ready']]
+                return 'Conflict' if len(active)>1 else 'Unconfirmed'
+            if not node or not network_live(node,live,elapsed):return 'Unconfirmed'
+        elif o.get('state')=='conflict':
+            owners=[n for n in (value or {}).get('nodes',[]) if node_live(n,live,elapsed) and n['vip'].get(key) is True]
+            return 'Conflict' if len(owners)>1 else 'Unconfirmed'
         return o['node'] if node and node_live(node,live,elapsed) and o.get('state')=='known' else 'Unconfirmed'
+    def overview_roles(self,n,value,live,elapsed):
+        if not node_live(n,live,elapsed):return ['Unconfirmed']
+        roles=[]
+        for key,label in (('xiaozhi','Xiaozhi'),('dns','DNS'),('vpn','VPN')):
+            if n['vip'].get(key) is True:
+                roles.append(label+(' !' if self.owner(value,key,live,elapsed)=='Conflict' else ''))
+        info=n.get('network') if network_live(n,live,elapsed) else None
+        if info and info['state']=='active' and info['voter_ready']:
+            roles.append('Network'+(' !' if self.owner(value,'network',live,elapsed)=='Conflict' else ''))
+        if value.get('monitoring_preferred')==n['id'] and n.get('monitoring_ready') is True and self.owner(value,'xiaozhi',live,elapsed) in MEMBERS:
+            roles.append('Monitor')
+        if roles:return roles
+        standby=all(n['vip'].get(key) is False for key in ('xiaozhi','dns','vpn')) and info is not None and info['state']=='standby'
+        return ['Standby' if standby else 'Unconfirmed']
     def overview(self,d,value,live,elapsed):
-        self.text(d,(14,45),'Xiaozhi',12,MUTED)
-        self.text(d,(80,45),self.owner(value,'xiaozhi',live,elapsed),12,GOLD)
-        self.text(d,(259,45),'DNS',12,MUTED)
-        self.text(d,(300,45),self.owner(value,'dns',live,elapsed),12,GREEN)
         for i in range(3):
             x=14+i*155;n=value['nodes'][i] if value else None
             online=n is not None and node_live(n,live,elapsed)
-            d.rounded_rectangle((x,75,x+142,224),radius=10,fill=SURFACE,outline=BORDER)
-            self.text(d,(x+12,85),MEMBERS[i],14,TEXT,True)
-            d.ellipse((x+123,92,x+129,98),fill=GREEN if online else RED)
-            d.line((x+12,111,x+130,111),fill=BORDER)
+            d.rounded_rectangle((x,OVERVIEW_CARD_TOP,x+142,OVERVIEW_CARD_BOTTOM),radius=10,fill=SURFACE,outline=BORDER)
+            self.text(d,(x+12,55),MEMBERS[i],14,TEXT,True)
+            d.ellipse((x+123,62,x+129,68),fill=GREEN if online else RED)
+            d.line((x+12,81,x+130,81),fill=BORDER)
             if not online:
-                self.text(d,(x+12,126),'Telemetry',12,MUTED)
-                self.text(d,(x+12,149),'unavailable',12,RED)
-                self.text(d,(x+12,199),'Unconfirmed',11,MUTED)
+                self.text(d,(x+12,92),'Telemetry',12,MUTED)
+                self.text(d,(x+12,117),'unavailable',12,RED)
+                self.text(d,(x+12,191),'Unconfirmed',11,MUTED)
             else:
                 jobs=n['jobs'];busy=[label for key,label in (('asr','ASR'),('llm_vlm','LLM/VLM'),('tts','TTS')) if finite(jobs.get(key)) and jobs[key]>0]
                 activity=' + '.join(busy) if busy else 'Paused' if any(v is True for v in n['admission_paused'].values()) else 'Voice idle' if all(jobs.get(k)==0 for k in ('asr','llm_vlm','tts')) else 'Voice unknown'
-                self.text(d,(x+12,119),activity,12,GOLD if busy else MUTED,width=118)
+                self.text(d,(x+12,92),activity,12,GOLD if busy else MUTED,width=118)
                 cpu=n.get('cpu_percent');temp=n.get('temperature_c');mem=n.get('memory_percent')
-                self.text(d,(x+12,142),f'{cpu:.0f}% CPU' if finite(cpu) else 'CPU —',16,TEXT,True)
-                detail=f'{mem:.0f}% RAM' if finite(mem) else 'RAM —'
-                if finite(temp):detail+=f' · {temp:.0f}°C'
-                self.text(d,(x+12,169),detail,11,MUTED,width=118)
-                d.line((x+12,193,x+130,193),fill=BORDER)
-                role='Xiaozhi VIP' if n['vip'].get('xiaozhi') is True else 'DNS VIP' if n['vip'].get('dns') is True else 'Standby'
-                self.text(d,(x+12,199),role,11,GOLD,width=118)
+                self.text(d,(x+12,117),f'{cpu:.0f}% CPU' if finite(cpu) else 'CPU —',16,TEXT,True)
+                memory=f'{mem:.0f}% RAM' if finite(mem) else 'RAM —'
+                temperature=f'{temp:.0f}°C' if finite(temp) else '—°C'
+                self.text(d,(x+12,147),memory+' - '+temperature,13,TEXT,width=122)
+                d.line((x+12,181,x+130,181),fill=BORDER)
+                roles=self.overview_roles(n,value,live,elapsed)
+                for compact in (False,True):
+                    lines=['']
+                    for role in roles:
+                        label=role.replace('Network','Net').replace('Monitor','Mon') if compact else role
+                        candidate=lines[-1]+' · '+label if lines[-1] else label
+                        if d.textlength(candidate,font=self.fonts[11])>118:lines.append(label)
+                        else:lines[-1]=candidate
+                    if len(lines)<=2:break
+                for row,line in enumerate(lines):
+                    color=RED if '!' in line else MUTED if roles in (['Standby'],['Unconfirmed']) else GOLD
+                    self.text(d,(x+12,(188 if len(lines)>1 else 197)+row*17),line,11,color,width=118)
         mode=(value or {}).get('dns',{}).get('mode')
         label={'adguard':'AdGuard filtering','fallback':'Fallback · 1.1.1.1','unavailable':'DNS unavailable'}.get(mode,'DNS unconfirmed') if live else 'DNS unconfirmed'
         online=sum(node_live(n,live,elapsed) for n in value['nodes']) if value else 0
         self.text(d,(14,236),label,12,GREEN if live and mode=='adguard' else RED)
         self.right_text(d,(340,232,466,254),f'{online}/3 online',12,MUTED)
         self.text(d,(14,256),'Touch a node for details',11,MUTED)
-    def node(self,d,value,live,elapsed,index):
+    def network(self,d,value,live,elapsed):
+        self.text(d,(14,46),'Network collector',14,TEXT,True)
+        owner=self.owner(value,'network',live,elapsed)
+        self.right_text(d,(270,41,466,67),owner,13,GOLD)
+        active=next((n['network'] for n in (value or {}).get('nodes',[]) if n['id']==owner and network_live(n,live,elapsed)),None)
+        scope='Waiting for a fresh collector'
+        if active:
+            scan=f'scan every {active["scan_minutes"]} min' if active['scan_minutes'] else 'schedule '+(active.get('scan_schedule') or 'unavailable')
+            scope='LAN '+active['subnet']+' · '+scan
+        self.text(d,(14,75),scope,12,MUTED,width=452)
+        for i,node_id in enumerate(MEMBERS):
+            n=next((n for n in (value or {}).get('nodes',[]) if n['id']==node_id),None)
+            detail=network_detail(n,value,live,elapsed) if n else {'role':'Unavailable','label':'Unknown','revision':'No fresh metadata','ok':False}
+            y=101+i*54
+            d.rounded_rectangle((14,y,466,y+47),radius=8,fill=SURFACE,outline=BORDER)
+            self.text(d,(26,y+6),node_id,13,TEXT,True)
+            self.text(d,(154,y+6),detail['role'],12,GOLD if detail['role']=='Collector' else MUTED)
+            self.right_text(d,(322,y+2,452,y+25),detail['label'],12,GREEN if detail['ok'] else MUTED)
+            self.text(d,(26,y+27),detail['revision'],11,MUTED,width=410)
+    def node(self,d,value,live,elapsed,index,node_view='status'):
         for i in range(3):
             x=14+i*155
-            d.rounded_rectangle((x,45,x+142,79),radius=7,fill=SURFACE if i==index else BG,outline=GOLD if i==index else BORDER)
-            self.center_text(d,(x,45,x+142,79),MEMBERS[i],12,GOLD if i==index else MUTED,True)
+            box=(x,NODE_TAB_TOP,x+142,NODE_TAB_BOTTOM)
+            d.rounded_rectangle(box,radius=7,fill=SURFACE if i==index else BG,outline=GOLD if i==index else BORDER)
+            self.center_text(d,box,MEMBERS[i],12,GOLD if i==index else MUTED,True)
         n=value['nodes'][index] if value else None
         online=n is not None and node_live(n,live,elapsed)
         self.text(d,(14,92),n.get('ip','') if n else 'Waiting for cluster',13,TEXT,True)
-        self.right_text(d,(320,87,466,111),'Online' if online else 'Unavailable',12,GREEN if online else RED)
+        self.text(d,(161,94),'Online' if online else 'Offline',11,GREEN if online else RED)
+        for box,label,target in ((NODE_STATUS_BUTTON,'Status','status'),(NODE_SERVICES_BUTTON,'Services','services')):
+            d.rounded_rectangle(box,radius=6,fill=SURFACE if node_view==target else BG,outline=GOLD if node_view==target else BORDER)
+            self.center_text(d,box,label,12,GOLD if node_view==target else MUTED,node_view==target)
         if not online:
             d.rounded_rectangle((14,123,466,258),radius=8,fill=SURFACE,outline=BORDER)
             self.text(d,(28,145),'Fresh telemetry required',16,RED)
             self.text(d,(28,179),'Owner, activity and health are unconfirmed.',12,MUTED,width=424)
             return
-        boxes=self.columns(d,(14,119,466,169),3)
+        if node_view=='services':
+            boxes=self.columns(d,(14,125,466,174),3)
+            for box,(label,key) in zip(boxes,(('Xiaozhi VIP','xiaozhi'),('DNS VIP','dns'),('VPN VIP','vpn'))):
+                role=vip_role(n,key)
+                self.text(d,(box[0]+12,131),label,12,MUTED)
+                self.text(d,(box[0]+12,150),role,14,GOLD if role=='Owner' else TEXT,True,width=126)
+            ready=n.get('vpn_ready')
+            self.text(d,(26,184),'VPN eligibility',12,MUTED)
+            self.right_text(d,(250,179,452,202),'Ready' if ready is True else 'Not eligible' if ready is False else 'Unconfirmed',12,GREEN if ready is True else MUTED)
+            detail=network_detail(n,value,live,elapsed)
+            d.rounded_rectangle((14,209,466,268),radius=8,fill=SURFACE,outline=BORDER)
+            self.text(d,(26,215),'Network · '+detail['role'],12,TEXT,True)
+            self.right_text(d,(310,210,452,234),detail['label'],12,GREEN if detail['ok'] else MUTED)
+            info=n.get('network') if network_live(n,live,elapsed) else None
+            scope='Waiting for fresh service metadata'
+            if info:
+                scope='LAN '+info['subnet']
+                if info['state']!='standby':scope+=' · '+(f'scan every {info["scan_minutes"]} min' if info['scan_minutes'] else (info.get('scan_schedule') or 'schedule unavailable'))
+            self.text(d,(26,235),scope,11,MUTED,width=426)
+            self.text(d,(26,251),detail['revision'],11,MUTED,width=426)
+            return
+        boxes=self.columns(d,(14,125,466,169),3)
         for box,(label,field,suffix) in zip(boxes,(('CPU','cpu_percent','%'),('Memory','memory_percent','%'),('Temp','temperature_c','°C'))):
             v=n.get(field)
-            self.text(d,(box[0]+12,125),label,11,MUTED)
-            self.text(d,(box[0]+12,143),f'{v:.1f}{suffix}' if finite(v) else '—',16,TEXT,True)
-        boxes=self.columns(d,(14,178,466,218),4)
-        for box,(label,key) in zip(boxes,(('Voice','worker'),('Core','core'),('MQTT','mqtt'),('DNS','dns'))):
-            ready=n['components'].get(key)=='ready'
+            self.text(d,(box[0]+12,131),label,11,MUTED)
+            self.text(d,(box[0]+12,149),f'{v:.1f}{suffix}' if finite(v) else '—',14,TEXT,True)
+        boxes=self.columns(d,(14,178,466,218),5)
+        for box,(label,key) in zip(boxes,(('Voice','worker'),('Core','core'),('MQTT','mqtt'),('DNS','dns'),('VPN','vpn'))):
+            state=n['components'].get(key) if key!='vpn' else 'ready' if n.get('vpn_ready') is True else 'unavailable' if n.get('vpn_ready') is False else None
+            ready=state=='ready'
             self.text(d,(box[0]+12,182),label,11,MUTED)
-            self.text(d,(box[0]+12,199),'Ready' if ready else 'Unknown' if n['components'].get(key) is None else 'Not ready',11,GREEN if ready else RED,width=89)
+            self.text(d,(box[0]+12,199),'Ready' if ready else 'Unknown' if state is None else 'Not ready',11,GREEN if ready else RED,width=box[2]-box[0]-24)
         boxes=self.columns(d,(14,227,466,268),3)
         for box,(label,key) in zip(boxes,(('Xiaozhi','xiaozhi'),('DNS','dns'),('Monitor','monitoring'))):
             cfg=n['configuration'].get(key,{})
@@ -369,7 +493,7 @@ def run(config):
     if rx is None or ry is None or rx.max<=rx.min or ry.max<=ry.min:raise ValueError('Invalid touchscreen range')
     thread=threading.Thread(target=model.poll,args=(config['url'],),daemon=True);thread.start()
     for sig in (signal.SIGTERM,signal.SIGINT):signal.signal(sig,lambda *_:model.stopped.set())
-    page,selected='overview',0;cal=None
+    page,selected='overview',0;node_view='status';cal=None
     x,y=rx.min,ry.min;pressed=False;points=[];press_at=0;last_render=0;last_key=None
     try:
         while not model.stopped.is_set():
@@ -405,10 +529,12 @@ def run(config):
                                         elif inside((tx,ty),CANCEL_BUTTON):cal.cancel()
                                     elif cal.phase=='review':cal.preview(raw)
                                 if cal.phase in ('cancelled','applied'):cal=None;page='settings'
-                            elif ty>=276:page=('overview','node','events','settings')[min(3,tx//120)]
+                            elif ty>=276:page=navigation_page(tx)
                             elif page=='settings' and inside((tx,ty),CALIBRATE_BUTTON):cal=Calibration(config.get('rotation',0),now)
-                            elif page=='overview' and 74<=ty<=216:selected=min(2,max(0,(tx-14)//155));page='node'
-                            elif page=='node' and 45<=ty<=78:selected=min(2,max(0,(tx-14)//155))
+                            elif page=='overview' and OVERVIEW_CARD_TOP<=ty<=OVERVIEW_CARD_BOTTOM:selected=min(2,max(0,(tx-14)//155));page='node'
+                            elif page=='node' and NODE_TAB_TOP<=ty<=NODE_TAB_BOTTOM:selected=min(2,max(0,(tx-14)//155))
+                            elif page=='node' and inside((tx,ty),NODE_STATUS_BUTTON):node_view='status'
+                            elif page=='node' and inside((tx,ty),NODE_SERVICES_BUTTON):node_view='services'
                             last_render=0
                     elif event.type==ecodes.EV_SYN and event.code==ecodes.SYN_REPORT and pressed:
                         if len(points)<256:points.append((x,y))
@@ -421,9 +547,10 @@ def run(config):
                 value,received,ok=model.snapshot()
                 live,elapsed=freshness(value,received,now)
                 online=tuple(node_live(n,live,elapsed) for n in value['nodes']) if value else ()
-                key=('cal',id(cal),cal.version) if cal else ('settings',config.get('calibration_error')) if page=='settings' else (id(value),live,ok,online,page,selected)
+                network_fresh=tuple(network_live(n,live,elapsed) for n in value['nodes']) if value else ()
+                key=('cal',id(cal),cal.version) if cal else ('settings',config.get('calibration_error')) if page=='settings' else (id(value),live,ok,online,network_fresh,page,selected,node_view)
                 if key!=last_key:
-                    image=renderer.calibration(cal) if cal else renderer.settings(config) if page=='settings' else renderer.draw(value,received,ok,page,selected,now)
+                    image=renderer.calibration(cal) if cal else renderer.settings(config) if page=='settings' else renderer.draw(value,received,ok,page,selected,now,node_view)
                     fb.show(image);last_key=key
                 last_render=now
     finally:

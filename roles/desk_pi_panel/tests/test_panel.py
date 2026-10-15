@@ -17,7 +17,96 @@ def fixture():
         'dns':{'mode':'adguard'},'events':[],
         'nodes':[{'id':n,'ip':'192.168.1.'+str(101+i),'online':True,'age_ms':1000,'jobs':{'asr':0,'llm_vlm':0,'tts':0},'components':{},'configuration':{},'admission_paused':{},'vip':{},'cpu_percent':10,'memory_percent':30,'temperature_c':42} for i,n in enumerate(panel.MEMBERS)]}
 
+def network_fixture():
+    v=fixture();v['owners']['network']={'state':'known','node':'deskb1x'}
+    for i,n in enumerate(v['nodes']):
+        n['network']={'state':'active' if i==0 else 'standby','sync':'synced','age_ms':1000,
+            'subnet':'192.168.1.0/24','scan_minutes':1 if i==0 else 0,'scan_schedule':'*/1 * * * *' if i==0 else '',
+            'voter_ready':True,'revision':{'term':33,'node':'deskb1x','sequence':40}}
+    return v
+
 class PanelTests(unittest.TestCase):
+    def test_overview_monitor_marks_only_fresh_preference_from_ui_owner(self):
+        v=network_fixture();v['monitoring_preferred']='deskb3x'
+        for n in v['nodes']:n['monitoring_ready']=True;n['vip']={'xiaozhi':False,'dns':False,'vpn':False}
+        r=panel.Renderer.__new__(panel.Renderer)
+        self.assertNotIn('Monitor',r.overview_roles(v['nodes'][1],v,True,0))
+        self.assertIn('Monitor',r.overview_roles(v['nodes'][2],v,True,0))
+        v['nodes'][0]['age_ms']=21000
+        self.assertNotIn('Monitor',r.overview_roles(v['nodes'][2],v,True,0))
+        v['nodes'][0]['age_ms']=1000;v['nodes'][2]['monitoring_ready']=False
+        self.assertNotIn('Monitor',r.overview_roles(v['nodes'][2],v,True,0))
+    def test_monitor_preference_and_readiness_are_validated(self):
+        v=fixture();v['monitoring_preferred']='unknown'
+        with self.assertRaises(ValueError):panel.validate(v)
+        v=fixture();v['nodes'][0]['monitoring_ready']=1
+        with self.assertRaises(ValueError):panel.validate(v)
+    def test_overview_keeps_all_roles_and_expires_network_independently(self):
+        v=network_fixture();n=v['nodes'][0]
+        n['vip']={'xiaozhi':True,'dns':True,'vpn':True}
+        r=panel.Renderer.__new__(panel.Renderer)
+        self.assertEqual(r.overview_roles(n,v,True,0),['Xiaozhi','DNS','VPN','Network'])
+        self.assertEqual(r.overview_roles(n,v,True,14000),['Xiaozhi','DNS','VPN'])
+        self.assertEqual(r.overview_roles(n,v,True,20000),['Unconfirmed'])
+        n=v['nodes'][1];n['vip']={'xiaozhi':False,'dns':False,'vpn':False}
+        self.assertEqual(r.overview_roles(n,v,True,0),['Standby'])
+        self.assertEqual(r.overview_roles(n,v,True,14000),['Unconfirmed'])
+    def test_overview_marks_conflicting_roles_on_each_claiming_node(self):
+        v=network_fixture();v['owners']['vpn']={'state':'conflict','node':None}
+        v['owners']['network']={'state':'conflict','node':None}
+        v['nodes'][1]['network']['state']='active'
+        for n in v['nodes'][:2]:n['vip']['vpn']=True
+        r=panel.Renderer.__new__(panel.Renderer)
+        for n in v['nodes'][:2]:self.assertEqual(r.overview_roles(n,v,True,0),['VPN !','Network !'])
+    def test_vpn_owner_and_role_claims_expire_with_the_node(self):
+        v=fixture();v['owners']['vpn']={'state':'known','node':'deskb1x'}
+        for i,n in enumerate(v['nodes']):n['vip']['vpn']=i==0;n['vpn_ready']=True
+        panel.validate(v);renderer=panel.Renderer.__new__(panel.Renderer)
+        self.assertEqual(renderer.owner(v,'vpn',True,0),'deskb1x')
+        self.assertEqual(panel.vip_role(v['nodes'][0],'vpn'),'Owner')
+        self.assertEqual(panel.vip_role(v['nodes'][1],'vpn'),'Standby')
+        self.assertEqual(panel.vip_role(v['nodes'][1],'dns'),'Unconfirmed')
+        self.assertEqual(renderer.owner(v,'vpn',True,20000),'Unconfirmed')
+        v['nodes'][1]['vip']['vpn']=True;v['owners']['vpn']={'state':'conflict','node':None}
+        self.assertEqual(renderer.owner(v,'vpn',True,0),'Conflict')
+        self.assertEqual(renderer.owner(v,'vpn',True,20000),'Unconfirmed')
+    def test_vpn_metadata_rejects_non_boolean_live_claims(self):
+        v=fixture();v['nodes'][0]['vpn_ready']=1
+        with self.assertRaises(ValueError):panel.validate(v)
+        v=fixture();v['nodes'][0]['vip']['vpn']='false'
+        with self.assertRaises(ValueError):panel.validate(v)
+    def test_network_is_optional_and_rejects_malformed_data(self):
+        self.assertEqual(panel.validate(fixture())['state'],'ready')
+        self.assertEqual(panel.validate(network_fixture())['state'],'ready')
+        for change in ({'age_ms':float('nan')},{'scan_minutes':True},{'scan_schedule':'bad\ncron'},
+                       {'state':'invented'},{'voter_ready':1},{'revision':{'term':1,'node':'unknown','sequence':3}}):
+            v=network_fixture();v['nodes'][0]['network'].update(change)
+            with self.assertRaises(ValueError):panel.validate(v)
+    def test_network_expires_before_node_without_another_api_reply(self):
+        v=network_fixture();n=v['nodes'][0]
+        self.assertTrue(panel.network_live(n,True,13000))
+        self.assertTrue(panel.node_live(n,True,14000))
+        self.assertFalse(panel.network_live(n,True,14000))
+        renderer=panel.Renderer.__new__(panel.Renderer)
+        self.assertEqual(renderer.owner(v,'network',True,14000),'Unconfirmed')
+        self.assertEqual(panel.network_detail(n,v,True,14000)['label'],'Unknown')
+        v['owners']['network']={'state':'conflict','node':None};v['nodes'][1]['network']['state']='active'
+        self.assertEqual(renderer.owner(v,'network',True,0),'Conflict')
+        self.assertEqual(renderer.owner(v,'network',True,14000),'Unconfirmed')
+    def test_network_replica_behind_checkpoint_or_warming_cannot_claim_synced(self):
+        v=network_fixture();n=v['nodes'][1]
+        self.assertEqual(panel.network_detail(n,v,True,0)['label'],'Synced')
+        n['network']['revision']['sequence']=39
+        self.assertEqual(panel.network_detail(n,v,True,0)['label'],'Pending')
+        n['network']['voter_ready']=False
+        self.assertEqual(panel.network_detail(n,v,True,0)['label'],'Warming up')
+        n['network']['revision']=None
+        self.assertFalse(panel.network_detail(n,v,True,0)['ok'])
+    def test_all_five_navigation_buttons_match_the_rendered_width(self):
+        for i,(_,page) in enumerate(panel.NAVIGATION):
+            for x in (i*96,i*96+48,i*96+95):self.assertEqual(panel.navigation_page(x),page)
+        self.assertEqual(panel.navigation_page(-1),'overview')
+        self.assertEqual(panel.navigation_page(480),'settings')
     def test_only_expected_panel_membership_is_accepted(self):
         v=fixture();self.assertEqual(panel.validate(v),v)
         v['nodes'].reverse()
