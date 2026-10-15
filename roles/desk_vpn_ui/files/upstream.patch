@@ -180,11 +180,11 @@ index 9d15817..a703cb5 100644
  
  const data = defineModel<string | null>({
 diff --git a/src/app/components/Ui/UserMenu.vue b/src/app/components/Ui/UserMenu.vue
-index 6d32a75..622d11e 100644
+index 6d32a75..ba5c35f 100644
 --- a/src/app/components/Ui/UserMenu.vue
 +++ b/src/app/components/Ui/UserMenu.vue
-@@ -1,96 +1 @@
--<template>
+@@ -1,96 +1,24 @@
+ <template>
 -  <DropdownMenuRoot v-model:open="toggleState">
 -    <DropdownMenuTrigger>
 -      <span
@@ -249,7 +249,29 @@ index 6d32a75..622d11e 100644
 -      </DropdownMenuContent>
 -    </DropdownMenuPortal>
 -  </DropdownMenuRoot>
--</template>
++  <nav class="flex items-center gap-1 text-sm" aria-label="VPN navigation">
++    <NuxtLink
++      to="/"
++      class="inline-flex h-8 items-center justify-center whitespace-nowrap rounded px-2 text-gray-500 transition hover:bg-gray-200 hover:text-gray-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-red-600 dark:text-neutral-400 dark:hover:bg-neutral-700 dark:hover:text-neutral-200"
++      exact-active-class="bg-gray-200 !text-gray-700 dark:bg-neutral-700 dark:!text-neutral-200"
++    >
++      Clients
++    </NuxtLink>
++    <NuxtLink
++      to="/admin/config"
++      class="inline-flex h-8 items-center justify-center whitespace-nowrap rounded px-2 text-gray-500 transition hover:bg-gray-200 hover:text-gray-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-red-600 dark:text-neutral-400 dark:hover:bg-neutral-700 dark:hover:text-neutral-200"
++      exact-active-class="bg-gray-200 !text-gray-700 dark:bg-neutral-700 dark:!text-neutral-200"
++    >
++      Client defaults
++    </NuxtLink>
++    <a
++      href="/"
++      class="inline-flex h-8 items-center justify-center whitespace-nowrap rounded px-2 text-gray-500 transition hover:bg-gray-200 hover:text-gray-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-red-600 dark:text-neutral-400 dark:hover:bg-neutral-700 dark:hover:text-neutral-200"
++    >
++      Cluster
++    </a>
++  </nav>
+ </template>
 -
 -<script setup lang="ts">
 -const authStore = useAuthStore();
@@ -280,27 +302,100 @@ index 6d32a75..622d11e 100644
 -    .join('');
 -});
 -</script>
-+<template><div class="flex gap-4 text-sm"><NuxtLink to="/">Clients</NuxtLink><NuxtLink to="/admin/config">Client defaults</NuxtLink><a href="/">Cluster</a></div></template>
-\ No newline at end of file
 diff --git a/src/app/layouts/default.vue b/src/app/layouts/default.vue
-index 8ec4ed6..7e40add 100644
+index 8ec4ed6..c4ad016 100644
 --- a/src/app/layouts/default.vue
 +++ b/src/app/layouts/default.vue
-@@ -19,7 +19,7 @@
+@@ -1,25 +1,71 @@
+ <template>
+   <div>
+     <header
+-      class="mx-auto my-4 flex max-w-3xl flex-col justify-center max-md:px-3"
++      class="mx-auto mb-4 mt-6 flex max-w-3xl flex-col justify-center px-3"
+     >
+       <div
+         class="mb-5 w-full"
+         :class="
+           loggedIn
+-            ? 'flex flex-col items-center justify-between sm:flex-row'
++            ? 'flex flex-col items-center justify-between gap-3 md:flex-row'
+             : 'flex justify-end'
+         "
+       >
+         <HeaderLogo v-if="loggedIn" />
+-        <div class="flex flex-row gap-3">
++        <div
++          class="flex flex-wrap items-center justify-center gap-3 md:justify-end"
++        >
+           <HeaderLangSelector />
+           <HeaderThemeSwitch />
+           <HeaderChartToggle v-if="loggedIn" />
            <UiUserMenu v-if="loggedIn" />
          </div>
        </div>
 -      <HeaderUpdate class="my-4" />
-+      <div class="mt-2 rounded-lg border border-gray-200 p-3 text-sm dark:border-neutral-600"><a href="/" class="mr-3 underline">Desk Cluster</a><strong>VPN</strong><span class="ml-2 text-gray-500">WireGuard · wg-easy</span><div class="mt-2">{{ clusterStatus?.message || 'Reading cluster configuration…' }}</div><div class="mt-1 flex flex-wrap gap-4"><span v-for="n in clusterStatus?.nodes || []" :key="n.node">{{ n.node }} · {{ n.state }}</span></div></div>
++      <section
++        v-if="loggedIn"
++        aria-label="Cluster configuration status"
++        class="overflow-hidden rounded-lg bg-white text-gray-700 shadow-md dark:bg-neutral-700 dark:text-neutral-200"
++      >
++        <div
++          class="flex flex-wrap items-center justify-between gap-2 border-b-2 border-gray-100 px-5 py-3 dark:border-neutral-600"
++        >
++          <h2 class="text-base font-medium">Cluster sync</h2>
++          <p
++            class="text-sm text-gray-500 dark:text-neutral-400"
++            aria-live="polite"
++          >
++            {{ clusterStatus?.message || 'Reading cluster configuration…' }}
++          </p>
++        </div>
++        <div
++          v-if="clusterStatus?.nodes?.length"
++          class="grid divide-y divide-gray-100 sm:grid-cols-3 sm:divide-x sm:divide-y-0 dark:divide-neutral-600"
++        >
++          <div
++            v-for="n in clusterStatus.nodes"
++            :key="n.node"
++            class="flex items-center justify-between gap-3 px-5 py-3 text-sm"
++          >
++            <span class="font-medium">{{ n.node }}</span>
++            <span
++              class="inline-flex items-center gap-2 text-xs"
++              :class="
++                n.state === 'Applied'
++                  ? 'text-green-700 dark:text-green-400'
++                  : n.state === 'Unavailable'
++                    ? 'text-red-600 dark:text-red-400'
++                    : 'text-amber-700 dark:text-amber-400'
++              "
++            >
++              <span
++                class="h-1.5 w-1.5 shrink-0 rounded-full bg-current"
++                aria-hidden="true"
++              />
++              {{ n.state }}
++            </span>
++          </div>
++        </div>
++      </section>
      </header>
      <slot />
      <UiFooter />
-@@ -28,6 +28,8 @@
+@@ -28,6 +74,16 @@
  
  <script setup lang="ts">
  const route = useRoute();
-+const {data:clusterStatus,refresh:refreshCluster}=useFetch('/vpn/api/desk-cluster/status');
-+let clusterTimer:ReturnType<typeof setInterval>;onMounted(()=>{clusterTimer=setInterval(()=>{if(!document.hidden)refreshCluster();},5000)});onUnmounted(()=>clearInterval(clusterTimer));
++const { data: clusterStatus, refresh: refreshCluster } = useFetch(
++  '/vpn/api/desk-cluster/status'
++);
++let clusterTimer: ReturnType<typeof setInterval>;
++onMounted(() => {
++  clusterTimer = setInterval(() => {
++    if (!document.hidden) refreshCluster();
++  }, 5000);
++});
++onUnmounted(() => clearInterval(clusterTimer));
  
  const loggedIn = computed(() => route.path !== '/login');
  </script>
@@ -317,23 +412,92 @@ index 06029fd..cc13a9f 100644
    }
  
 diff --git a/src/app/pages/admin.vue b/src/app/pages/admin.vue
-index 0f880b7..1a64bd7 100644
+index 0f880b7..e8379c2 100644
 --- a/src/app/pages/admin.vue
 +++ b/src/app/pages/admin.vue
-@@ -54,12 +54,7 @@ const { t } = useI18n();
- 
- const route = useRoute();
- 
+@@ -1,72 +1,12 @@
+ <template>
+-  <div>
+-    <div class="container mx-auto p-4">
+-      <div class="flex flex-col gap-4 lg:flex-row">
+-        <div
+-          class="overflow-hidden rounded-lg bg-white text-gray-700 shadow-md lg:w-64 dark:bg-neutral-700 dark:text-neutral-200"
+-        >
+-          <PanelHead>
+-            <PanelHeadTitle>
+-              <NuxtLink to="/admin">
+-                {{ t('pages.admin.panel') }}
+-              </NuxtLink>
+-            </PanelHeadTitle>
+-          </PanelHead>
+-          <PanelBody>
+-            <nav class="flex flex-col gap-2">
+-              <NuxtLink
+-                v-for="(item, index) in menuItems"
+-                :key="index"
+-                :to="`/admin/${item.id}`"
+-                class="group rounded"
+-                active-class="bg-red-800 active"
+-              >
+-                <BaseSecondaryButton
+-                  as="span"
+-                  class="w-full font-medium group-[.active]:text-white"
+-                >
+-                  {{ item.name }}
+-                </BaseSecondaryButton>
+-              </NuxtLink>
+-            </nav>
+-          </PanelBody>
+-        </div>
+-
+-        <div
+-          class="flex-1 overflow-hidden rounded-lg bg-white text-gray-700 shadow-md dark:bg-neutral-700 dark:text-neutral-200"
+-        >
+-          <PanelHead>
+-            <PanelHeadTitle>
+-              {{ activeMenuItem.name }}
+-            </PanelHeadTitle>
+-          </PanelHead>
+-          <PanelBody>
+-            <NuxtPage />
+-          </PanelBody>
+-        </div>
+-      </div>
+-    </div>
+-  </div>
++  <main>
++    <Panel>
++      <PanelHead>
++        <PanelHeadTitle>Client defaults</PanelHeadTitle>
++      </PanelHead>
++      <PanelBody>
++        <NuxtPage />
++      </PanelBody>
++    </Panel>
++  </main>
+ </template>
+-
+-<script setup lang="ts">
+-const { t } = useI18n();
+-
+-const route = useRoute();
+-
 -const menuItems = computed(() => [
 -  { id: 'general', name: t('pages.admin.general') },
 -  { id: 'config', name: t('pages.admin.config') },
 -  { id: 'interface', name: t('pages.admin.interface') },
 -  { id: 'hooks', name: t('pages.admin.hooks') },
 -]);
-+const menuItems = computed(() => [{ id: 'config', name: t('pages.admin.config') }]);
- 
- const defaultItem = { id: '', name: t('pages.admin.panel') };
- 
+-
+-const defaultItem = { id: '', name: t('pages.admin.panel') };
+-
+-const activeMenuItem = computed(() => {
+-  return (
+-    menuItems.value.find((item) => route.path === `/admin/${item.id}`) ??
+-    defaultItem
+-  );
+-});
+-</script>
 diff --git a/src/app/pages/admin/config.vue b/src/app/pages/admin/config.vue
 index 40146ae..cf26e77 100644
 --- a/src/app/pages/admin/config.vue
@@ -1340,3 +1504,28 @@ index 0ad7cef..bfdabfd 100644
      const rawDump = await exec(`${wgExecutable} show ${infName} dump`, {
        log: false,
      });
+diff --git a/src/app/components/Header/Logo.vue b/src/app/components/Header/Logo.vue
+index 3450b92..53d671b 100644
+--- a/src/app/components/Header/Logo.vue
++++ b/src/app/components/Header/Logo.vue
+@@ -1,11 +1,16 @@
+ <template>
+-  <NuxtLink to="/" class="max-sm:mb-4">
+-    <h1 class="text-4xl font-medium dark:text-neutral-200">
++  <NuxtLink to="/" class="inline-flex h-10 shrink-0 items-center">
++    <h1
++      class="flex items-center gap-2 text-4xl font-medium leading-none dark:text-neutral-200"
++    >
+       <img
+         src="/logo.png"
+         width="32"
+-        class="dark:bg mr-2 inline align-middle"
+-      /><span class="align-middle">WireGuard</span>
++        height="32"
++        class="block h-8 w-8 shrink-0"
++        alt=""
++      />
++      <span>WireGuard</span>
+     </h1>
+   </NuxtLink>
+ </template>
