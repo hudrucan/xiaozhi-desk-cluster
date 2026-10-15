@@ -42,8 +42,8 @@ is added. API tokens, device lists and peer keys are not logged.
 
 ARP discovery defaults to every five minutes. The native Settings scan cron
 (`ARPSCAN_RUN_SCHD`) is user-editable and replicated with configuration; it is
-no longer an immutable override. `Scan now` queues only ARPSCAN. Native
-name-lookup scans, private-subnet scans and WireGuard-subnet scans are excluded.
+no longer an immutable override. `Scan now` queues only ARPSCAN. Native mDNS name resolution runs every five minutes, bounded as described below.
+Other name-lookup scans, private-subnet scans and WireGuard-subnet scans are excluded.
 LAN scope, service addresses, enabled scan engines/arguments and resource limits
 are cluster managed. Those controls are explicitly marked and disabled on the
 native Settings page; an attempted change is rejected before the native write
@@ -535,6 +535,56 @@ credential setup helpers, deployment playbook and DHCPLSS wiring have been
 removed from the maintained code. No scheduled modem login is enabled. The local
 ignored credential file is left untouched and is not deployed by the role.
 
-Reverse DNS probes to the modem returned NXDOMAIN. mDNS/NetBIOS remain possible
-partial sources for devices that publish names, but neither has been enabled
-as a replacement. Manual device names remain supported by native NetAlertX.
+Reverse DNS probes to the modem returned NXDOMAIN. mDNS is now the bounded replacement described below; NetBIOS stays disabled.
+Manual device names remain supported by native NetAlertX.
+
+## Bounded mDNS hostname discovery
+
+The Network owner runs `AVAHISCAN` every five minutes through the native plugin
+scheduler, using `files/mdns.py` instead of the pinned resolver's system-DNS
+lookup. There is no additional daemon, modem login, NetBIOS scan or dependency
+installation: dnspython 2.8.0 is already in the pinned image. Standby nodes do not
+run the native container or resolver.
+
+Only present, non-archived IPv4 LAN devices with unknown names are eligible.
+USER/LOCKED names are excluded. Each run selects at most 32 devices; one UDP socket
+bound to wlan0 sends multicast and direct mDNS PTR queries, then checks matching
+A answers from the same target before publishing one unambiguous `.local` host
+name. DNS compression and RDATA use dnspython; mDNS cache-flush class bits are
+normalized before decoding. Query IDs, reply source/port, TTL and LAN/MAC identity
+are checked; native name matching by IP alone is disabled to avoid DHCP reuse; identity and manual-name eligibility are checked again after lookup.
+
+Two receive windows total at most five seconds, with a 256-packet limit.
+The native plugin timeout is ten seconds, and the existing 0.5 CPU/512 MiB
+container limits are unchanged. Failed lookups are cached for ten minutes;
+positive entries expire at the shortest PTR/A TTL, capped at ten minutes. Cache
+is RAM-only, keyed by MAC plus IP, and disappears on owner restart/failover.
+There is no persistent retry queue. Device names use native AVAHISCAN result
+objects and SET_EMPTY authority; names are included in ordinary certified HA
+checkpoints. Lookup results never create devices or mark them online.
+
+The earlier no-auth probe identified zerow.local at .115, with matching forward
+address. Coverage is partial: devices that do not advertise mDNS can keep a
+manual name. The earlier authenticated DHCP collector remains removed.
+
+For an existing installation, deploy the resolver with
+`ansible-playbook -i inventory.ini network-mdns.yml`. This stages all replicas,
+refreshes cold standby voters one at a time, refreshes the original owner last,
+and waits for one native-ready owner. Only Network is restarted; its UI can
+briefly show the recovery page during promotion/bootstrap. Full `network.yml`
+installations include the same adapter and policy.
+
+Offline resolver tests use dnspython from `roles/desk_network/tests/requirements.txt`
+(the same version already bundled in the production image). They use packet
+fixtures and temporary SQLite files; they do not contact LAN devices or the modem.
+
+Live verification (2026-10-15): all three replicas applied the final policy,
+with deskb1x active and the other two cold standby. Native inventory learned
+`zerow` at .115 and `eWeLink_10025890d7` at .5 with AVAHISCAN provenance. A
+subsequent HA-proxied native run returned `synced`; all replicas agreed on the
+same certified checkpoint with three receipts. All seven existing UI/health
+route checks returned HTTP 200. Protected service/VIP guards passed on all nodes.
+A measured lookup body took 5.147 s wall / 0.0953 s CPU (excluding Python/module
+startup). The entire native container, not just mDNS, was ~141.7 MiB current /
+204.8 MiB peak with zero OOM/oom_kill events, under the unchanged 512 MiB and
+0.5 CPU limits. This is bounded rollout verification, not a long-term soak test.

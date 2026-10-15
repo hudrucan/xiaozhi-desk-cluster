@@ -27,3 +27,10 @@ MIT, Zend-2.0. Packages/binaries are downloaded to nodes, not vendored here.
 The image, PHP ABI, module version, architecture and hashes must be reviewed
 together when upgrading. OPcache uses 32 MiB shared RAM, JIT and disk cache are
 disabled, and source timestamps are checked on every request.
+
+## mDNS name resolver
+
+`files/mdns.py` supplies bounded PTR/A mDNS queries through the native AVAHISCAN
+CMD override and Plugin_Objects format. It uses dnspython already in the image,
+without modifying upstream plugin code or installing a daemon. Native name
+resolution and USER/LOCKED field-authority rules remain responsible for updates.

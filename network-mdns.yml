@@ -1,0 +1,106 @@
+---
+- name: Prepare bounded mDNS on all replicas without changing the current owner
+  hosts: deskboxes
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  tasks:
+    - name: Require the full existing Network cluster
+      ansible.builtin.assert:
+        that:
+          - ansible_play_hosts_all | sort == ['deskb1x', 'deskb2x', 'deskb3x']
+    - name: Read current Network placement
+      ansible.builtin.uri:
+        url: 'http://{{ cluster_ip }}:20213/network/desk/status'
+        use_proxy: false
+        timeout: 3
+      register: mdns_before
+    - name: Require exactly one synced active owner and no warming replica
+      ansible.builtin.assert:
+        that:
+          - "[hostvars['deskb1x'].mdns_before.json.state, hostvars['deskb2x'].mdns_before.json.state, hostvars['deskb3x'].mdns_before.json.state] | select('equalto', 'active') | list | length == 1"
+          - mdns_before.json.state in ['active', 'standby']
+          - mdns_before.json.sync == 'synced'
+          - mdns_before.json.voter_ready | bool
+    - name: Remember owner-last update groups
+      ansible.builtin.group_by:
+        key: "network_mdns_{{ 'owner' if mdns_before.json.state == 'active' else 'standby' }}"
+      changed_when: false
+    - name: Freeze protected services and VIP configuration
+      ansible.builtin.command:
+        argv: [python3, '-c', "{{ lookup('file',playbook_dir+'/roles/desk_ui/files/ui_guard.py') }}", freeze]
+      register: mdns_protected
+      changed_when: false
+      no_log: true
+    - name: Install mDNS adapter and updated container mount
+      ansible.builtin.copy:
+        src: 'roles/desk_network/files/{{ item }}'
+        dest: '/usr/local/libexec/desk-network/{{ item }}'
+        mode: '0755'
+        validate: /usr/bin/python3 -c "import ast,sys; ast.parse(open(sys.argv[1]).read())" %s
+      loop: [mdns.py, ha.py]
+      register: mdns_helpers
+    - name: Install the native mDNS naming policy
+      ansible.builtin.copy:
+        src: roles/desk_network/files/policy.json
+        dest: /etc/desk-network/policy.json
+        mode: '0644'
+      register: mdns_policy
+    - name: Record whether this replica needs refreshing
+      ansible.builtin.set_fact:
+        mdns_restart: '{{ mdns_helpers.changed or mdns_policy.changed }}'
+
+- name: Refresh cold standbys first
+  hosts: network_mdns_standby
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  serial: 1
+  tasks:
+    - name: Refresh changed Network standby only
+      ansible.builtin.systemd_service:
+        name: desk-network
+        state: restarted
+      when: mdns_restart | bool
+    - name: Wait until this replica can vote again
+      ansible.builtin.uri:
+        url: 'http://{{ cluster_ip }}:20213/network/desk/status'
+        use_proxy: false
+        timeout: 3
+      register: mdns_voter
+      until: mdns_voter.json.voter_ready | default(false)
+      retries: 15
+      delay: 2
+      changed_when: false
+
+- name: Refresh original Network owner after both voters are ready
+  hosts: network_mdns_owner
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  tasks:
+    - name: Refresh changed Network owner only
+      ansible.builtin.systemd_service:
+        name: desk-network
+        state: restarted
+      when: mdns_restart | bool
+    - name: Wait for one native-ready Network owner
+      ansible.builtin.command:
+        argv: [python3, /usr/local/libexec/desk-network/verify_ready.py]
+      register: mdns_ready
+      until: mdns_ready.rc == 0
+      retries: 70
+      delay: 3
+      changed_when: false
+
+- name: Verify protected services remain unchanged
+  hosts: deskboxes
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  tasks:
+    - name: Recheck services, DNS policy and VIP configuration
+      ansible.builtin.command:
+        argv: [python3, '-c', "{{ lookup('file',playbook_dir+'/roles/desk_ui/files/ui_guard.py') }}", guard]
+        stdin: '{{ mdns_protected.stdout }}'
+      changed_when: false

@@ -108,13 +108,13 @@ def snapshot_worker(action,*,data=None,run=None,blob=None):
  return result.stdout
 POLICY={
  'SCAN_SUBNETS':['192.168.1.0/24 --interface=wlan0'], 'TIMEZONE':'Asia/Ho_Chi_Minh',
- 'BACKEND_API_URL':'/network/server', 'LOADED_PLUGINS':['ARPSCAN','UI','CUSTPROP','DBCLNP','INTRNT','MAINT','NEWDEV','SETPWD','SYNC','VNDRPDT','WORKFLOWS'],
+ 'BACKEND_API_URL':'/network/server', 'LOADED_PLUGINS':['ARPSCAN','AVAHISCAN','UI','CUSTPROP','DBCLNP','INTRNT','MAINT','NEWDEV','SETPWD','SYNC','VNDRPDT','WORKFLOWS'],
  'ARPSCAN_RUN':'schedule','ARPSCAN_ARGS':'sudo arp-scan --ignoredups --retry=3',
- 'NSLOOKUP_RUN':'disabled','AVAHISCAN_RUN':'disabled','NBTSCAN_RUN':'disabled','DIGSCAN_RUN':'disabled',
+ 'NSLOOKUP_RUN':'disabled','AVAHISCAN_RUN':'schedule','AVAHISCAN_RUN_SCHD':'*/5 * * * *','AVAHISCAN_CMD':'python3 /app/desk_network/mdns.py','AVAHISCAN_RUN_TIMEOUT':10,'AVAHISCAN_SET_ALWAYS':[],'AVAHISCAN_SET_EMPTY':['devName','devFQDN'],'AVAHISCAN_WATCH':['watchedValue2'],'AVAHISCAN_REPORT_ON':[],'NBTSCAN_RUN':'disabled','DIGSCAN_RUN':'disabled',
  'INTRNT_RUN':'disabled','SYNC_RUN':'disabled','VNDRPDT_RUN':'disabled','WORKFLOWS_RUN':'disabled',
  'MAINT_RUN':'schedule','MAINT_RUN_SCHD':'17 3 * * *','MAINT_PERF_DAYS':0,'DBCLNP_RUN':'schedule','DBCLNP_RUN_SCHD':'37 3 * * *',
  'DAYS_TO_KEEP_EVENTS':14,'DEV_HIST_DAYS':7,'LOG_LEVEL':'minimal','SETPWD_enable_password':False,'DEEP_SLEEP':False,
- 'REPORT_DASHBOARD_URL':'http://192.168.1.186/network'}
+ 'NEWDEV_IP_MATCH_NAME':False, 'REPORT_DASHBOARD_URL':'http://192.168.1.186/network'}
 def scan_schedule(conf):
  # Parse one literal assignment only; never execute the native Python config.
  matches=re.findall(r'^ARPSCAN_RUN_SCHD[ \t]*=(.*)$',conf.decode(),flags=re.M)
@@ -270,6 +270,7 @@ class Cluster:
    if self.running or clock()>=self.until:return
    restore(self.store.blob(self.store.head['digest']),self.root/'data',self.run,self.c['api_token'])
    cmd=['podman','run','-d','--replace','--name',NAME,'--network=host','--read-only','--cpus=0.5','--cpu-shares=128','--memory=512m','--pids-limit=256','--log-driver=k8s-file','--log-opt=max-size=5mb','--cap-drop=ALL','--tmpfs','/tmp:rw,noexec,nosuid,nodev,mode=1700,size=256m','-v',str(self.root/'data')+':/data:rw','-v','/usr/local/libexec/desk-network/api-loopback.py:/app/server/api_server/api_server_start.py:ro','-v','/etc/desk-network/policy.json:/data/config/app_conf_override.json:ro','-v','/usr/local/libexec/desk-network/override-policy.sh:/entrypoint.d/35-apply-conf-override.sh:ro','-v','/usr/local/libexec/desk-network/lang-cached.php:/app/front/php/templates/language/lang.php:ro','-v','/usr/local/libexec/desk-network/opcache.so:/usr/lib/php83/modules/opcache.so:ro','-v','/usr/local/libexec/desk-network/opcache.ini:/etc/php83/conf.d/10_desk_opcache.ini:ro','-e','LISTEN_ADDR='+self.members[self.node],'-e','PORT=20211','-e','GRAPHQL_PORT=20212']
+   cmd+=['-v','/usr/local/libexec/desk-network/mdns.py:/app/desk_network/mdns.py:ro']
    for cap in ('NET_ADMIN','NET_RAW','NET_BIND_SERVICE','CHOWN','SETUID','SETGID'):cmd+=['--cap-add='+cap]
    cmd.append(IMAGE);self.running=True;self.ready=False;self.container_started=clock()
    try:

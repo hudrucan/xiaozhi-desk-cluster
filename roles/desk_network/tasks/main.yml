@@ -53,7 +53,7 @@
     dest: '/usr/local/libexec/desk-network/{{ item }}'
     mode: '0755'
     validate: /usr/bin/python3 -c "import ast,sys; ast.parse(open(sys.argv[1]).read())" %s
-  loop: [ha.py, seed.py, api-loopback.py, verify_ready.py]
+  loop: [ha.py, seed.py, api-loopback.py, verify_ready.py, mdns.py]
   register: network_helpers
 - name: Install explicit managed-setting labels and read-only UI controls
   ansible.builtin.copy:

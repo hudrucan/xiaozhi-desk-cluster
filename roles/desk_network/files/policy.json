@@ -6,6 +6,7 @@
   "BACKEND_API_URL": "/network/server",
   "LOADED_PLUGINS": [
     "ARPSCAN",
+    "AVAHISCAN",
     "UI",
     "CUSTPROP",
     "DBCLNP",
@@ -20,7 +21,7 @@
   "ARPSCAN_RUN": "schedule",
   "ARPSCAN_ARGS": "sudo arp-scan --ignoredups --retry=3",
   "NSLOOKUP_RUN": "disabled",
-  "AVAHISCAN_RUN": "disabled",
+  "AVAHISCAN_RUN": "schedule",
   "NBTSCAN_RUN": "disabled",
   "DIGSCAN_RUN": "disabled",
   "INTRNT_RUN": "disabled",
@@ -37,5 +38,18 @@
   "LOG_LEVEL": "minimal",
   "SETPWD_enable_password": false,
   "DEEP_SLEEP": false,
-  "REPORT_DASHBOARD_URL": "http://192.168.1.186/network"
+  "REPORT_DASHBOARD_URL": "http://192.168.1.186/network",
+  "AVAHISCAN_RUN_SCHD": "*/5 * * * *",
+  "AVAHISCAN_CMD": "python3 /app/desk_network/mdns.py",
+  "AVAHISCAN_RUN_TIMEOUT": 10,
+  "AVAHISCAN_SET_ALWAYS": [],
+  "AVAHISCAN_SET_EMPTY": [
+    "devName",
+    "devFQDN"
+  ],
+  "AVAHISCAN_WATCH": [
+    "watchedValue2"
+  ],
+  "AVAHISCAN_REPORT_ON": [],
+  "NEWDEV_IP_MATCH_NAME": false
 }
