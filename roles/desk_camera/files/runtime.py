@@ -32,9 +32,15 @@ class Worker:
   except Exception:return None
  def kill(self):
   try:
+   v=json.loads((self.run_dir/'playback-process.json').read_bytes());pid=v['pid'];start=v['start']
+   if pathlib.Path('/proc',str(pid),'stat').read_text().split(') ',1)[1].split()[19]==start:os.kill(pid,signal.SIGKILL)
+  except (FileNotFoundError,ProcessLookupError,KeyError,ValueError):pass
+  try:
    v=json.loads((self.run_dir/'process.json').read_bytes());pid=v['pid'];start=v['start']
    if pathlib.Path('/proc',str(pid),'stat').read_text().split(') ',1)[1].split()[19]==start:os.kill(pid,signal.SIGKILL)
   except (FileNotFoundError,ProcessLookupError,KeyError,ValueError):pass
+  try:command('podman','kill','desk-camera-playback-'+self.c['workload'],timeout=2)
+  except subprocess.TimeoutExpired:pass
   command('podman','kill',self.name)
  def run(self,stopping):
   c=self.c

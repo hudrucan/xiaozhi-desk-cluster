@@ -546,6 +546,19 @@ class Control:
                 except Failure: pass
         return {'resumed':True}
 
+    def camera_drained(self):
+        """A camera relay must have a ready successor before maintenance is ready."""
+        if not Path('/etc/desk-camera/config.json').is_file(): return True
+        try:
+            local = self.members[self.node]['private']
+            value = self.get(f'http://{local}:20226/status')
+            cameras = value['cameras']
+            return (value.get('node') == self.node and 0 <= time.time()-value['observed_at'] < 10
+                    and len(cameras) == 3 and all(c.get('local_ready') is False
+                    and c.get('ready') is True and c.get('owner') in self.members
+                    and c['owner'] != self.node and c.get('playback_active', False) is False for c in cameras))
+        except (OSError, ValueError, KeyError, TypeError): return False
+
     def homeassistant_drained(self, views):
         """Do not reboot before a clean Core handoff and matching survivor checkpoints."""
         statuses = {node: view.get('metadata', {}).get('homeassistant') for node, view in views.items()}
@@ -589,7 +602,7 @@ class Control:
                 elif dns_withdrawn_at is None:
                     dns_withdrawn_at = time.monotonic()
                 dns_quiet = dns_withdrawn_at is not None and time.monotonic()-dns_withdrawn_at >= DNS_QUIET_SECONDS
-                if (dns_quiet and self.homeassistant_drained(views) and local.get('ready') and meta.get('maintenance_supported') is True
+                if (dns_quiet and self.homeassistant_drained(views) and self.camera_drained() and local.get('ready') and meta.get('maintenance_supported') is True
                         and all(paused.get(k) is True for k in ('worker', 'core', 'mqtt'))
                         and len(counts) >= 7 and all(type(n) is int and n == 0 for n in counts)):
                     break

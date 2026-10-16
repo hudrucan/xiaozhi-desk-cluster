@@ -78,6 +78,16 @@ class Control(unittest.IsolatedAsyncioTestCase):
    worker.assert_not_called()
   a.ready=False
   with self.assertRaises(ValueError):await a.checkpoint()
+ async def test_failed_handoff_keeps_local_owner_and_restarts_without_cold_restore(self):
+  a=object.__new__(agent.Agent);a.owned=lambda:True;a.ui_busy=lambda:False;a.phase='active';a.ready=True;a.exclusive=__import__('threading').Lock();a.permit=Mock();a.term=[9,'owner'];a.until=12345
+  calls=[]
+  def command(*args,**kwargs):
+   calls.append(args)
+   if 'stop' in args:raise RuntimeError('clean stop failed')
+  with patch.object(agent,'shell',side_effect=command),patch.object(agent,'worker') as worker:
+   with self.assertRaises(RuntimeError):await a.checkpoint(handoff=True)
+  self.assertEqual(a.term,[9,'owner']);self.assertEqual(a.until,12345);self.assertEqual(a.phase,'starting');worker.assert_not_called()
+  self.assertIn(('systemctl','start','desk-homeassistant-core'),calls);a.permit.assert_called_once_with()
  async def test_old_accepted_revision_cannot_rollback_a_newer_certified_head(self):
   a=object.__new__(agent.Agent);a.journal=Mock();a.journal.state={'revision':3};a.propose=AsyncMock()
   heads={'a':{'journal':{'revision':1,'accepted':{'ballot':[100,'a'],'value':{'digest':'old'}}}},'b':{'journal':{'revision':3,'accepted':None}}}

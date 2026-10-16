@@ -66,6 +66,15 @@ class OnlineSync:
    if len(line)>2048:raise ValueError('Request too large')
    v=json.loads(line)
    if v=={'action':'status'}:result=self.ui_status()
+   elif v=={'action':'cameras'}:
+    from camera_api import status
+    result=await asyncio.to_thread(status)
+   elif v.get('action') in ('camera_prepare','camera_status') and set(v)=={'action','value'}:
+    from camera_api import playback
+    result=await playback('prepare' if v['action']=='camera_prepare' else 'status',v['value'])
+   elif v.get('action')=='camera_artifact' and set(v)=={'action','value'}:
+    from camera_api import artifact
+    result=artifact(v['value'])
    elif v=={'action':'begin'}:result=self.ui_begin()
    elif set(v)=={'action','ticket','filename','backup_id'} and v['action']=='import':
     result=await self.ui_import(v['ticket'],v['filename'],v['backup_id'])

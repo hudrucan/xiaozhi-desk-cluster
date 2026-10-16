@@ -2,7 +2,9 @@
 import asyncio,json,logging,pathlib
 import probatio
 from aiohttp import web
-from homeassistant.components import backup,panel_custom,websocket_api
+from homeassistant.components import backup,panel_custom,websocket_api,persistent_notification,frontend
+from homeassistant.const import EVENT_HOMEASSISTANT_STOP
+from .reminder import PendingReminder
 from homeassistant.components.http import HomeAssistantView,StaticPathConfig
 
 _LOGGER=logging.getLogger(__name__)
@@ -95,6 +97,35 @@ async def sync_command(hass,connection,msg):
   connection.send_result(msg['id'],{'accepted':True})
  except Exception:connection.send_error(msg['id'],'sync_unavailable','Sync unavailable. Check that Core and the cluster are ready.')
 
+@websocket_api.websocket_command({probatio.Required('type'):'desk_cluster/cameras'})
+@websocket_api.async_response
+async def cameras_command(hass,connection,msg):
+ try:connection.send_result(msg['id'],await bridge('cameras'))
+ except Exception:connection.send_error(msg['id'],'camera_unavailable','Camera placement unavailable; retry shortly.')
+
+@websocket_api.websocket_command({probatio.Required('type'):'desk_cluster/camera_storage'})
+@websocket_api.async_response
+async def camera_storage_command(hass,connection,msg):
+ from .camera_storage import camera_storage
+ connection.send_result(msg['id'],camera_storage(hass))
+
+async def pending_reminders(hass):
+ reminder=PendingReminder()
+ while True:
+  try:
+   value=await bridge('status');action=reminder.observe(value)
+   if action=='notify':
+    revision=value.get('checkpoint_revision')
+    persistent_notification.async_create(hass,
+     'Changes are saved on the active Core, but have not been synced to the recovery copy. '
+     f'If that node fails, recovery uses revision r{revision}. '
+     '[Open Cluster to sync config](/desk-cluster).',
+     title='Configuration changes not synced',notification_id='desk_cluster_sync_pending')
+   elif action=='dismiss':persistent_notification.async_dismiss(hass,'desk_cluster_sync_pending')
+  except asyncio.CancelledError:raise
+  except Exception:pass  # Keep an existing warning when the bridge is temporarily unavailable.
+  await asyncio.sleep(5)
+
 async def async_setup(hass,config):
  # Pinned native backup has a module-level exclusion list. Add only this
  # deployment's disposable playback cache, keeping upstream files unchanged.
@@ -102,11 +133,20 @@ async def async_setup(hass,config):
  for pattern in ('www/tapo_control','www/tapo_control/**'):
   if pattern not in EXCLUDE_FROM_BACKUP:EXCLUDE_FROM_BACKUP.append(pattern)
  hass.data[DOMAIN]={'task':None,'stage':'idle','error':None}
+ task=hass.async_create_background_task(pending_reminders(hass),'desk_cluster_pending_reminder')
+ hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP,lambda _:task.cancel())
+ from .camera_recordings import install as install_recordings
+ install_recordings(hass)
+ from .recording_view import RecordingView
+ hass.http.register_view(RecordingView(hass))
  hass.http.register_view(Readiness(hass))
- await hass.http.async_register_static_paths([StaticPathConfig('/desk-cluster-assets/panel.js',str(pathlib.Path(__file__).parent/'panel.js'),False)])
+ await hass.http.async_register_static_paths([StaticPathConfig('/desk-cluster-assets/'+name,str(pathlib.Path(__file__).parent/name),False) for name in ('panel.js','camera-card.js')])
+ frontend.add_extra_js_url(hass,'/desk-cluster-assets/camera-card.js?v=1.1.0')
+ websocket_api.async_register_command(hass,cameras_command)
+ websocket_api.async_register_command(hass,camera_storage_command)
  websocket_api.async_register_command(hass,status_command)
  websocket_api.async_register_command(hass,sync_command)
  await panel_custom.async_register_panel(hass,frontend_url_path='desk-cluster',
   webcomponent_name='desk-cluster-panel',sidebar_title='Cluster',sidebar_icon='mdi:server-network',
-  module_url='/desk-cluster-assets/panel.js?v=1.1.0',require_admin=True)
+  module_url='/desk-cluster-assets/panel.js?v=1.2.0',require_admin=True)
  return True

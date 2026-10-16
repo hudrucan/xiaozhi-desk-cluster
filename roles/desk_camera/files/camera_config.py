@@ -20,7 +20,7 @@ def configure(root):
    elif p.is_file():atomic(dest,p.read_bytes())
  marker=root/'.storage/desk_camera_migration'
  if marker.exists():
-  add_cameras(root);return
+  add_cameras(root);upgrade_cards(root);return
  migration=json.loads(MIGRATION.read_bytes())
  if migration.get('version')!=1:raise ValueError('Unknown camera migration')
  path=root/'.storage/core.config_entries';entries=json.loads(path.read_bytes());existing=entries['data']['entries']
@@ -63,7 +63,7 @@ def configure(root):
  dashboard={'version':1,'minor_version':1,'key':'lovelace.desk_cameras','data':{'config':{'title':'Cameras','views':[{'title':'Cameras','path':'cameras','icon':'mdi:cctv','cards':[{'type':'custom:webrtc-camera','title':'Bed Cam','ui':True,'mode':'webrtc,mse','streams':[{'url':'bed_hd','name':'HD'},{'url':'bed_sd','name':'SD'}]},{'type':'button','name':'Recordings','icon':'mdi:play-box-multiple','tap_action':{'action':'navigate','navigation_path':'/media-browser'}}]}]}}}
  atomic(dashpath,encoded(dash));atomic(root/'.storage/lovelace.desk_cameras',encoded(dashboard))
  atomic(marker,encoded({'version':1,'retired_entries':len(old),'installed_entries':sorted(new_ids)}))
- add_cameras(root)
+ add_cameras(root);upgrade_cards(root)
 ADDITIONS=pathlib.Path('/etc/desk-camera/core-additions.json')
 def add_cameras(root):
  """Apply validated native entries only while the Core runtime is stopped."""
@@ -103,3 +103,29 @@ def add_cameras(root):
   if not dest.exists():dest.parent.mkdir(parents=True,exist_ok=True,mode=0o700);atomic(dest,p.read_bytes())
  for p,data in writes.items():atomic(p,data)
  atomic(marker,encoded({'version':2,'sha256':digest,'installed_entries':sorted(new_ids)}))
+
+
+def upgrade_cards(root):
+ marker=root/'.storage/desk_camera_ui_v4'
+ if marker.exists():return
+ path=root/'.storage/lovelace.desk_cameras'
+ if not path.is_file():return
+ doc=json.loads(path.read_bytes());changed=0
+ def visit(value):
+  nonlocal changed
+  if isinstance(value,dict):
+   aliases={'bed_hd','bed_sd','cam161_hd','cam161_sd','cam163_hd','cam163_sd'}
+   streams=value.get('streams')
+   if value.get('type')=='custom:webrtc-camera' and isinstance(streams,list) and streams and all(s.get('url') in aliases for s in streams):
+    value['type']='custom:desk-camera-card';changed+=1
+   if value.get('type')=='button' and value.get('name')=='Recordings' and value.get('tap_action',{}).get('navigation_path') in ('/media-browser','/media-browser/browser/app%2Cmedia-source%3A%2F%2Fdesk_cluster'):
+    value['tap_action']['navigation_path']='/media-browser/browser/app%2Cmedia-source%3A%2F%2Ftapo_control';changed+=1
+   for child in value.values():visit(child)
+  elif isinstance(value,list):
+   for child in value:visit(child)
+ visit(doc)
+ if changed:
+  backup=BACKUP/'ui-v3';backup.mkdir(parents=True,exist_ok=True,mode=0o700)
+  if not (backup/path.name).exists():atomic(backup/path.name,path.read_bytes())
+  atomic(path,encoded(doc))
+ atomic(marker,encoded({'version':4,'cards':changed}))

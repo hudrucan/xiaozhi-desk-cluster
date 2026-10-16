@@ -192,3 +192,85 @@ power-cut test was performed. Sixteen focused offline tests and the real
 inventory playbook syntax check passed. Existing user Core changes remain
 pending for the user's manual sync; the optimization does not alter or sync
 Core configuration.
+
+
+### Camera experience and worker enhancements — 2026-10-16
+
+The owned `desk-camera-card` wraps the pinned, unmodified WebRTC Camera card.
+A visible, playing stream that makes no progress for 20 seconds is remounted,
+with bounded retry backoff and its selected HD/SD stream retained. Hidden cards,
+intentional pauses and a disconnected Core are respected. The native Tapo button
+entities supply four PTZ controls. Toolbar targets are 36 px with 8 px spacing;
+Recordings is a compact text link. User card order and layout are preserved.
+
+Card storage status and the existing **Tapo: Recordings** camera folders read
+Tapo Control's existing `camData.sdCardData`, without another camera login or
+polling loop. All three cameras use the same logic, including Makeup: `normal`
+shows Recordings; `offline` hides the folder and shows Live only; formatting or
+an unusable card requests attention in Tapo. Failed, missing or unrecognized
+metadata is unknown, not proof of an absent card. Native polling is 30 seconds;
+the cards share a cached, authenticated status request every ten seconds. Media
+folders reflect the latest result when the user reopens/refetches the list.
+Insertion/removal does not remount a live stream or alter the recording plan.
+The user must initialize a new card in Tapo when needed; no auto-format exists.
+Offline tests cover insertion, removal, unknown metadata and unchanged video
+instances. Physical insertion/removal has not been tested by the agent.
+
+Camera eligibility uses cached TCP reachability plus existing admission/memory
+telemetry. CPU is smoothed; low available memory adds a placement penalty, and
+another active local relay adds a slot penalty. Healthy ownership stays sticky;
+there is no continuous load-driven reshuffle. A global camera drain and the
+existing node maintenance admission withdraw all local camera workloads. The
+existing node-control drain waits for ready successors and no active playback
+job before releasing the node. Native HA Cluster shows placement, reachability
+and observed owner changes. No new ownership, consensus or NATS service exists.
+
+The single native `tapo_control` media URI keeps its upstream folder browser.
+An owned factory adapter, applied before HA's lazy media-platform loading,
+replaces only clip resolution with lease-routed workers. Vendor files remain
+unchanged; no duplicate Camera recordings source is registered. This adapter
+is coupled to pinned Tapo Control 7.2.8 and must be reviewed on upgrade.
+An already-cached clip is reused on any worker; otherwise the current relay
+owner runs the pinned native pytapo downloader/remuxer in an isolated bounded
+job. NATS carries metadata, not video. Core streams an authenticated, signed
+same-origin URL in bounded chunks with byte ranges; it does not remux or keep
+the full clip in RAM. A pending player waits for preparation; notifications
+change at start/completion/failure rather than flashing on each second.
+Preparation can be close to clip duration, so long uncached clips are not
+instant playback. Jobs are bounded to 30 minutes and 256 MiB, one per node,
+with memory admission and cancellation/fencing when ownership changes.
+
+Disposable clips use local eMMC under `/var/lib/desk-camera/playback`; legacy
+Tapo hot/cold caches are also bounded by the owned collector. Cleanup checks
+every five minutes, expires files after one hour without access and evicts
+oldest files above 1 GiB per node. In-flight jobs are protected. Reused legacy
+files are hard-linked rather than copied. Native backup/checkpoint excludes
+these caches. Cleanup never deletes recordings from a camera's microSD card.
+
+Unsynced disk configuration triggers one native persistent HA notification as
+soon as existing fingerprint detection reports it (the disk scan remains
+30 seconds, with a five-second reminder check). It is cleared after successful
+sync, and user dismissal is respected until another clean-to-dirty transition.
+Code deployment also changes the fingerprint; this does not imply the user
+changed a setting. Clean checkpoints now load the component installer in a
+fresh process. A failed handoff checkpoint retains the local generation and
+restarts it while still owning the lease instead of releasing it for an older
+cold restore. Offline regression tests cover that failure path.
+
+
+Final enhancement verification: Core is active on deskb1x with r27 replicated
+3/3 and no pending disk changes. Relay placement is Bed → deskb2x, Makeup →
+deskb1x, Guess → deskb3x. A reversible Guess transfer reached a ready successor
+in 16.76 seconds, with the signaling route returning HTTP 200; other camera
+owners and the Core PID stayed unchanged, and the drain marker was removed.
+All three browser videos decoded at readyState 4 before this test. The browser
+tab closed before an existing-viewer recovery observation, so automatic live
+recovery is covered by offline watchdog checks, not claimed as a measured
+end-to-end result. Full node maintenance and the final native-source playback
+adapter have not received another end-to-end live test in this batch.
+
+Cluster now uses HA's native responsive `ha-menu-button` and the standard
+56 px header (matching the measured History header), rather than a permanent
+custom hamburger and a 64 px header. This static change requires a page reload,
+not a Core restart. Focused tests and sampled measurements are recorded in
+CAMERA_ENHANCEMENTS_VALIDATION.json. No sampled cgroup reported an OOM kill.

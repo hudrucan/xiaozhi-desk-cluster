@@ -24,7 +24,7 @@
     src: '{{ playbook_dir }}/secret/camera/{{ item }}'
     dest: '/etc/desk-camera/{{ item }}'
     mode: '0600'
-  loop: [nats-users.json, proxy.cfg, core-migration.json]
+  loop: [nats-users.json, proxy.cfg, core-migration.json, playback.json]
   no_log: true
   register: camera_private
 - ansible.builtin.copy:
@@ -37,7 +37,7 @@
     src: '{{ item }}'
     dest: '/usr/local/libexec/desk-camera/{{ item }}'
     mode: '0600'
-  loop: [controller.py, transport.py, runtime.py, install_nats.py]
+  loop: [controller.py, transport.py, runtime.py, install_nats.py, health.py, playback.py, playback_worker.py, cache_gc.py]
   register: camera_helpers
 - ansible.builtin.unarchive:
     src: components.tgz

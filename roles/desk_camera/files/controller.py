@@ -1,7 +1,10 @@
 """Camera placement over the existing majority lease; no media in NATS."""
-import asyncio,datetime,http.server,json,logging,math,os,pathlib,secrets,signal,sys,threading,time,urllib.request
+import asyncio,base64,datetime,http.server,json,logging,math,os,pathlib,secrets,signal,sys,threading,time,urllib.request
 sys.path.insert(0,'/usr/local/libexec/desk-homeassistant')
 from transport import SharedRPC,FleetStatus
+from health import CameraHealth
+from cache_gc import cleanup as clean_cache
+from playback import Playback,clip_path
 from lease import Lease,clock
 from config_journal import atomic,encoded
 from protocol import pack,unpack,MAX
@@ -25,12 +28,13 @@ class Telemetry:
 class Controller:
  def __init__(self,c,telemetry=None):
   self.c=c;self.node=c['node'];self.members=c['members'];self.root,self.run_dir=paths(c);self.root.mkdir(parents=True,exist_ok=True,mode=0o700);self.run_dir.mkdir(parents=True,exist_ok=True,mode=0o700);self.lease=Lease(self.root/'vote.json')
-  self.prefix=PREFIX if c['workload']=='tapo_c222_160' else PREFIX+'.'+c['workload'];self.telemetry=telemetry or Telemetry()
+  self.prefix=PREFIX if c['workload']=='tapo_c222_160' else PREFIX+'.'+c['workload'];self.telemetry=telemetry or Telemetry();self.health=CameraHealth();self.owner_seen=None;self.owner_changed_at=None;self.previous_owner=None
   self.until=0;self.term=None;self.generation=None;self.transport=None;self.fleet=None;self.stop=asyncio.Event();self.nonces={};self.heads={};self.local=None;self.local_at=0;self.started_at=0;self.cooldown=0
+  self.playback=Playback(self)
   self.opener=urllib.request.build_opener(urllib.request.ProxyHandler({}))
  def owned(self):return self.term is not None and clock()<self.until
  def eligible(self):
-  return clock()>=self.cooldown and self.node in self.c['enabled_nodes'] and not (self.root/'drain').exists() and self.local is not None and clock()-self.local_at<15 and self.local.get('online') is True and self.local.get('memory_available_mib',0)>=256 and not any(self.local.get('admission',{}).values())
+  return clock()>=self.cooldown and self.node in self.c['enabled_nodes'] and not (self.root/'drain').exists() and not (ROOT/'drain').exists() and self.health.reachable is True and self.local is not None and clock()-self.local_at<15 and self.local.get('online') is True and self.local.get('memory_available_mib',0)>=256 and not any(self.local.get('admission',{}).values())
  def ready(self):
   if not self.owned():return False
   try:
@@ -46,14 +50,17 @@ class Controller:
     v=json.loads(p.read_bytes())
     if v.get('generation') and clock()<v['until']<=clock()+11:slots+=1
    except Exception:pass
-  return (self.local.get('cpu',100) if self.local else 100)+100*slots
+  return (self.health.penalty(self.local) if hasattr(self,'health') else (self.local.get('cpu',100) if self.local else 100))+100*slots
  def status(self):
-  return {'node':self.node,'lease':self.lease.status(),'owned':self.owned(),'eligible':self.eligible(),'score':self.placement_score(),'definition':self.c['definition'],'ready':self.ready()}
+  return {'node':self.node,'lease':self.lease.status(),'owned':self.owned(),'eligible':self.eligible(),'score':self.placement_score(),'definition':self.c['definition'],'ready':self.ready(),'generation':self.generation if self.owned() else None,'reachable':self.health.reachable,'memory_available_mib':self.local.get('memory_available_mib') if self.local else None}
  def public(self):
   owners=[n for n,h in self.heads.items() if h['owned'] and h['definition']==self.c['definition']]
   owner=owners[0] if len(owners)==1 else None
-  return {'node':self.node,'workload':self.c['workload'],'owner':owner,'ready':bool(owner and self.heads[owner]['ready']),'local_ready':self.ready(),'voter_ready':clock()>=self.lease.quarantine,'observed_at':time.time()}
- def refresh(self):self.telemetry.refresh(self)
+  if owner and owner!=self.owner_seen:
+   self.previous_owner=self.owner_seen;self.owner_seen=owner;self.owner_changed_at=time.time()
+  return {'node':self.node,'workload':self.c['workload'],'owner':owner,'ready':bool(owner and self.heads[owner]['ready']),'local_ready':self.ready(),'voter_ready':clock()>=self.lease.quarantine,'observed_at':time.time(),'generation':self.heads[owner].get('generation') if owner else None,'reachable':self.health.reachable,'score':self.placement_score(),'previous_owner':self.previous_owner,'owner_changed_at':self.owner_changed_at,'playback_active':self.playback.active(),'draining':bool((ROOT/'drain').exists() or (self.root/'drain').exists() or (self.local and any(self.local.get('admission',{}).values())))}
+ def refresh(self):
+  self.telemetry.refresh(self);self.health.refresh(self.c,self.local)
  def read_telemetry(self):
   try:
    with self.opener.open('http://'+self.members[self.node]+':8010/local',timeout=1) as r:v=json.loads(r.read(65536))
@@ -64,6 +71,11 @@ class Controller:
   except Exception:pass
  def permit(self):atomic(self.run_dir/'permit.json',encoded({'until':self.until,'generation':self.generation if self.owned() else None}))
  def rpc(self,action,value,sender):
+  if action=='playback_cached':return self.playback.cached(value)
+  if action=='playback_prepare':
+   if self.fleet and any(a is not self and a.playback.active() for a in self.fleet.agents):raise ValueError('Another camera is preparing a clip on this node')
+   return self.playback.prepare(value)
+  if action=='playback_status':return self.playback.status(value['id'])
   if action=='status':return self.status()
   if action=='fleet_status' and self.prefix==PREFIX and self.fleet:return self.fleet.local()
   if action!='lease' or value.get('definition')!=self.c['definition']:raise ValueError()
@@ -115,9 +127,31 @@ class Controller:
     except TimeoutError:pass
   finally:self.until=0;self.permit()
 
+async def local_client(reader,writer,agents):
+ try:
+  raw=await asyncio.wait_for(reader.readline(),2)
+  if len(raw)>2048:raise ValueError()
+  value=json.loads(raw);agent=next(a for a in agents if a.c['workload']==value['workload'])
+  action=value['action']
+  if action=='prepare':
+   caches=await agent.fanout('playback_cached',value['clip']);cached=next((v for v in caches.values() if v.get('state')=='ready'),None)
+   heads=await agent.fanout('status');owners=[n for n,h in heads.items() if h.get('owned') and h.get('ready')]
+   if cached:result=cached
+   else:
+    if len(owners)!=1:raise ValueError('No ready camera owner')
+    result=await agent.call(owners[0],'playback_prepare',value['clip'])
+  elif action=='status' and value['node'] in agent.members:result=await agent.call(value['node'],'playback_status',{'id':value['id']})
+  else:raise ValueError()
+  out={'ok':True,'value':result}
+ except Exception:out={'ok':False,'error':'Camera worker unavailable or busy. Retry when ready.'}
+ try:writer.write(encoded(out)+b'\n');await writer.drain()
+ finally:writer.close();await writer.wait_closed()
+
 class Handler(http.server.BaseHTTPRequestHandler):
  def log_message(self,*a):pass
  def do_GET(self):
+  if self.path.startswith('/artifact/'):
+   return self.artifact()
   agents=self.server.agents;a=agents[0];status=200;body=b'{}'
   selected=next((x for x in agents if self.path=='/ready/'+x.c['workload']),None)
   if self.client_address[0] not in set(a.members.values())|{'127.0.0.1'}:status=403
@@ -128,6 +162,41 @@ class Handler(http.server.BaseHTTPRequestHandler):
   self.send_response(status);self.send_header('Content-Type','application/json');self.send_header('Content-Length',str(len(body)));self.send_header('Connection','close');self.end_headers()
   try:self.wfile.write(body)
   except (BrokenPipeError,ConnectionResetError):pass
+ def artifact(self):
+  try:
+   a=self.server.agents[0]
+   if self.client_address[0] not in set(a.members.values())|{'127.0.0.1'}:raise ValueError()
+   parts=self.path.split('/')
+   if len(parts)!=4:raise ValueError()
+   workload,ident=parts[2:];p=clip_path(workload,ident)
+   token=self.headers.get('X-Desk-Artifact','')
+   if len(token)>4096:raise ValueError()
+   v=unpack(base64.b64decode(token,validate=True),a.c['key'])
+   if v.get('recipient')!=a.node or v.get('action')!='artifact' or v.get('value')!={'workload':workload,'id':ident}:raise ValueError()
+   if not p.is_file() or p.is_symlink() or not 1024<p.stat().st_size<=256*1024*1024:raise ValueError()
+   p.touch();size=p.stat().st_size;start=0;end=size-1;code=200
+   requested=self.headers.get('Range')
+   if requested:
+    match=__import__('re').fullmatch(r'bytes=(\d*)-(\d*)',requested)
+    if not match or not any(match.groups()):raise ValueError()
+    left,right=match.groups()
+    if left:start=int(left);end=min(int(right),end) if right else end
+    else:start=max(0,size-int(right))
+    if not 0<=start<=end<size:raise ValueError()
+    code=206
+   self.send_response(code);self.send_header('Content-Type','video/mp4');self.send_header('Accept-Ranges','bytes');self.send_header('Content-Length',str(end-start+1))
+   if code==206:self.send_header('Content-Range',f'bytes {start}-{end}/{size}')
+   self.send_header('Connection','close');self.end_headers()
+   with p.open('rb') as stream:
+    stream.seek(start);remaining=end-start+1
+    while remaining:
+     chunk=stream.read(min(65536,remaining))
+     if not chunk:break
+     self.wfile.write(chunk);remaining-=len(chunk)
+  except (BrokenPipeError,ConnectionResetError):pass
+  except Exception:
+   self.send_error(404,'Recording unavailable')
+
 
 if __name__=='__main__':
  async def main():
@@ -135,14 +204,28 @@ if __name__=='__main__':
   agents=[Controller(dict(config,**camera),telemetry) for camera in config.get('cameras',[{}])]
   transport=SharedRPC(agents);fleet=FleetStatus(agents,transport)
   for a in agents:a.transport=transport;a.fleet=fleet
-  server=http.server.HTTPServer((agents[0].members[agents[0].node],20226),Handler);server.agents=agents;server.fleet=fleet;server.timeout=2
+  server=http.server.ThreadingHTTPServer((agents[0].members[agents[0].node],20226),Handler);server.agents=agents;server.fleet=fleet;server.timeout=2
   threading.Thread(target=server.serve_forever,daemon=True).start()
+  local_path=RUN/'bridge.sock';local_path.unlink(missing_ok=True)
+  local_server=await asyncio.start_unix_server(lambda reader,writer:local_client(reader,writer,agents),path=str(local_path));os.chmod(local_path,0o600)
+  async def collect_cache():
+   while True:
+    await asyncio.sleep(300)
+    active=[clip_path(a.c['workload'],a.playback.current).parent for a in agents if a.playback.active() and a.playback.current]
+    try:await asyncio.to_thread(clean_cache,active)
+    except Exception:logging.warning('Recording cache cleanup deferred')
+  cache_task=asyncio.create_task(collect_cache())
   def stop():
    for a in agents:a.stop.set()
   for sig in (signal.SIGINT,signal.SIGTERM):asyncio.get_running_loop().add_signal_handler(sig,stop)
   try:
    await transport.start()
    await asyncio.gather(*(a.run(i*4) for i,a in enumerate(agents)))
-  finally:await transport.close();server.shutdown()
+  finally:
+   for a in agents:
+    if a.playback.active():a.playback.task.cancel()
+   await asyncio.gather(*(a.playback.task for a in agents if a.playback.task),return_exceptions=True)
+   cache_task.cancel();await asyncio.gather(cache_task,return_exceptions=True)
+   local_server.close();await local_server.wait_closed();await transport.close();server.shutdown()
  try:asyncio.run(main())
  except Exception:raise SystemExit('Camera controller stopped; private details withheld')

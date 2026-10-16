@@ -1,6 +1,6 @@
 """Single-active Core adapter over existing leases, journal and scoped Core NATS."""
 import argparse,asyncio,base64,datetime,math,concurrent.futures,copy,hashlib,hmac,http.server,json,logging,os,pathlib,re,shutil,secrets,signal,socket,ssl,subprocess,threading,time,urllib.request
-import nats
+import nats,sys
 from cryptography.fernet import Fernet
 from config_journal import Journal,atomic,encoded,digest
 from lease import Lease,clock
@@ -8,13 +8,16 @@ from protocol import pack,unpack,MAX
 from snapshot import MAX_BLOB,config_digest
 from ui_bridge import OnlineSync
 from http_config import configure as configure_http
-from component_config import configure as configure_component
 ROOT=pathlib.Path('/var/lib/desk-homeassistant');RUN=pathlib.Path('/run/desk-homeassistant')
 LIB=pathlib.Path('/usr/local/libexec/desk-homeassistant')
 LOG=logging.getLogger('desk-homeassistant')
 
 def shell(*args,timeout=15):return subprocess.run(args,check=True,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,timeout=timeout)
 def sha(raw):return hashlib.sha256(raw).hexdigest()
+
+def configure_component(root):
+ # Fresh process prevents old imported source hooks surviving an additive rollout.
+ shell(sys.executable,str(LIB/'component_config.py'),str(root),timeout=30)
 
 def worker(action,*,source=None,destination=None,ticket=None,backup_id=None):
  unit='desk-homeassistant-checkpoint-'+secrets.token_hex(8)+'.service'
@@ -218,7 +221,7 @@ class Agent(OnlineSync):
   if not self.owned() or self.phase!='active' or not self.ready:raise ValueError('Core is not ready')
   if self.ui_busy():raise ValueError('Online sync is running')
   with self.exclusive:
-   self.phase='checkpointing';self.ready=False;self.last_error=None
+   self.phase='checkpointing';self.ready=False;self.last_error=None;certified=False
    try:
     await asyncio.to_thread(shell,'systemctl','stop','desk-homeassistant-core',timeout=80)
     exit=json.loads((RUN/'stopped.json').read_bytes())
@@ -230,14 +233,14 @@ class Agent(OnlineSync):
      value=json.loads(await asyncio.to_thread(worker,'create',source=(ROOT/'current').resolve(),destination=path))
      os.replace(path,ROOT/'blobs'/value['digest'])
     finally:path.unlink(missing_ok=True)
-    self.applied=await self.propose(value);self.disk_digest=value['config_digest']
+    self.applied=await self.propose(value);self.disk_digest=value['config_digest'];certified=True
    except Exception:
     self.last_error='checkpoint_failed';raise
    finally:
-    if self.owned() and not handoff:
+    if self.owned() and (not handoff or not certified):
      self.phase='starting';self.started_at=clock();self.unhealthy_since=None;self.permit()
      await asyncio.to_thread(shell,'systemctl','start','desk-homeassistant-core',timeout=20)
-    elif handoff:
+    elif handoff and certified:
      self.until=0;self.permit(False);self.term=None;self.phase='standby';self.cooldown=clock()+300
  def health_expired(self,ready):
   self.ready=ready
