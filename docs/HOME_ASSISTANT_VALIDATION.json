@@ -103,30 +103,34 @@
   ],
   "final_state": {
     "owner": "deskb1x",
-    "checkpoint_revision": 6,
+    "checkpoint_revision": 11,
     "synced_nodes": 3,
     "running_cores": 1,
     "native_html": 200,
-    "unauthenticated_api": 401,
+    "unauthenticated_api": "Prior one-off 401 validation; not repeated because HA emits invalid-login alerts",
     "websocket": "101 and auth_required",
     "existing_uis": "all six HTTP 200",
     "original_auth_and_password_store_preserved": true,
     "native_ui_login": "PASS: user confirmed existing account reaches Overview via stable VIP",
-    "native_restart": "offline grace test and official supervisor behavior reviewed; UI restart not exercised"
+    "native_restart": "offline grace test and official supervisor behavior reviewed; UI restart not exercised",
+    "pending_disk_changes": false,
+    "native_ui_reconnect": "PASS: existing signed-in browser reconnected to successor"
   },
   "offline_checks": {
-    "core": 23,
+    "core": 34,
     "node_control": 31,
     "dashboard_go": 29,
     "dashboard_python": 4,
-    "ui_guard": 4
+    "ui_guard": 4,
+    "pi_panel_full_suite": 30,
+    "pi_panel_additional_unready_case": "PASS"
   },
   "online_sync": {
     "revision": 9,
     "replicas": 3,
     "restored_files_per_node": 33,
     "isolated_restore_sqlite_auth_panel": "PASS",
-    "live_failover_retested": false,
+    "live_failover_retested": true,
     "measurement": {
       "seconds": 78.31,
       "samples": 75,
@@ -142,5 +146,38 @@
     "native_panel": "Cluster",
     "trigger": "manual_only",
     "button_flicker": "fixed; unchanged DOM retained between polls"
+  },
+  "online_failover": {
+    "method": "SIGSTOP HA controller only; automatic CONT after 70s; no pre-failure clean checkpoint",
+    "previous": "deskb3x",
+    "successor": "deskb1x",
+    "online_revision": 10,
+    "old_namespace_stopped_seconds": 11.24,
+    "new_namespace_started_seconds": 24.62,
+    "core_ready_seconds": 94.8,
+    "native_ui_seconds": 95.82,
+    "runner_observed_ready_seconds": 97.17,
+    "namespace_gap_seconds": 13.39,
+    "process_overlap_detected": false,
+    "process_sampling_seconds": 0.25,
+    "ui_sampling_seconds": 1,
+    "native_auth_and_helper": {
+      "owner": "deskb1x",
+      "revision": 10,
+      "native_helper_config_matches_snapshot": true,
+      "native_auth_files_match_snapshot": {
+        ".storage/auth": true,
+        ".storage/auth_provider.homeassistant": true
+      },
+      "pending_disk_changes": false
+    },
+    "cleanup": {
+      "revision": 11,
+      "replicas": 3,
+      "temporary_helper_removed": true,
+      "isolated_restore_sqlite": "PASS on all three replicas",
+      "old_controller_resumed": true,
+      "temporary_timers_remaining": 0
+    }
   }
 }

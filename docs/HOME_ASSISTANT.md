@@ -226,3 +226,36 @@ endpoint. Do not probe protected `/api/` without authentication: the expected 40
 still creates a native invalid-login notification. The one-off negative auth
 check from node 2 at 14:33:06 was identified in the HA log and removed from the
 scratch validation script. Native authentication remains enabled.
+
+### Online snapshot takeover validation — 2026-10-16
+
+Created the disposable native UI helper `input_boolean.cluster_sync_verification`,
+then pressed **Sync config** and verified the same certified r10 blob on 3/3 nodes.
+SIGSTOP was applied only to the owner's HA controller on deskb3x; an independent
+70-second systemd CONT backstop and test-finally cleanup restored the controller.
+No clean-stop checkpoint preceded the failure, so takeover exercised the actual
+online backup artifact rather than a newer maintenance snapshot.
+
+The old namespace stopped at 11.24 seconds, the successor namespace on deskb1x
+started at 24.62 seconds, native readiness returned at 94.80 seconds, and native
+HTML through the stable VIP returned at 95.82 seconds. The outer test runner
+observed readiness at 97.17 seconds. There was no observed namespace overlap at
+250 ms sampling; HTTP/ready observations used approximately one-second sampling.
+This is a controller-freeze experiment, not physical power removal or an SLA.
+
+The successor's helper file and both native auth/password-provider files matched
+the r10 snapshot by SHA-256. The signed-in browser reconnected, the helper was
+visible in native HA, and the new owner's Cluster sidebar remained functional.
+Native Recorder reported recovering an unfinished session, as the online backup
+was made while HA was running; this does not replace SQLite integrity validation.
+The temporary helper was then deleted through the native UI and cleanup synced.
+No camera/device integration, ownership framework or timeout was changed by this
+validation. Previous 116.39-second and current 95.82-second observations are
+separate runs on different successors; this is not a controlled speedup claim.
+
+Cleanup finished at r11, synced 3/3 with pending=false on the owner. Each r11
+bundle was restored in an isolated directory: SQLite quick_check passed and the
+temporary helper was absent on all three copies. The old controller resumed
+without a restart loop; no test resume timer remains. One Core is native-ready
+on deskb1x; both other Core containers are stopped. Existing service UIs and
+native WebSocket authentication negotiation passed the final checks.
