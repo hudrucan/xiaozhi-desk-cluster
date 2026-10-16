@@ -128,6 +128,28 @@ calibration; nine focused data/format/touch tests pass. Only this Pi's client
 configuration and service were updated. No cluster or LCD driver change.
 
 
+## Fetch interval
+
+Open **Settings → Fetch interval**, enter whole seconds on the numeric keypad,
+then tap **Apply**. The range is **1–60 seconds**, default **5 seconds**.
+**<** deletes a digit and **Clear** empties the field. Invalid input is rejected.
+Leaving without Apply discards the draft. A successful Apply saves atomically
+to `/var/lib/desk-cluster-panel/fetch.json` (0600), independently of calibration
+and timeout, and wakes the single poll worker to fetch again. Save failures keep
+the current interval. Restart restores the preference; Ansible preserves it.
+
+The interval is a delay after each completed GET (including a failed request).
+Only one request runs at a time; the existing three-second HTTP timeout and 8 KiB
+response limit remain. Collector refresh/cache cadence is independent. Longer
+intervals can make metadata expire between requests; existing freshness rules
+remain in force, including 15 seconds for Network and 20 seconds for node data.
+Fetching continues when the picture is blanked by the idle timeout.
+
+Fetch interval validation: all 50 panel tests pass, including worker wake-up,
+input bounds, atomic save failure and independent preference persistence.
+The numeric keypad and validation states were rendered at 480×320. Physical
+input and Apply checks remain NOT RUN.
+
 ## Picture timeout
 
 In **Settings → Screen timeout**, open the dropdown and choose **Off**, **30 sec**,
@@ -155,7 +177,7 @@ change is made. References: [LCDWiki](https://www.lcdwiki.com/3.5inch_RPi_Displa
 
 ## On-screen recalibration
 
-Settings has separate **Touch calibration** and **Screen timeout** menu entries.
+Settings has separate **Touch calibration**, **Screen timeout** and **Fetch interval** menu entries.
 Each opens only its own options, with a **<** icon to the left of the title
 returning to the Settings menu. Its touch target is 44×44 pixels.
 The menu uses list rows separated by dividers. Adding an entry to `SETTINGS_ITEMS`

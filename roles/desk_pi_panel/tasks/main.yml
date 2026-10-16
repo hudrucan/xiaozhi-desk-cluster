@@ -61,6 +61,13 @@
         dest: /usr/local/libexec/desk-cluster-panel/calibration_ui.py
         mode: '0644'
       register: panel_calibration_ui
+    - name: Install the local fetch interval preferences
+      ansible.builtin.copy:
+        src: fetch_settings.py
+        dest: /usr/local/libexec/desk-cluster-panel/fetch_settings.py
+        mode: '0644'
+      register: panel_fetch_settings
+      tags: [panel-ui]
     - name: Install the fixed console mode helper
       ansible.builtin.copy:
         src: console.py
@@ -93,6 +100,7 @@
           {{ 'restarted' if
              (panel_source.changed | default(false)) or
              (panel_display_idle.changed | default(false)) or
+             (panel_fetch_settings.changed | default(false)) or
              (panel_calibration_ui.changed | default(false)) or
              (panel_console.changed | default(false)) or
              (panel_config.changed | default(false)) or

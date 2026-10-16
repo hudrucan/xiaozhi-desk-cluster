@@ -5,6 +5,9 @@ import importlib.util
 from pathlib import Path
 from types import SimpleNamespace
 import unittest
+import json
+import threading
+from unittest.mock import Mock
 
 sys.path.insert(0,str(Path(__file__).parents[1]/'files'))
 
@@ -26,6 +29,33 @@ def network_fixture():
     return v
 
 class PanelTests(unittest.TestCase):
+    def test_fetch_interval_change_wakes_existing_worker_without_starting_another(self):
+        model=panel.Model(60);first=threading.Event();second=threading.Event()
+        response=Mock();response.__enter__=Mock(return_value=response);response.__exit__=Mock(return_value=False)
+        response.read.return_value=json.dumps(fixture()).encode()
+        calls=[]
+        def request(*args,**kwargs):
+            calls.append(kwargs)
+            if len(calls)==1:first.set()
+            else:second.set();model.stop()
+            return response
+        model.opener=Mock();model.opener.open.side_effect=request
+        worker=threading.Thread(target=model.poll,args=('http://192.168.1.100/api/cluster/panel',),daemon=True)
+        worker.start()
+        try:
+            self.assertTrue(first.wait(1))
+            model.set_interval(1)
+            self.assertTrue(second.wait(1))
+        finally:model.stop();worker.join(1)
+        self.assertFalse(worker.is_alive());self.assertEqual(len(calls),2)
+        self.assertTrue(all(call['timeout']==3 for call in calls))
+        self.assertTrue(model.snapshot()[2])
+    def test_fetch_worker_bounds_reject_invalid_intervals(self):
+        model=panel.Model()
+        for value in (0,61,True,1.0,'5',None):
+            with self.assertRaises(ValueError):model.set_interval(value)
+            with self.assertRaises(ValueError):panel.Model(value)
+        self.assertEqual(model.interval,5)
     def test_timeout_dropdown_opens_at_current_value_and_can_select_every_option(self):
         menu=panel.TimeoutSelect()
         for seconds,_ in panel.TIMEOUT_OPTIONS:
@@ -57,7 +87,8 @@ class PanelTests(unittest.TestCase):
         menu=panel.SettingsMenu()
         menu.begin((30,80));self.assertEqual(menu.end((33,82)),'calibration')
         menu.begin((30,150));self.assertEqual(menu.end((30,150)),'timeout')
-        menu.begin((30,230));self.assertIsNone(menu.end((30,230)))
+        menu.begin((30,230));self.assertEqual(menu.end((30,230)),'fetch')
+        menu.begin((30,272));self.assertIsNone(menu.end((30,272)))
         # Small motion across a divider must not open the adjacent row.
         menu.begin((30,120));self.assertIsNone(menu.end((30,125)))
     def test_settings_scroll_reaches_later_rows_and_clamps_at_both_ends(self):

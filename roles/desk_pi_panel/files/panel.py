@@ -20,6 +20,7 @@ from urllib.request import build_opener, ProxyHandler, Request, HTTPRedirectHand
 from PIL import Image, ImageDraw, ImageFont, ImageChops
 from calibration_ui import Calibration, TARGETS, restore as restore_calibration
 from display_idle import IdleDisplay, TIMEOUT_OPTIONS, valid_timeout, restore as restore_display, save as save_display
+from fetch_settings import MIN_INTERVAL, MAX_INTERVAL, DEFAULT_INTERVAL, valid_interval, parse_interval, restore as restore_fetch, save as save_fetch
 
 WIDTH, HEIGHT = 480, 320
 MEMBERS = ('deskb1x', 'deskb2x', 'deskb3x')
@@ -27,11 +28,15 @@ NAVIGATION = (('Overview','overview'),('Nodes','node'),('Network','network'),('E
 BG, SURFACE, BORDER = '#100d08', '#211b12', '#443721'
 TEXT, MUTED, GOLD, GREEN, RED = '#f3ead8', '#baad95', '#d5a85e', '#96c9a0', '#de927f'
 SETTINGS_ITEMS = (('calibration','Touch calibration','Adjust touch alignment'),
-                  ('timeout','Screen timeout','Choose when the picture goes black'))
+                  ('timeout','Screen timeout','Choose when the picture goes black'),
+                  ('fetch','Fetch interval','Choose how often the panel fetches data'))
 SETTINGS_LIST_BOX, SETTINGS_ROW_HEIGHT = (14,50,466,274), 72
 SETTINGS_BACK_BUTTON = (6,3,50,47)
 CALIBRATE_BUTTON = (130,195,350,243)
 TIMEOUT_SELECT_BUTTON, TIMEOUT_LIST_BOX = (14,64,466,110), (14,112,466,271)
+FETCH_INPUT_BOX, FETCH_APPLY_BUTTON = (14,75,210,119), (14,134,210,178)
+FETCH_KEYS = tuple((label,(236+(i%3)*80,64+(i//3)*53,306+(i%3)*80,107+(i//3)*53))
+                   for i,label in enumerate(('1','2','3','4','5','6','7','8','9','<','0','Clear')))
 START_BUTTON, CONFIRM_CANCEL_BUTTON = (100, 243, 228, 291), (252, 243, 380, 291)
 APPLY_BUTTON, RETRY_BUTTON, CANCEL_BUTTON = (32, 243, 160, 291), (176, 243, 304, 291), (320, 243, 448, 291)
 COLLECT_CANCEL_BUTTON = (358, 275, 466, 319)
@@ -162,15 +167,26 @@ class NoRedirect(HTTPRedirectHandler):
     def redirect_request(self,*args):return None
 
 class Model:
-    def __init__(self):
+    def __init__(self,interval=DEFAULT_INTERVAL):
+        if not valid_interval(interval):raise ValueError('Invalid fetch interval')
         self.lock=threading.Lock()
+        self.schedule=threading.Condition(self.lock)
+        self.interval=interval;self.revision=0
         self.value=None
         self.received=0
         self.ok=False
         self.stopped=threading.Event()
         self.opener=build_opener(ProxyHandler({}),NoRedirect())
+    def set_interval(self,interval):
+        if not valid_interval(interval):raise ValueError('Invalid fetch interval')
+        with self.schedule:
+            self.interval=interval;self.revision+=1;self.schedule.notify_all()
+    def stop(self):
+        with self.schedule:
+            self.stopped.set();self.schedule.notify_all()
     def poll(self,url):
         while not self.stopped.is_set():
+            with self.lock:revision=self.revision
             try:
                 with self.opener.open(Request(url,headers={'Accept':'application/json'}),timeout=3) as r:
                     raw=r.read(8193)
@@ -180,7 +196,8 @@ class Model:
                     self.value,self.received,self.ok=value,time.monotonic(),True
             except (OSError,ValueError,TypeError):
                 with self.lock:self.ok=False
-            self.stopped.wait(5)
+            with self.schedule:
+                self.schedule.wait_for(lambda:self.stopped.is_set() or self.revision!=revision,timeout=self.interval)
     def snapshot(self):
         with self.lock:
             return self.value,self.received,self.ok
@@ -264,9 +281,9 @@ class Renderer:
             x=round(box[0]+i*width)
             d.line((x,box[1]+9,x,box[3]-9),fill=BORDER)
         return [(round(box[0]+i*width),box[1],round(box[0]+(i+1)*width),box[3]) for i in range(count)]
-    def settings(self,config,error=None,view='menu',menu=None,timeout_select=None):
+    def settings(self,config,error=None,view='menu',menu=None,timeout_select=None,fetch_input=None,fetch_error=None):
         image=Image.new('RGB',(WIDTH,HEIGHT),BG);d=ImageDraw.Draw(image)
-        title={'menu':'Panel settings','calibration':'Touch calibration','timeout':'Screen timeout'}[view]
+        title={'menu':'Panel settings','calibration':'Touch calibration','timeout':'Screen timeout','fetch':'Fetch interval'}[view]
         self.text(d,(60 if view!='menu' else 14,12),title,18,TEXT,True)
         if view!='menu':self.center_text(d,SETTINGS_BACK_BUTTON,'<',22,GOLD)
         d.line((14,49,466,49),fill=BORDER)
@@ -306,6 +323,19 @@ class Renderer:
             self.text(d,(14,174),'Touch to wake; first touch only wakes.',12,MUTED)
             if error:self.text(d,(14,220),error,12,RED,width=452)
             if opened:self.timeout_options(image,timeout_select,current)
+        elif view=='fetch':
+            current=config.get('fetch_interval',DEFAULT_INTERVAL)
+            draft=str(current) if fetch_input is None else fetch_input
+            value=parse_interval(draft)
+            self.text(d,(14,55),'Interval in seconds',12,MUTED)
+            d.rounded_rectangle(FETCH_INPUT_BOX,radius=6,fill=SURFACE,outline=GOLD)
+            self.center_text(d,FETCH_INPUT_BOX,(draft or '—')+' s',22,TEXT,True)
+            self.button(d,FETCH_APPLY_BUTTON,'Apply',value is not None and value!=current)
+            self.text(d,(14,191),f'Min {MIN_INTERVAL}s · Max {MAX_INTERVAL}s',13,MUTED)
+            self.text(d,(14,216),f'Current: {current}s',13,GREEN)
+            if fetch_error:self.text(d,(14,244),fetch_error,11,RED,width=206)
+            elif value is None:self.text(d,(14,244),'Enter 1–60 seconds.',12,RED)
+            for label,box in FETCH_KEYS:self.button(d,box,label)
         self.navigation(d,'settings')
         return image
     def timeout_options(self,image,menu,current):
@@ -584,8 +614,10 @@ def run(config):
     from evdev import InputDevice, ecodes
     restore_calibration(config)
     restore_display(config)
+    restore_fetch(config)
     idle=IdleDisplay(config['screen_timeout']);settings_error=None
-    model=Model();renderer=Renderer();fb=Framebuffer(config['framebuffer'],config['packer'],config.get('rotation',0))
+    fetch_input=str(config['fetch_interval']);fetch_error=None
+    model=Model(config['fetch_interval']);renderer=Renderer();fb=Framebuffer(config['framebuffer'],config['packer'],config.get('rotation',0))
     touch=InputDevice(config['touch']);rx=touch.absinfo(ecodes.ABS_X);ry=touch.absinfo(ecodes.ABS_Y)
     if rx is None or ry is None or rx.max<=rx.min or ry.max<=ry.min:raise ValueError('Invalid touchscreen range')
     thread=threading.Thread(target=model.poll,args=(config['url'],),daemon=True);thread.start()
@@ -633,7 +665,9 @@ def run(config):
                                 if cal.phase in ('cancelled','applied'):cal=None;page='settings';settings_view='calibration'
                             elif page=='settings' and settings_view=='menu' and settings_menu.start is not None:
                                 target=settings_menu.end(touch_point(x,y,rx,ry,config))
-                                if target is not None:settings_view=target
+                                if target is not None:
+                                    settings_view=target
+                                    if target=='fetch':fetch_input=str(config['fetch_interval']);fetch_error=None
                             elif page=='settings' and settings_view=='timeout' and timeout_select.opened:
                                 if timeout_select.start is not None:
                                     seconds=timeout_select.end(touch_point(x,y,rx,ry,config))
@@ -655,6 +689,23 @@ def run(config):
                                     if inside((tx,ty),CALIBRATE_BUTTON):cal=Calibration(config.get('rotation',0),now)
                                 elif settings_view=='timeout':
                                     if inside((tx,ty),TIMEOUT_SELECT_BUTTON):timeout_select.open(config['screen_timeout'])
+                                elif settings_view=='fetch':
+                                    if inside((tx,ty),FETCH_APPLY_BUTTON):
+                                        interval=parse_interval(fetch_input)
+                                        if interval is None:fetch_error='Enter 1–60 seconds.'
+                                        elif interval!=config['fetch_interval']:
+                                            try:save_fetch(interval)
+                                            except (OSError,ValueError):fetch_error='Save failed; unchanged.'
+                                            else:
+                                                config['fetch_interval']=interval;model.set_interval(interval)
+                                                fetch_input=str(interval);fetch_error=None
+                                    else:
+                                        for label,box in FETCH_KEYS:
+                                            if inside((tx,ty),box):
+                                                if label=='Clear':fetch_input=''
+                                                elif label=='<':fetch_input=fetch_input[:-1]
+                                                elif len(fetch_input)<2:fetch_input+=label
+                                                fetch_error=None;break
                             elif page=='overview' and OVERVIEW_CARD_TOP<=ty<=OVERVIEW_CARD_BOTTOM:selected=min(2,max(0,(tx-14)//155));page='node'
                             elif page=='node' and NODE_TAB_TOP<=ty<=NODE_TAB_BOTTOM:selected=min(2,max(0,(tx-14)//155))
                             elif page=='node' and inside((tx,ty),NODE_STATUS_BUTTON):node_view='status'
@@ -684,13 +735,13 @@ def run(config):
                 live,elapsed=freshness(value,received,now)
                 online=tuple(node_live(n,live,elapsed) for n in value['nodes']) if value else ()
                 network_fresh=tuple(network_live(n,live,elapsed) for n in value['nodes']) if value else ()
-                key=('cal',id(cal),cal.version) if cal else ('settings',settings_view,settings_menu.offset,timeout_select.opened,timeout_select.offset,config.get('calibration_error'),config['screen_timeout'],settings_error) if page=='settings' else (id(value),live,ok,online,network_fresh,page,selected,node_view)
+                key=('cal',id(cal),cal.version) if cal else ('settings',settings_view,settings_menu.offset,timeout_select.opened,timeout_select.offset,config.get('calibration_error'),config['screen_timeout'],settings_error,config['fetch_interval'],fetch_input,fetch_error) if page=='settings' else (id(value),live,ok,online,network_fresh,page,selected,node_view)
                 if key!=last_key:
-                    image=renderer.calibration(cal) if cal else renderer.settings(config,settings_error,settings_view,settings_menu,timeout_select) if page=='settings' else renderer.draw(value,received,ok,page,selected,now,node_view)
+                    image=renderer.calibration(cal) if cal else renderer.settings(config,settings_error,settings_view,settings_menu,timeout_select,fetch_input,fetch_error) if page=='settings' else renderer.draw(value,received,ok,page,selected,now,node_view)
                     fb.show(image);last_key=key
                 last_render=now
     finally:
-        model.stopped.set();touch.close();fb.close()
+        model.stop();touch.close();fb.close()
 
 def load(path):
     config=json.loads(Path(path).read_text());url=urlparse(config['url'])
@@ -698,6 +749,7 @@ def load(path):
         raise ValueError('Use the private cluster panel GET endpoint')
     if config.get('rotation',0) not in (0,180):raise ValueError('Supported panel rotation: 0 or 180')
     if not valid_timeout(config.get('screen_timeout',0)):raise ValueError('Invalid screen timeout')
+    if not valid_interval(config.get('fetch_interval',DEFAULT_INTERVAL)):raise ValueError('Invalid fetch interval')
     transform=config.get('touch_transform')
     if transform is not None and (not isinstance(transform,list) or len(transform)!=6 or any(not finite(v) or abs(v)>1e6 for v in transform)):
         raise ValueError('Invalid touch affine transform')
