@@ -7,8 +7,9 @@ const cron={value:'*/1 * * * *',disabled:false};
 const label={querySelector:()=>badge,append:b=>badge=b};
 let managedClass=false;const control={classList:{add:name=>{assert.equal(name,'desk-managed-control');managedClass=true}}};
 const row={querySelector:selector=>selector==='.setting_input'?control:label,querySelectorAll:selector=>selector.startsWith('input')?[sync]:[]};
+const save={disabled:false,setAttribute(k,v){attrs['save_'+k]=v}};
 const notice={textContent:'managed settings notice',style:{},setAttribute(k,v){attrs['notice_'+k]=v}};
-let insertedStyle;const document={head:{append:s=>insertedStyle=s},body:{},baseURI:'http://192.168.1.186/network/settings.php',getElementById:id=>({'row_SYNC_RUN':row,'row_SYNC_RUN__metadata':metadataRow,'ARPSCAN_RUN_SCHD':cron,'desk-settings-policy':notice}[id]||null),createElement:()=>({style:{}})};
+let insertedStyle;const document={head:{append:s=>insertedStyle=s},body:{},baseURI:'http://192.168.1.186/network/settings.php',getElementById:id=>({'row_SYNC_RUN':row,'row_SYNC_RUN__metadata':metadataRow,'ARPSCAN_RUN_SCHD':cron,'desk-settings-policy':notice,'save':save}[id]||null),createElement:()=>({style:{}})};
 const jquery=el=>el===document?{ajaxError:fn=>ajaxError=fn,ajaxSend:fn=>ajaxSend=fn,ajaxComplete:fn=>ajaxComplete=fn}:{trigger:name=>{assert.equal(name,'change.select2');selectRefreshes++;el.onchange?.()}};
 const context={deskManagedKeys:['SYNC_RUN'],document,setTimeout:fn=>timers.push(fn),window:{clearCache:()=>reloads++,addEventListener:(name,fn)=>listeners[name]=fn,hideSpinner:()=>hidden++,getSetting:key=>{assert.equal(key,'SYNC_RUN');return 'disabled'},jQuery:jquery},MutationObserver:class{constructor(fn){observerCallback=fn}observe(){}},requestAnimationFrame:fn=>fn(),URL,URLSearchParams};
 vm.runInNewContext(source,context);
@@ -23,8 +24,8 @@ console.log('PASS native dropdown override round-trip, editable cron, idempotent
 listeners.beforeunload();assert.equal(hidden,0);timers.shift()();assert.equal(hidden,1,'Cancelled navigation overlay not dismissed');listeners.pageshow({persisted:false});assert.equal(hidden,1);listeners.pageshow({persisted:true});assert.equal(hidden,2);console.log('PASS no false dirty state, cancelled-navigation recovery and back-forward restoration');
 
 const saveOptions={url:'php/server/util.php',data:'function=savesettings'};
-ajaxSend(null,{},saveOptions);context.window.clearCache();assert.equal(reloads,0,'SSE aborted in-flight Save');
-ajaxComplete(null,{status:200},saveOptions);assert.equal(reloads,0);timers.shift()();assert.equal(reloads,1,'Cache reload lost after Save acknowledgment');
+ajaxSend(null,{},saveOptions);assert.equal(save.disabled,true);assert.equal(attrs['save_aria-busy'],'true');assert.match(notice.textContent,/Saving settings/);context.window.clearCache();assert.equal(reloads,0,'SSE aborted in-flight Save');
+ajaxComplete(null,{status:200,responseJSON:{success:true},getResponseHeader:()=> 'synced'},saveOptions);assert.equal(save.disabled,false);assert.match(notice.textContent,/replicas synced/);assert.equal(reloads,0);timers.shift()();assert.equal(reloads,1,'Cache reload lost after Save acknowledgment');
 ajaxSend(null,{},saveOptions);context.window.clearCache();ajaxComplete(null,{status:400},saveOptions);assert.equal(timers.length,0,'Rejected Save discarded its visible error');
 context.window.clearCache();assert.equal(reloads,2,'Normal cache refresh was disabled');
 console.log('PASS settings import waits for Save acknowledgment; rejected saves retain error UI');

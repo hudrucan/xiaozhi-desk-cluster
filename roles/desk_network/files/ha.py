@@ -315,7 +315,7 @@ class Cluster:
     cmd+=['-v','/run/desk-network-scan:/run/desk-network-scan:ro','-e','DESK_NETWORK_DISTRIBUTED=1']
    for cap in ('NET_ADMIN','NET_RAW','NET_BIND_SERVICE','CHOWN','SETUID','SETGID'):cmd+=['--cap-add='+cap]
    if self.warm:
-    cmd+=['-v',str(self.warm_path)+':/run/desk-network-warm:ro','-v','/usr/local/libexec/desk-network/warm_runtime.py:/app/desk_network/warm_runtime.py:ro','-v','/usr/local/libexec/desk-network/warm-backend.sh:/services/start-backend.sh:ro','-v','/usr/local/libexec/desk-network/warm-idle.sh:/services/start-php-fpm.sh:ro','-v','/usr/local/libexec/desk-network/warm-idle.sh:/services/start-cron.sh:ro']
+    cmd+=['-v','/usr/local/libexec/desk-network/api_read_cache.py:/app/desk_network/api_read_cache.py:ro','-v',str(self.warm_path)+':/run/desk-network-warm:ro','-v','/usr/local/libexec/desk-network/warm_runtime.py:/app/desk_network/warm_runtime.py:ro','-v','/usr/local/libexec/desk-network/warm-backend.sh:/services/start-backend.sh:ro','-v','/usr/local/libexec/desk-network/warm-idle.sh:/services/start-php-fpm.sh:ro','-v','/usr/local/libexec/desk-network/warm-idle.sh:/services/start-cron.sh:ro']
    cmd.append(IMAGE);self.running=True;self.ready=False;self.container_started=clock();self.boot_ready_seconds=None
    try:
     self.command(*cmd,timeout=5)
@@ -473,7 +473,17 @@ def is_mutation(method,path,body):
   query=urllib.parse.parse_qs(urllib.parse.urlsplit(path).query)
   return bool(set(query)&{'action','function','sql','query','delete','update'})
  if method=='OPTIONS':return False
- if urllib.parse.urlsplit(path).path in ('/network/server/devices/by-status','/network/server/devices/search'):return False
+ route=urllib.parse.urlsplit(path).path
+ # These pinned native POST handlers render/read only. A POST is not by itself
+ # evidence of a database edit: checkpointing these serialized every page load.
+ if method=='POST' and route in ('/network/server/devices/by-status','/network/server/devices/search','/network/php/components/device_cards.php','/network/php/components/tile_cards.php'):return False
+ if method=='POST' and route=='/network/server/dbquery/read':
+  # The native handler is autocommit despite its name. Only a single SELECT
+  # may bypass the write quorum/checkpoint; malformed/other SQL fails closed.
+  try:
+   query=urllib.parse.unquote(base64.b64decode(json.loads(body)['rawSql'],validate=True).decode('utf-8'))
+   return not bool(re.match(r'\s*SELECT\b',query,re.I))
+  except (ValueError,KeyError,TypeError,UnicodeError):return True
  if '/graphql' in path or 'query_graphql.php' in path:
   try:q=json.loads(body).get('query','');return bool(re.search(r'\bmutation\b',q))
   except Exception:return True
@@ -601,6 +611,11 @@ class Server(http.server.ThreadingHTTPServer):
    super().process_request_thread(request,client_address)
   except OSError:self.shutdown_request(request)
   finally:self.slots.release()
+ def handle_error(self,request,client_address):
+  # Health probes/closed browser tabs reset idle keep-alive sockets normally.
+  # ThreadingMixIn catches these before process_request_thread can intercept.
+  if isinstance(sys.exc_info()[1],(ConnectionResetError,BrokenPipeError)):return
+  super().handle_error(request,client_address)
  def get_request(self):
   s,a=super().get_request();s.settimeout(25);return s,a
  def verify_request(self,r,a):return a[0] in set(self.cluster.members.values())|{'127.0.0.1'}

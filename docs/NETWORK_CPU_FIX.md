@@ -22,3 +22,42 @@ All three control-plane nodes completed the serial one-file rollout with Cloud c
 The remaining parser hotspot uses PyYAML SafeLoader's Python implementation. Existing runtime already bundles LibYAML; the follow-up uses CSafeLoader with SafeLoader fallback, both safe constructors. On RK3528, the same 15 public reference YAML files parsed to identical values: 0.35523 CPU seconds with SafeLoader versus 0.03462 with CSafeLoader (about 90% less parsing CPU). Offline Cloud tests including rejection of Python-object YAML tags: 102 passed. No package installation was required.
 
 Final parser canary, 64-second live sample on deskb3x: mean control-plane CPU 2.033% of one core, peak over two seconds 21.833%; Cloud reconciliation ready and NATS connected. The original observation on that node peaked near 96% of one core. Timing/sync phase differ, so this remains short-sample evidence, not a sustained-load benchmark.
+
+
+## Native read models and UI requests
+
+The pinned native backend used to query and JSON-encode unchanged tables every
+five seconds. A live read-only benchmark found ~13 MB of notifications costing
+~1 CPU-second per pass, plus history. The warm runtime now wraps only static
+native API endpoint construction. SQLite `data_version` detects external commits
+and connection `total_changes` detects backend writes. A changed connection,
+query, explicit force/ad-hoc refresh, metadata error or 30-second maximum age
+refreshes the model. Native deferred writers remain active. Custom SQL and
+time-dependent device/resource models are not cached. No live SQLite file or
+configuration is cached or replicated by this helper.
+
+POST card rendering and SELECT-only `/dbquery/read` are read requests; they no
+longer trigger quorum checkpoint work. Unknown SQL, malformed input and writes
+retain the mutation path. Actual settings edits still require the existing
+quorum/checkpoint flow. The Save button reports Saving, Saved, Sync pending or
+Retry save instead of silently waiting. Routine closed health-probe sockets do
+not emit traceback logs; unexpected server errors remain visible.
+
+
+Follow-up rollout (2026-10-16): all three Network nodes passed the rolling
+upgrade and protected-service guards. Owner became deskb2x, two warm standbys
+remained inactive, and the user's new one-minute scan schedule was preserved.
+Three native read POST probes returned 200 in 30/123/51 ms with the same
+checkpoint revision before and after. SQL probe used the same-origin headers
+required by the existing native nginx policy; a header-less external probe
+correctly returned 403.
+
+CPU evidence is phase-dependent: the initial 20-second pre-fix container sample
+averaged 16.16% of one core, but post-upgrade samples overlapping bootstrap,
+scan/import or settings edits still averaged 16–19% with the native 0.5-core
+ceiling. A subsequent quiet 20-second per-thread sample measured main backend
+3.35%; another quiet per-process sample measured backend 1.77%, warm supervisor
+1.04% and HA controller 6.95% of one core. These are short idle-window
+measurements, not a controlled whole-node percentage improvement or a claim
+that scan/checkpoint bursts disappear. The user confirmed the new Save feedback
+works; the resulting settings were quorum-synced. Home Assistant stayed stopped.

@@ -210,6 +210,21 @@ class Checks(unittest.TestCase):
   self.assertTrue(ha.is_mutation('POST','/network/server/graphql',b'{"query":"mutation { deleteDevice }"}'))
   self.assertFalse(ha.is_mutation('POST','/network/server/graphql',b'{"query":"query { devices { name } }"}'))
   self.assertFalse(ha.is_mutation('GET','/network/devices.php',b''))
+ def test_native_post_reads_do_not_checkpoint_or_bypass_unknown_writes(self):
+  for route in ('/network/php/components/device_cards.php','/network/php/components/tile_cards.php'):
+   self.assertFalse(ha.is_mutation('POST',route,b'{}'))
+   self.assertTrue(ha.is_mutation('PUT',route,b'{}'))
+   self.assertTrue(ha.is_mutation('POST',route+'/unknown',b'{}'))
+  path='/network/server/dbquery/read'
+  for sql in ('SELECT * FROM Devices',' SELECT DISTINCT devType FROM Devices'):
+   body=json.dumps({'rawSql':base64.b64encode(sql.encode()).decode()}).encode()
+   self.assertFalse(ha.is_mutation('POST',path,body))
+  for sql in ('DELETE FROM Devices','UPDATE Devices SET devName=1','PRAGMA journal_mode=WAL','WITH x AS (SELECT 1) DELETE FROM Devices'):
+   body=json.dumps({'rawSql':base64.b64encode(sql.encode()).decode()}).encode()
+   self.assertTrue(ha.is_mutation('POST',path,body))
+  for body in (b'bad',b'{}',b'{"rawSql":null}',b'{"rawSql":"!!"}'):
+   self.assertTrue(ha.is_mutation('POST',path,body))
+  self.assertTrue(ha.is_mutation('POST','/network/server/dbquery/write',b'{}'))
  def test_prefix_preserves_external_and_already_prefixed_urls(self):
   raw=b'<a href="/deviceDetails.php">Device</a><a href="/network/devices.php">N</a><a href="https://example.com/a">X</a>'
   result=ha.rewrite_text(raw,'text/html');self.assertIn(b'href="/network/deviceDetails.php"',result);self.assertNotIn(b'/network/network/',result);self.assertIn(b'https://example.com/a',result)
@@ -235,6 +250,15 @@ context.window.deskNetworkSessionStorage.clear();assert.equal(session.xiaozhi,'k
   server.tls_context.wrap_socket.assert_not_called()
   server.process_request_thread(connection,('10.10.10.11',1))
   connection.settimeout.assert_any_call(2);server.slots.release.assert_called_once()
+ def test_idle_probe_resets_are_quiet_but_other_errors_are_logged(self):
+  server=object.__new__(ha.Server)
+  with patch.object(ha.http.server.ThreadingHTTPServer,'handle_error') as log:
+   try:raise ConnectionResetError()
+   except ConnectionResetError:server.handle_error(None,None)
+   log.assert_not_called()
+   try:raise RuntimeError('unexpected')
+   except RuntimeError:server.handle_error(None,None)
+   log.assert_called_once()
  def test_static_browser_cache_excludes_application_data(self):
   config=(pathlib.Path(__file__).resolve().parents[1]/'templates/backend.cfg.j2').read_text()
   pattern=re.search(r'path_reg -i (\S+) ',config).group(1)

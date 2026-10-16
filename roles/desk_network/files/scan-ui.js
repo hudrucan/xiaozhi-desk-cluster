@@ -2,6 +2,21 @@
 (()=>{
  const button=document.getElementById('desk-network-scan'),panel=document.getElementById('desk-network-discovery');
  if(!button||!panel)return;
+ // Keep cluster actions after navigation and use remaining sidebar height.
+ // Navigation scrolls independently on short screens; no fixed overlay.
+ const tools=document.getElementById('desk-network-tools'),menu=tools?.closest('.sidebar-menu'),sidebar=menu?.closest('.sidebar');
+ if(menu&&sidebar){
+  const footer=document.createElement('ul');footer.className='sidebar-menu desk-network-footer';footer.append(tools);sidebar.append(footer);
+  menu.classList.add('desk-network-menu');sidebar.classList.add('desk-network-sidebar');
+  const style=document.createElement('style');style.id='desk-network-sidebar-dock';
+  style.textContent=`
+.main-sidebar>.sidebar.desk-network-sidebar{display:flex;flex-direction:column;height:calc(100vh - 50px)!important;height:calc(100dvh - 50px)!important;overflow:hidden!important;padding-bottom:10px}
+.sidebar-menu.desk-network-menu{flex:1 1 0;min-height:0;overflow-x:hidden!important;overflow-y:auto!important;overscroll-behavior:contain}
+.sidebar-menu.desk-network-footer{flex:0 0 auto;min-height:0;max-height:60%;overflow:auto!important;margin:0}
+.sidebar-menu.desk-network-footer>#desk-network-tools{padding-top:8px}
+@media(max-width:767px){.main-sidebar>.sidebar.desk-network-sidebar{height:calc(100vh - 100px)!important;height:calc(100dvh - 100px)!important}}
+`;document.head.append(style);
+ }
  panel.style.whiteSpace='normal';
  const phaseLabels={idle:'Waiting for a scan',queued:'Queued',selecting:'Selecting worker',running:'Scanning',retrying:'Trying another worker',completed:'Importing results',importing:'Importing results',complete:'Complete',cached:'Cached',failed:'Unavailable'};
  const busy=new Set(['queued','selecting','running','retrying','completed','importing']);

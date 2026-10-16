@@ -39,6 +39,9 @@ def preload():
  try:import server.__main__ as native
  finally:logger.file_print=original
  assert_pristine()
+ import api
+ from api_read_cache import install
+ install(api)
  return native.main
 
 def live_group(group,proc=pathlib.Path('/proc')):

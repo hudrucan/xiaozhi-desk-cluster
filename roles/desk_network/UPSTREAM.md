@@ -68,3 +68,13 @@ open native database descriptor. Upgrade reviews must recheck import-time
 threads/side effects, child process groups, native PHP/cron commands, API cache
 paths and the normal native readiness contract. This is a warm import cache,
 not upstream's scan-pause feature or a supported upstream HA mode.
+
+
+`api_read_cache.py` wraps the pinned native API endpoint constructor during warm
+preload. The parent holds an empty cache; each activation fills its own derived
+read-model metadata. No connection is opened during installation. Static models
+reuse their native endpoint only while the same SQLite connection's external
+`data_version`, local `total_changes` and query match, for at most 30 seconds.
+Force/ad-hoc updates and time-sensitive/custom queries retain native behavior;
+the existing deferred JSON writer remains authoritative. Re-audit constructor
+call sites and query semantics when upgrading the pinned image.

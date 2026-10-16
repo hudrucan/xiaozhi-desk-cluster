@@ -47,6 +47,11 @@
             dest: /usr/local/libexec/desk-network/checkpoint_budget.py
             mode: '0755'
             validate: /usr/bin/python3 -c "import ast,sys; ast.parse(open(sys.argv[1]).read())" %s
+        - name: Install native read model cache dependency
+          ansible.builtin.copy:
+            src: roles/desk_network/files/api_read_cache.py
+            dest: /usr/local/libexec/desk-network/api_read_cache.py
+            mode: '0755'
         - name: Install the tested CPU fixes
           ansible.builtin.copy:
             src: 'roles/desk_network/files/{{ item }}'

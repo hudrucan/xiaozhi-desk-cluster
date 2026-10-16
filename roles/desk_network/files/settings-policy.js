@@ -60,11 +60,32 @@ function isSettingsSave(options){
 }
 if(typeof window.jQuery==='function'){
  const requests=window.jQuery(document);
- requests.ajaxSend((event,xhr,options)=>{if(isSettingsSave(options))savesInFlight++;});
+ requests.ajaxSend((event,xhr,options)=>{
+  if(!isSettingsSave(options))return;
+  savesInFlight++;
+  const button=document.getElementById('save'),notice=document.getElementById('desk-settings-policy');
+  if(button){button.disabled=true;button.textContent='Saving…';button.setAttribute('aria-busy','true');}
+  if(notice){notice.textContent='Saving settings and syncing replicas…';notice.setAttribute('role','status');notice.style.background='#3c8dbc18';notice.style.borderColor='#3c8dbc40';}
+ });
  requests.ajaxComplete((event,xhr,options)=>{
   if(!isSettingsSave(options))return;
   savesInFlight=Math.max(0,savesInFlight-1);
-  if(xhr.status>=400)reloadAfterSave=false;
+  const button=document.getElementById('save');
+  if(button&&!savesInFlight){button.disabled=false;button.setAttribute('aria-busy','false');}
+  if(xhr.status>=400||xhr.status===0){reloadAfterSave=false;if(button)button.textContent='Retry save';}
+  else{
+   let saved=xhr.responseText==='OK'||xhr.responseJSON?.success===true;
+   if(!saved){try{saved=JSON.parse(xhr.responseText).success===true;}catch{}}
+   const synced=xhr.getResponseHeader?.('X-Desk-Network-Sync')==='synced';
+   if(button)button.textContent=saved?(synced?'Saved':'Sync pending'):'Retry save';
+   if(!saved)reloadAfterSave=false;
+   const notice=document.getElementById('desk-settings-policy');
+   if(notice){
+    notice.textContent=saved?(synced?'Settings saved · replicas synced.':'Settings saved locally · replication pending.'):'Save failed: backend did not confirm the settings.';
+    notice.setAttribute('role',saved?'status':'alert');
+    if(!saved){notice.style.background='#dd4b3922';notice.style.borderColor='#dd4b39';}
+   }
+  }
   if(!savesInFlight&&reloadAfterSave){reloadAfterSave=false;setTimeout(()=>window.clearCache(),1000);}
  });
 }
