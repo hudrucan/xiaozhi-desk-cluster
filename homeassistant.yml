@@ -1,0 +1,81 @@
+---
+- name: Permit the isolated Core bridge to use existing DNS, one frontend at a time
+  hosts: deskboxes
+  become: true
+  gather_facts: false
+  serial: 1
+  any_errors_fatal: true
+  tasks:
+    - ansible.builtin.include_role:
+        name: desk_homeassistant
+        tasks_from: dns-access
+
+- name: Prepare native Home Assistant artifacts and consistent recovery state
+  hosts: deskboxes
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  roles: [desk_homeassistant]
+  tasks:
+    - name: Classify current ownership before serial controller updates
+      ansible.builtin.uri:
+        url: 'http://{{ cluster_ip }}:20223/status'
+        use_proxy: false
+        timeout: 3
+      register: homeassistant_update_classification
+      failed_when: false
+      changed_when: false
+    - name: Update standby controllers before the existing owner
+      ansible.builtin.group_by:
+        key: "desk_homeassistant_update_{{ 'owner' if homeassistant_update_classification.status == 200 and homeassistant_update_classification.json.state in ['active','starting','checkpointing'] else 'standby' }}"
+
+- name: Join or update standby controllers one node at a time
+  hosts: desk_homeassistant_update_standby
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  serial: 1
+  tasks:
+    - ansible.builtin.include_role:
+        name: desk_homeassistant
+        tasks_from: start
+
+- name: Update the existing owner after both standby controllers are ready
+  hosts: desk_homeassistant_update_owner
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  serial: 1
+  tasks:
+    - ansible.builtin.include_role:
+        name: desk_homeassistant
+        tasks_from: start
+
+- name: Expose one native-ready Core through the existing ingress
+  hosts: deskboxes
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  tasks:
+    - name: Wait for one and only one ready Core
+      ansible.builtin.command:
+        argv:
+          - python3
+          - -c
+          - "import urllib.request,json; o=urllib.request.build_opener(urllib.request.ProxyHandler({})); s=[json.load(o.open('http://10.10.10.'+str(i)+':20223/status',timeout=3)) for i in (11,12,13)]; assert sum(v['state'] in ('active','starting','checkpointing') for v in s)==1; assert sum(v['ready'] for v in s)==1; print('One native-ready Core; three agents responding')"
+      register: homeassistant_ready
+      until: homeassistant_ready.rc == 0
+      retries: 70
+      delay: 3
+      changed_when: false
+    - name: Add the native HA listener with complete HTTP and MQTT validation
+      ansible.builtin.command:
+        argv: [python3, /usr/local/libexec/desk-homeassistant/install_proxy.py]
+      register: homeassistant_proxy
+      changed_when: homeassistant_proxy.stdout == 'changed'
+    - name: Verify existing runtime, DNS policy and VIPs
+      ansible.builtin.command:
+        argv: [python3, '-c', "{{ lookup('file',playbook_dir+'/roles/desk_ui/files/ui_guard.py') }}", guard]
+        stdin: '{{ homeassistant_protected.stdout }}'
+      changed_when: false
+      no_log: true

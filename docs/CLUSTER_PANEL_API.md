@@ -108,3 +108,19 @@ root page, Xiaozhi, DNS and Monitoring all returned HTTP 200.
 
 NOT RUN: ESP32 display decoding, rendering, touch and physical failover with a
 connected screen. No firmware build/flash or voice provider call was performed.
+
+## Optional Home Assistant projection (2026-10-16)
+
+`owners.homeassistant` uses the existing known/conflict/unknown shape and counts
+fresh active/starting/checkpointing Core owners. A missing owner does not imply
+that a standby is active. `nodes[].homeassistant` is optional and contains only:
+
+- `state`, `ready`, `sync`, `checkpoint_revision`, nullable `pending_disk_changes`;
+- `age_ms`, and `checkpoint_age_ms` for display only.
+
+Exclude metadata at 15 seconds even when the node itself is still online. Derive
+the replica count from fresh, synced nodes matching the newest observed revision;
+do not count an older bundle as synced to the new revision. No auth material,
+backup content, private peer endpoint or additional probes are exposed. The v1
+protocol and 8192-byte budget remain unchanged. `panel-homeassistant.yml` updates
+only the cached collectors serially with rollback and process-identity guards.

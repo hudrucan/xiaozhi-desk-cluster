@@ -1,0 +1,16 @@
+[Unit]
+Description=Single-active Home Assistant Core with independent deadline fence
+BindsTo=desk-homeassistant.service
+After=desk-homeassistant.service network-online.target
+
+[Service]
+Type=simple
+ExecStart=/opt/desk-homeassistant/bin/python /usr/local/libexec/desk-homeassistant/runtime.py run
+ExecStop=/opt/desk-homeassistant/bin/python /usr/local/libexec/desk-homeassistant/runtime.py stop
+ExecStopPost=/opt/desk-homeassistant/bin/python /usr/local/libexec/desk-homeassistant/runtime.py fence
+TimeoutStopSec=75
+Restart=no
+UMask=0077
+Environment=PYTHONDONTWRITEBYTECODE=1
+CPUWeight=1
+Nice=10

@@ -139,3 +139,9 @@ backend desk_network
 {% endfor %}
 # END DESK NETWORK BACKEND
 {% endif %}
+
+{% if desk_homeassistant_enabled | default(false) %}
+# BEGIN DESK HOME ASSISTANT
+{{ lookup('template', playbook_dir + '/roles/desk_homeassistant/templates/proxy.cfg.j2') }}
+# END DESK HOME ASSISTANT
+{% endif %}

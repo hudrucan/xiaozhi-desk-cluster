@@ -76,6 +76,13 @@
         group: root
         mode: '0644'
 
+    - name: Prepare the optional native Home Assistant reconnect page
+      ansible.builtin.copy:
+        src: '{{ playbook_dir }}/roles/desk_homeassistant/files/starting.html'
+        dest: /etc/haproxy/desk-homeassistant-starting.html
+        mode: '0644'
+      when: desk_homeassistant_enabled | default(false) | bool
+
     - name: Validate and install the HAProxy candidate
       ansible.builtin.template:
         src: haproxy.cfg.j2

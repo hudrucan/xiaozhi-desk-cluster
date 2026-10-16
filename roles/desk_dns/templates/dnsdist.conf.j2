@@ -3,9 +3,9 @@ setLocal("{{ desk_dns_vip }}:53")
 addLocal("{{ ansible_host }}:{{ desk_dns_test_port }}")
 {% if desk_dns_ipv6_vip_enabled | default(false) %}
 addLocal("[::]:53")
-setACL({"192.168.1.0/24", "10.10.10.0/24", "127.0.0.0/8", "fe80::/10", "::1/128"})
+setACL({"192.168.1.0/24", "10.10.10.0/24", "127.0.0.0/8"{% if desk_homeassistant_enabled | default(false) | bool %}, "10.88.0.0/16"{% endif %}, "fe80::/10", "::1/128"})
 {% else %}
-setACL({"192.168.1.0/24", "10.10.10.0/24", "127.0.0.0/8"})
+setACL({"192.168.1.0/24", "10.10.10.0/24", "127.0.0.0/8"{% if desk_homeassistant_enabled | default(false) | bool %}, "10.88.0.0/16"{% endif %}})
 {% endif %}
 -- Frontend liveness stays available during backend rebuilds and emergency DNS.
 addAction(QNameRule("frontend.desk-dns.test."), SpoofAction("127.0.0.1"))

@@ -1,0 +1,146 @@
+{
+  "date": "2026-10-16",
+  "method": "controller freeze, not physical power removal",
+  "handoff": {
+    "previous": "deskb3x",
+    "successor": "deskb1x",
+    "ready_seconds": 124.47,
+    "old_process_stopped_seconds": 18.45,
+    "new_process_started_seconds": 48.17,
+    "gap_seconds": 29.73,
+    "sampling_seconds": 0.25,
+    "revision": 3
+  },
+  "freeze": {
+    "previous": "deskb1x",
+    "successor": "deskb2x",
+    "ready_seconds": 116.39,
+    "old_process_stopped_seconds": 11.31,
+    "new_process_started_seconds": 27.59,
+    "gap_seconds": 16.28,
+    "sampling_seconds": 0.25,
+    "revision": 3
+  },
+  "resources": [
+    {
+      "node": 1,
+      "result": {
+        "controller": {
+          "cpu_one_core_percent": 2.51,
+          "working_mib": 24.9,
+          "oom_kill": 0
+        },
+        "mem_available_mib": 2431
+      }
+    },
+    {
+      "node": 2,
+      "result": {
+        "controller": {
+          "cpu_one_core_percent": 3.19,
+          "working_mib": 24.8,
+          "oom_kill": 0
+        },
+        "core": {
+          "cpu_one_core_percent": 4.71,
+          "working_mib": 375.3,
+          "oom_kill": 0
+        },
+        "mem_available_mib": 1963
+      }
+    },
+    {
+      "node": 3,
+      "result": {
+        "controller": {
+          "cpu_one_core_percent": 2.56,
+          "working_mib": 25.1,
+          "oom_kill": 0
+        },
+        "mem_available_mib": 2441
+      }
+    }
+  ],
+  "final_resources": [
+    {
+      "node": 1,
+      "result": {
+        "controller": {
+          "cpu_one_core_percent": 3.98,
+          "working_mib": 24.8,
+          "oom_kill": 0
+        },
+        "core": {
+          "cpu_one_core_percent": 0.28,
+          "working_mib": 272.8,
+          "oom_kill": 0
+        },
+        "mem_available_mib": 2158
+      }
+    },
+    {
+      "node": 2,
+      "result": {
+        "controller": {
+          "cpu_one_core_percent": 2.52,
+          "working_mib": 23.9,
+          "oom_kill": 0
+        },
+        "mem_available_mib": 2246
+      }
+    },
+    {
+      "node": 3,
+      "result": {
+        "controller": {
+          "cpu_one_core_percent": 2.57,
+          "working_mib": 23.6,
+          "oom_kill": 0
+        },
+        "mem_available_mib": 2449
+      }
+    }
+  ],
+  "final_state": {
+    "owner": "deskb1x",
+    "checkpoint_revision": 6,
+    "synced_nodes": 3,
+    "running_cores": 1,
+    "native_html": 200,
+    "unauthenticated_api": 401,
+    "websocket": "101 and auth_required",
+    "existing_uis": "all six HTTP 200",
+    "original_auth_and_password_store_preserved": true,
+    "native_ui_login": "PASS: user confirmed existing account reaches Overview via stable VIP",
+    "native_restart": "offline grace test and official supervisor behavior reviewed; UI restart not exercised"
+  },
+  "offline_checks": {
+    "core": 23,
+    "node_control": 31,
+    "dashboard_go": 29,
+    "dashboard_python": 4,
+    "ui_guard": 4
+  },
+  "online_sync": {
+    "revision": 9,
+    "replicas": 3,
+    "restored_files_per_node": 33,
+    "isolated_restore_sqlite_auth_panel": "PASS",
+    "live_failover_retested": false,
+    "measurement": {
+      "seconds": 78.31,
+      "samples": 75,
+      "readiness_http_errors": [],
+      "same_container_process": true,
+      "same_ha_processes": true,
+      "core_cpu_one_core_mean": 2.53,
+      "core_cpu_one_core_peak": 43.02,
+      "memory_mib": 261.19,
+      "oom_kill": "0",
+      "revision": 9
+    },
+    "native_panel": "Cluster",
+    "trigger": "manual_only",
+    "button_flicker": "fixed; unchanged DOM retained between polls"
+  }
+}

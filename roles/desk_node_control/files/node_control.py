@@ -215,7 +215,7 @@ class Control:
             age = time.time() - datetime.fromisoformat(value['observed_at'].replace('Z', '+00:00')).timestamp()
             components = value.get('components', {})
             configs = value.get('configuration', {})
-            result['metadata'] = {k: value.get(k) for k in ('ip', 'vip', 'core', 'mqtt', 'activity', 'connections', 'admission', 'maintenance_supported', 'dns_health', 'vpn_ready')}
+            result['metadata'] = {k: value.get(k) for k in ('ip', 'vip', 'core', 'mqtt', 'activity', 'connections', 'admission', 'maintenance_supported', 'dns_health', 'vpn_ready', 'homeassistant')}
             result['revisions'] = {k: configs.get(k, {}).get('revision') for k in ('xiaozhi', 'dns', 'monitoring')}
             valid = value.get('id') == self.node and value.get('boot_id') == result['boot_id'] and 0 <= age <= 15
             if valid:
@@ -546,6 +546,19 @@ class Control:
                 except Failure: pass
         return {'resumed':True}
 
+    def homeassistant_drained(self, views):
+        """Do not reboot before a clean Core handoff and matching survivor checkpoints."""
+        statuses = {node: view.get('metadata', {}).get('homeassistant') for node, view in views.items()}
+        if not any(statuses.values()):
+            return not Path('/etc/desk-homeassistant/config.json').is_file()
+        if len(statuses) != 3 or any(not isinstance(value, dict) for value in statuses.values()):
+            return False
+        local = statuses.get(self.node, {})
+        peers = [value for node, value in statuses.items() if node != self.node]
+        return (local.get('state') == 'standby' and all(value.get('sync') == 'synced' for value in statuses.values())
+                and len({value.get('checkpoint_revision') for value in statuses.values()}) == 1
+                and sum(value.get('ready') is True for value in peers) == 1)
+
     def begin_maintenance(self, lease):
         value = {**lease, 'state':'draining', 'services':[]}
         with self.lock:
@@ -576,7 +589,7 @@ class Control:
                 elif dns_withdrawn_at is None:
                     dns_withdrawn_at = time.monotonic()
                 dns_quiet = dns_withdrawn_at is not None and time.monotonic()-dns_withdrawn_at >= DNS_QUIET_SECONDS
-                if (dns_quiet and local.get('ready') and meta.get('maintenance_supported') is True
+                if (dns_quiet and self.homeassistant_drained(views) and local.get('ready') and meta.get('maintenance_supported') is True
                         and all(paused.get(k) is True for k in ('worker', 'core', 'mqtt'))
                         and len(counts) >= 7 and all(type(n) is int and n == 0 for n in counts)):
                     break

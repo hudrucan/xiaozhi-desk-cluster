@@ -39,21 +39,21 @@ Warming up status. A replica behind the newest observed checkpoint is Pending.
 Network metadata expires independently at 15 seconds, even while node telemetry
 remains current. Missing Network data does not hide the other telemetry.
 No device list, scan action or extra polling endpoint is added to the Pi.
-Overview puts all held roles (Xiaozhi, DNS, VPN, Network collector and Monitor) inside
+Overview puts all held roles (Xiaozhi, DNS, VPN, Network collector, Monitor and HA) inside
 each node card, wrapping into at most two lines. The old two owner-summary rows
 are removed. Multiple roles on one node are all retained; `!` marks conflicting
 owner claims. Network labels expire independently of VIP/node telemetry.
 Monitor identifies the ready hub preferred by the current fresh UI owner, using
 the same placement metadata as the web dashboard. All monitoring hubs can run
 simultaneously; this label is a preference rather than exclusive ownership.
-If needed, Network/Monitor are shortened to Net/Mon to keep all five roles within two rows.
+If needed, Network/Monitor are shortened to Net/Mon to keep all six roles within two rows.
 RAM and temperature share one 13-pixel, high-contrast line on Overview;
 the format is `30% RAM - 42°C`, without a Temp suffix.
 CPU remains 16 pixels, with room retained for two role-label rows.
 In Nodes, **Status** shows resources, five service-readiness columns (including
 VPN) and configuration sync. **Services** shows each VIP's Owner/Standby/
-Unconfirmed role, VPN eligibility, and that node's Network role, LAN/scan scope,
-checkpoint and sync/warmup state. Both views use the same node selection.
+Unconfirmed role, VPN eligibility, and compact Network and Home Assistant cards with role, checkpoint and sync state.
+The Network tab retains the LAN/scan scope details. Both views use the same node selection.
 Both views leave 10 pixels above and below the Status/Services selector. Resource values
 use 14-pixel text so the three metric cells have more breathing room.
 
@@ -287,3 +287,33 @@ unit tests and the Go collector tests passed. The Network layout was inspected
 at 480×320 for current, lagging, warming and expired metadata, along with the
 Overview role labels and both Nodes views. Physical use of the new Network tab
 and Nodes Status/Services controls remains a user check.
+
+## Home Assistant display
+
+The compact API includes optional per-node Home Assistant metadata. Overview
+shows the current Core owner with an HA role and a bottom status line with
+readiness/pending status, revision and matching replica count. Nodes → Services
+shows Home Assistant alongside Network, including standby replicas. Metadata
+expires independently after 15 seconds; conflicting owners are explicit rather
+than rendered as Ready. No extra tab, API polling thread or control action is
+added. Manual Sync config remains in the native HA Cluster panel.
+
+For an existing installation:
+
+```sh
+ansible-playbook -i inventory.ini panel-homeassistant.yml
+ansible-playbook -i pi-panel.ini pi-panel.yml --tags panel-ui
+```
+
+The collector upgrade guards Network and HA controller process identities, and
+the Pi update preserves rotation, calibration and local display preferences.
+
+Validation (2026-10-16): Go collector tests passed; the full Pi panel suite and
+focused HA freshness/conflict/unready/older-revision cases passed using the Pi
+interpreter. Serial collector rollout passed protected-service guards, including
+unchanged HA and Network controller/Core process identities. The public API was
+3868 bytes, exposing a fresh Core owner on deskb3x and r9 on all three replicas.
+The Pi service was active without restart loops, JSON settings/calibration hashes
+were unchanged, and a read-only framebuffer capture showed the live HA role,
+readiness/pending line and replica count. This is framebuffer/service validation;
+no new physical touch/calibration test was performed.

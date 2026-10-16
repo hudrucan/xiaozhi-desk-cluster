@@ -1,0 +1,25 @@
+frontend desk_homeassistant_ui
+    mode http
+    bind 0.0.0.0:8123
+    http-request deny unless { src 192.168.1.0/24 127.0.0.1 10.10.10.0/24 }
+    http-request set-header X-Forwarded-For %[src]
+    acl ha_document path /
+    acl ha_document req.hdr(Accept) -m sub text/html
+    http-request return status 200 content-type text/html file /etc/haproxy/desk-homeassistant-starting.html hdr Cache-Control no-store if ha_document { method GET } { nbsrv(desk_homeassistant_core) lt 1 }
+    timeout client 60s
+    default_backend desk_homeassistant_core
+
+backend desk_homeassistant_core
+    mode http
+    balance first
+    retries 2
+    option redispatch
+    http-request disable-l7-retry unless { method GET HEAD }
+    option httpchk GET /ready
+    http-check expect status 200
+    timeout connect 3s
+    timeout server 60s
+    timeout tunnel 1h
+{% for node in groups['deskboxes'] | sort %}
+    server {{ node }} {{ hostvars[node].cluster_ip }}:18123 check port 20223 inter 3s fall 2 rise 1
+{% endfor %}

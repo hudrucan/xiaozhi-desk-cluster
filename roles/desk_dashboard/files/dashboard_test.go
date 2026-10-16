@@ -637,3 +637,66 @@ func TestHealthRequiresValidLocalSnapshotButSurvivesPeerOutage(t *testing.T) {
 		t.Fatal("self-rejected telemetry passed rollout health")
 	}
 }
+
+func TestHomeAssistantMetadata(t *testing.T) {
+	now := time.Now()
+	meta := map[string]any{"protocol": "desk-homeassistant-v1", "node": "deskb1x", "observed_at": float64(now.Unix()), "checkpoint_at": float64(now.Add(-time.Minute).Unix()), "state": "active", "ready": true, "sync": "synced", "checkpoint_revision": float64(2), "pending_disk_changes": true}
+	h := homeAssistantMetadata(meta, "deskb1x", now)
+	if h == nil || h.Revision != 2 || !h.Ready || h.Pending == nil || !*h.Pending {
+		t.Fatal("valid state lost")
+	}
+	for _, key := range []string{"protocol", "node", "state", "checkpoint_revision", "observed_at", "ready"} {
+		copy := map[string]any{}
+		for k, v := range meta {
+			copy[k] = v
+		}
+		copy[key] = "invalid"
+		if homeAssistantMetadata(copy, "deskb1x", now) != nil {
+			t.Fatal("invalid metadata accepted", key)
+		}
+	}
+	meta["state"] = "standby"
+	if homeAssistantMetadata(meta, "deskb1x", now) != nil {
+		t.Fatal("standby claimed ready")
+	}
+	meta["ready"] = false
+	meta["observed_at"] = float64(now.Add(-20 * time.Second).Unix())
+	if homeAssistantMetadata(meta, "deskb1x", now) != nil {
+		t.Fatal("stale metadata accepted")
+	}
+}
+
+func TestPanelHomeAssistantProjectionFreshnessConflictAndBudget(t *testing.T) {
+	now := time.Now()
+	s, members := panelFixture(now)
+	pending := true
+	for i := range s.Nodes {
+		s.Nodes[i].HomeAssistant = &HomeAssistantStatus{State: "standby", Sync: "synced", Revision: 9, At: now, CheckpointAt: now.Add(-time.Minute)}
+	}
+	s.Nodes[2].HomeAssistant.State = "active"
+	s.Nodes[2].HomeAssistant.Ready = true
+	s.Nodes[2].HomeAssistant.Pending = &pending
+	p := panelSnapshot(s, members, now)
+	if p.Owners["homeassistant"].Node == nil || *p.Owners["homeassistant"].Node != "deskb3x" || p.Nodes[2].HomeAssistant.Pending == nil || !*p.Nodes[2].HomeAssistant.Pending {
+		t.Fatal("HA owner/pending lost")
+	}
+	raw, err := json.Marshal(p)
+	if err != nil || len(raw) > panelMaxBytes {
+		t.Fatal("HA projection exceeds bounded API")
+	}
+	s.Nodes[1].HomeAssistant.State = "starting"
+	if panelSnapshot(s, members, now).Owners["homeassistant"].State != "conflict" {
+		t.Fatal("Conflicting HA ownership hidden")
+	}
+	s.Nodes[1].HomeAssistant.State = "standby"
+	s.Nodes[2].HomeAssistant.At = now.Add(-15 * time.Second)
+	p = panelSnapshot(s, members, now)
+	if p.Nodes[2].HomeAssistant != nil || p.Owners["homeassistant"].State != "unknown" || !p.Nodes[2].Online {
+		t.Fatal("HA freshness must expire independently")
+	}
+	s.Nodes[2].HomeAssistant.At = now
+	s.Nodes[2].At = now.Add(-time.Minute)
+	if panelSnapshot(s, members, now).Nodes[2].HomeAssistant != nil {
+		t.Fatal("Offline node retained HA claim")
+	}
+}

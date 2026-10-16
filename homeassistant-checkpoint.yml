@@ -1,0 +1,29 @@
+---
+- name: Commit one clean Core checkpoint, optionally handing ownership to a peer
+  hosts: deskboxes
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  vars:
+    desk_homeassistant_operation: checkpoint
+  tasks:
+    - ansible.builtin.assert:
+        that: desk_homeassistant_operation in ['checkpoint','handoff']
+    - ansible.builtin.uri:
+        url: 'http://{{ cluster_ip }}:20223/status'
+        use_proxy: false
+        timeout: 3
+      register: homeassistant_operation_before
+    - name: Require exactly one ready owner rather than silently skipping a checkpoint
+      ansible.builtin.assert:
+        that:
+          - groups['deskboxes'] | map('extract',hostvars,'homeassistant_operation_before') | map(attribute='json') | selectattr('ready','equalto',true) | list | length == 1
+      run_once: true
+    - name: Stop cleanly, certify through quorum, then restart or hand off
+      ansible.builtin.command:
+        argv: [/opt/desk-homeassistant/bin/python, /usr/local/libexec/desk-homeassistant/agent.py, --action, '{{ desk_homeassistant_operation }}']
+      when: homeassistant_operation_before.json.state == 'active' and homeassistant_operation_before.json.ready
+      register: homeassistant_operation_result
+    - ansible.builtin.debug:
+        msg: '{{ homeassistant_operation_result.stdout }}'
+      when: homeassistant_operation_result is not skipped

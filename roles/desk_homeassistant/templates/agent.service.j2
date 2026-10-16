@@ -1,0 +1,27 @@
+[Unit]
+Description=Desk Home Assistant majority lease and consistent checkpoint controller
+Wants=network-online.target nats-server.service
+After=network-online.target nats-server.service desk-dashboard.service
+
+[Service]
+ExecStart=/opt/desk-homeassistant/bin/python /usr/local/libexec/desk-homeassistant/agent.py
+Restart=on-failure
+RestartSec=5
+RuntimeDirectory=desk-homeassistant
+RuntimeDirectoryMode=0755
+UMask=0077
+MemoryMax=256M
+TasksMax=64
+CPUWeight=1
+Nice=10
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=MALLOC_ARENA_MAX=2
+ProtectHome=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+LockPersonality=true
+RestrictRealtime=true
+TimeoutStopSec=15
+
+[Install]
+WantedBy=multi-user.target

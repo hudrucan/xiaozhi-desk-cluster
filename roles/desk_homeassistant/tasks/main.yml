@@ -1,0 +1,168 @@
+---
+- name: Require the full existing cluster and explicit enablement
+  ansible.builtin.assert:
+    that:
+      - desk_homeassistant_enabled | bool
+      - ansible_play_hosts_all | sort == ['deskb1x','deskb2x','deskb3x']
+- name: Freeze protected services before preparation
+  ansible.builtin.command:
+    argv: [python3, '-c', "{{ lookup('file',playbook_dir+'/roles/desk_ui/files/ui_guard.py') }}", freeze]
+  register: homeassistant_protected
+  changed_when: false
+  no_log: true
+- name: Create isolated credential, artifact and state paths
+  ansible.builtin.file:
+    path: '{{ item.path }}'
+    state: directory
+    mode: '{{ item.mode }}'
+  loop:
+    - {path: /etc/desk-homeassistant, mode: '0700'}
+    - {path: /var/lib/desk-homeassistant, mode: '0700'}
+    - {path: /var/lib/desk-homeassistant/blobs, mode: '0700'}
+    - {path: /var/lib/desk-homeassistant/generations, mode: '0700'}
+    - {path: /usr/local/libexec/desk-homeassistant, mode: '0755'}
+- name: Load ignored cluster and scoped NATS credentials
+  ansible.builtin.set_fact:
+    homeassistant_secret: "{{ lookup('file',playbook_dir+'/secret/homeassistant/cluster.json') | from_json }}"
+    homeassistant_nats: "{{ lookup('file',playbook_dir+'/secret/homeassistant/nats.json') | from_json }}"
+  no_log: true
+- name: Install Python helpers and readiness-only custom component
+  ansible.builtin.copy:
+    src: '{{ item }}'
+    dest: '/usr/local/libexec/desk-homeassistant/{{ item }}'
+    mode: '0700'
+  loop: [agent.py, lease.py, config_journal.py, protocol.py, snapshot.py, ui_bridge.py, runtime.py, http_config.py, component_config.py, bootstrap.py, install_nats.py, install_proxy.py]
+  register: homeassistant_helpers
+- name: Install readiness component source separately from executable helpers
+  ansible.builtin.copy:
+    src: desk_cluster/
+    dest: /usr/local/libexec/desk-homeassistant/desk_cluster/
+    mode: '0644'
+    directory_mode: '0755'
+  register: homeassistant_component
+- name: Install the distro cryptography library for encrypted checkpoints
+  ansible.builtin.apt:
+    name: python3-cryptography
+    state: present
+- name: Verify installed system Python dependencies
+  ansible.builtin.command:
+    argv: [python3, '-c', 'import cryptography,yaml,venv']
+  changed_when: false
+- name: Create dedicated venv using existing system crypto/YAML
+  ansible.builtin.command:
+    argv: [python3, '-m', venv, --system-site-packages, /opt/desk-homeassistant]
+    creates: /opt/desk-homeassistant/bin/python
+- name: Install verified NATS requirement list
+  ansible.builtin.copy:
+    src: requirements.txt
+    dest: /usr/local/libexec/desk-homeassistant/requirements.txt
+    mode: '0644'
+- name: Install hash-pinned NATS package in the dedicated controller environment
+  ansible.builtin.pip:
+    requirements: /usr/local/libexec/desk-homeassistant/requirements.txt
+    executable: /opt/desk-homeassistant/bin/pip
+    extra_args: '--require-hashes --only-binary=:all:'
+- name: Install private peer TLS material
+  ansible.builtin.copy:
+    src: '{{ playbook_dir }}/secret/homeassistant/{{ item }}'
+    dest: '/etc/desk-homeassistant/{{ item }}'
+    mode: '0600'
+  loop: [peer.crt, peer.key]
+  no_log: true
+- name: Prepare bounded checkpoint resource budget
+  ansible.builtin.template:
+    src: checkpoint.slice.j2
+    dest: /etc/systemd/system/desk-homeassistant-checkpoint.slice
+    mode: '0644'
+- name: Write draft runtime settings without exposing secrets
+  ansible.builtin.copy:
+    content: "{{ dict(homeassistant_secret,node=inventory_hostname,members={'deskb1x':hostvars['deskb1x'].cluster_ip,'deskb2x':hostvars['deskb2x'].cluster_ip,'deskb3x':hostvars['deskb3x'].cluster_ip},servers=groups['deskboxes'] | map('extract',hostvars,'cluster_ip') | map('regex_replace','^(.*)$','nats://\\1:4222') | list,nats=homeassistant_nats[inventory_hostname],image=desk_homeassistant_image,certificate='/etc/desk-homeassistant/peer.crt',tls_key='/etc/desk-homeassistant/peer.key',seed={}) | to_nice_json }}"
+    dest: /etc/desk-homeassistant/draft.json
+    mode: '0600'
+  no_log: true
+- name: Check headroom and unused private endpoints
+  ansible.builtin.command:
+    argv: [python3, /usr/local/libexec/desk-homeassistant/bootstrap.py, preflight, --config, /etc/desk-homeassistant/draft.json]
+  changed_when: false
+- name: Cache the approved official Core ARM64 image before activating any runtime
+  ansible.builtin.command:
+    argv: [podman, pull, --quiet, '{{ desk_homeassistant_image }}']
+  changed_when: false
+- name: Verify cached image architecture
+  ansible.builtin.command:
+    argv: [podman, inspect, '--format', '{{ "{{.Architecture}}" }}', '{{ desk_homeassistant_image }}']
+  register: homeassistant_arch
+  changed_when: false
+  failed_when: homeassistant_arch.stdout != 'arm64'
+- name: Build initial encrypted checkpoint from retained stopped Core
+  ansible.builtin.command:
+    argv: [python3, /usr/local/libexec/desk-homeassistant/bootstrap.py, seed, --config, /etc/desk-homeassistant/draft.json]
+  register: homeassistant_seed_result
+  changed_when: homeassistant_seed_result.stdout == 'created'
+  when: inventory_hostname == desk_homeassistant_seed_node
+- name: Fetch encrypted initial manifest and bundle into ignored local storage
+  when: inventory_hostname == desk_homeassistant_seed_node
+  block:
+    - ansible.builtin.slurp:
+        src: /var/lib/desk-homeassistant/seed.json
+      register: homeassistant_seed_file
+      no_log: true
+    - ansible.builtin.set_fact:
+        homeassistant_seed: '{{ homeassistant_seed_file.content | b64decode | from_json }}'
+      no_log: true
+    - ansible.builtin.fetch:
+        src: '/var/lib/desk-homeassistant/blobs/{{ homeassistant_seed.digest }}'
+        dest: '{{ playbook_dir }}/secret/homeassistant/seed.bin'
+        flat: true
+      no_log: true
+- name: Install and verify the same encrypted seed on every voter
+  ansible.builtin.copy:
+    src: '{{ playbook_dir }}/secret/homeassistant/seed.bin'
+    dest: '/var/lib/desk-homeassistant/blobs/{{ hostvars[desk_homeassistant_seed_node].homeassistant_seed.digest }}'
+    mode: '0600'
+  no_log: true
+- name: Activate immutable runtime settings and original seed identity
+  ansible.builtin.copy:
+    content: "{{ dict(homeassistant_secret,node=inventory_hostname,members={'deskb1x':hostvars['deskb1x'].cluster_ip,'deskb2x':hostvars['deskb2x'].cluster_ip,'deskb3x':hostvars['deskb3x'].cluster_ip},servers=groups['deskboxes'] | map('extract',hostvars,'cluster_ip') | map('regex_replace','^(.*)$','nats://\\1:4222') | list,nats=homeassistant_nats[inventory_hostname],image=desk_homeassistant_image,certificate='/etc/desk-homeassistant/peer.crt',tls_key='/etc/desk-homeassistant/peer.key',seed=hostvars[desk_homeassistant_seed_node].homeassistant_seed) | to_nice_json }}"
+    dest: /etc/desk-homeassistant/config.json
+    mode: '0600'
+  register: homeassistant_config
+  no_log: true
+- name: Verify initial encrypted snapshot before joining quorum
+  ansible.builtin.command:
+    argv: [python3, /usr/local/libexec/desk-homeassistant/bootstrap.py, validate-seed]
+  changed_when: false
+- name: Stage scoped NATS credentials for additive reload
+  ansible.builtin.copy:
+    content: '{{ homeassistant_nats | to_nice_json }}'
+    dest: /etc/desk-homeassistant/nats-users.json
+    mode: '0600'
+  no_log: true
+- name: Reload only the additive NATS user block
+  ansible.builtin.command:
+    argv: [python3, /usr/local/libexec/desk-homeassistant/install_nats.py]
+  register: homeassistant_nats_reload
+  changed_when: homeassistant_nats_reload.stdout == 'changed'
+  no_log: true
+- name: Install controller and independently fenced Core units
+  ansible.builtin.template:
+    src: '{{ item.src }}'
+    dest: '/etc/systemd/system/{{ item.name }}'
+    mode: '0644'
+  loop:
+    - {src: agent.service.j2, name: desk-homeassistant.service}
+    - {src: core.service.j2, name: desk-homeassistant-core.service}
+  register: homeassistant_units
+- name: Install the reconnecting document for cold takeover
+  ansible.builtin.copy:
+    src: starting.html
+    dest: /etc/haproxy/desk-homeassistant-starting.html
+    mode: '0644'
+- name: Stage the native root-origin UI proxy
+  ansible.builtin.template:
+    src: proxy.cfg.j2
+    dest: /etc/desk-homeassistant/proxy.cfg
+    mode: '0644'
+- name: Load new units without starting Core on standby nodes
+  ansible.builtin.systemd_service:
+    daemon_reload: true

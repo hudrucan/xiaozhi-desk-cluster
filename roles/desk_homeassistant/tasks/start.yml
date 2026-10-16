@@ -1,0 +1,42 @@
+---
+- name: Inspect existing controller before a planned update
+  ansible.builtin.uri:
+    url: 'http://{{ cluster_ip }}:20223/status'
+    use_proxy: false
+    timeout: 3
+  register: homeassistant_before_update
+  failed_when: false
+  changed_when: false
+- name: Wait for a started owner to become ready before updating it
+  ansible.builtin.uri:
+    url: 'http://{{ cluster_ip }}:20223/status'
+    use_proxy: false
+    timeout: 3
+  register: homeassistant_update_ready
+  until: homeassistant_update_ready.json.state == 'standby' or homeassistant_update_ready.json.ready
+  retries: 70
+  delay: 3
+  when:
+    - homeassistant_before_update.status == 200
+    - homeassistant_helpers.changed or homeassistant_component.changed or homeassistant_config.changed or homeassistant_units.changed
+- name: Certify and hand off an existing owner before its controller update
+  ansible.builtin.command:
+    argv: [/opt/desk-homeassistant/bin/python, /usr/local/libexec/desk-homeassistant/agent.py, --action, handoff]
+  when:
+    - homeassistant_update_ready is not skipped
+    - homeassistant_update_ready.json.state == 'active'
+    - homeassistant_update_ready.json.ready
+- name: Refresh only this HA controller when its source or settings changed
+  ansible.builtin.systemd_service:
+    name: desk-homeassistant
+    enabled: true
+    state: '{{ "restarted" if homeassistant_helpers.changed or homeassistant_component.changed or homeassistant_config.changed or homeassistant_units.changed else "started" }}'
+- name: Require controller metadata and boot-quarantine completion
+  ansible.builtin.uri:
+    url: 'http://{{ cluster_ip }}:20223/status'
+    use_proxy: false
+    timeout: 3
+  register: homeassistant_started
+  until: homeassistant_started.json.voter_ready | default(false)
+  retries: 30
+  delay: 2

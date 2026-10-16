@@ -22,6 +22,7 @@ def digest(data):
     return hashlib.sha256(data).hexdigest()
 
 def base(text):
+    text=re.sub(r'^# BEGIN DESK HOME ASSISTANT\n.*?^# END DESK HOME ASSISTANT\n','',text,flags=re.M|re.S)
     for name in ('MONITORING ROUTE','MONITORING BACKEND','DNS UI ROUTE','DNS UI BACKEND','DASHBOARD BACKEND','VPN UI ROUTE','VPN UI BACKEND','NETWORK ROUTE','NETWORK BACKEND'):
         text=re.sub(r'^# BEGIN DESK '+name+r'\n.*?^# END DESK '+name+r'\n','',text,flags=re.M|re.S)
     return text

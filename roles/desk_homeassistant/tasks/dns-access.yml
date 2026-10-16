@@ -1,0 +1,21 @@
+---
+- ansible.builtin.assert:
+    that: desk_homeassistant_enabled | bool
+- name: Install the narrow Core bridge DNS ACL helper
+  ansible.builtin.copy:
+    src: dns_access.py
+    dest: /usr/local/libexec/desk-homeassistant-dns-access.py
+    mode: '0700'
+- name: Validate and activate only the Core bridge ACL addition
+  ansible.builtin.command:
+    argv: [python3, /usr/local/libexec/desk-homeassistant-dns-access.py]
+  register: homeassistant_dns_acl
+  changed_when: homeassistant_dns_acl.stdout == 'changed'
+- name: Verify this frontend and the existing three-node DNS backend
+  ansible.builtin.command:
+    argv: [python3, /usr/local/libexec/desk-dns/dns-probe.py, balanced, --config, /etc/desk-dns/public.json, --host, '{{ ansible_host }}', --port, '5353']
+  register: homeassistant_dns_ready
+  until: homeassistant_dns_ready.rc == 0
+  retries: 8
+  delay: 2
+  changed_when: false

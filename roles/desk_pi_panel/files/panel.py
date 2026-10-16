@@ -124,6 +124,14 @@ def validate(value):
         for v in n['jobs'].values():
             if v is not None and (type(v) is not int or not 0<=v<=2):
                 raise ValueError('Invalid activity')
+        ha=n.get('homeassistant')
+        if ha is not None:
+            if not isinstance(ha,dict) or ha.get('state') not in ('active','standby','starting','checkpointing') or ha.get('sync') not in ('synced','pending') or type(ha.get('ready')) is not bool or (ha['ready'] and ha['state']!='active'):
+                raise ValueError('Invalid Home Assistant state')
+            if type(ha.get('checkpoint_revision')) is not int or not 0<=ha['checkpoint_revision']<=1e9 or (ha.get('pending_disk_changes') is not None and type(ha['pending_disk_changes']) is not bool):
+                raise ValueError('Invalid Home Assistant checkpoint')
+            if any(not finite(ha.get(k)) or not 0<=ha[k]<=1e12 for k in ('age_ms','checkpoint_age_ms')):
+                raise ValueError('Invalid Home Assistant age')
         info=n.get('network')
         if info is not None:
             if not isinstance(info,dict) or info.get('state') not in ('active','standby','starting') or info.get('sync') not in ('synced','pending'):
@@ -142,7 +150,7 @@ def validate(value):
         raise ValueError('Invalid routing metadata')
     if value.get('monitoring_preferred') is not None and value['monitoring_preferred'] not in MEMBERS:
         raise ValueError('Invalid monitoring preference')
-    for key in ('dns','xiaozhi')+tuple(k for k in ('vpn','network') if k in value['owners']):
+    for key in ('dns','xiaozhi')+tuple(k for k in ('vpn','network','homeassistant') if k in value['owners']):
         o=value['owners'].get(key)
         if not isinstance(o,dict) or o.get('state') not in ('known','conflict','unknown') or (o.get('node') is not None and o['node'] not in MEMBERS):
             raise ValueError('Invalid owner')
@@ -215,6 +223,22 @@ def node_live(n,live,elapsed):
 def network_live(n,live,elapsed):
     info=n.get('network')
     return node_live(n,live,elapsed) and bool(info) and info['age_ms']+elapsed<15000
+
+def homeassistant_live(n,live,elapsed):
+    info=n.get('homeassistant')
+    return node_live(n,live,elapsed) and bool(info) and info['age_ms']+elapsed<15000
+
+def homeassistant_detail(n,value,live,elapsed):
+    if not homeassistant_live(n,live,elapsed):
+        return {'role':'Unknown','label':'Unavailable','revision':'No fresh metadata','ok':False,'replicas':0}
+    h=n['homeassistant'];revision=max(peer['homeassistant']['checkpoint_revision'] for peer in value['nodes'] if homeassistant_live(peer,live,elapsed))
+    copies=sum(homeassistant_live(peer,live,elapsed) and peer['homeassistant']['sync']=='synced' and peer['homeassistant']['checkpoint_revision']==revision for peer in value['nodes'])
+    ok=h['sync']=='synced' and h['checkpoint_revision']==revision
+    role={'active':'Owner','starting':'Starting','checkpointing':'Checkpoint','standby':'Standby'}[h['state']]
+    label='Ready' if h['ready'] else 'Not ready' if h['state']=='active' else 'Starting' if h['state']=='starting' else 'Checkpoint' if h['state']=='checkpointing' else 'Synced' if ok else 'Pending'
+    if h.get('pending_disk_changes') is True:label+=' · pending'
+    conflict=sum(homeassistant_live(peer,live,elapsed) and peer['homeassistant']['state']!='standby' for peer in value['nodes'])>1
+    return {'role':'Conflict' if conflict else role,'label':'Conflict' if conflict else label,'revision':f'r{h["checkpoint_revision"]} · {copies}/3 copies' if h['checkpoint_revision']==revision else f'r{h["checkpoint_revision"]} · latest r{revision}','ok':ok and not conflict and h['state'] in ('active','standby') and (h['state']=='standby' or h['ready']) and h.get('pending_disk_changes') is not True,'replicas':copies}
 
 def network_detail(n,value,live,elapsed):
     if not network_live(n,live,elapsed):
@@ -407,7 +431,12 @@ class Renderer:
     def owner(self,value,key,live,elapsed):
         o=(value or {}).get('owners',{}).get(key,{})
         node=next((n for n in (value or {}).get('nodes',[]) if n['id']==o.get('node')),None)
-        if key=='network':
+        if key=='homeassistant':
+            if o.get('state')=='conflict':
+                active=[n for n in (value or {}).get('nodes',[]) if homeassistant_live(n,live,elapsed) and n['homeassistant']['state']!='standby']
+                return 'Conflict' if len(active)>1 else 'Unconfirmed'
+            if not node or not homeassistant_live(node,live,elapsed):return 'Unconfirmed'
+        elif key=='network':
             if o.get('state')=='conflict':
                 active=[n for n in (value or {}).get('nodes',[]) if network_live(n,live,elapsed) and n['network']['state']=='active' and n['network']['voter_ready']]
                 return 'Conflict' if len(active)>1 else 'Unconfirmed'
@@ -427,6 +456,8 @@ class Renderer:
             roles.append('Network'+(' !' if self.owner(value,'network',live,elapsed)=='Conflict' else ''))
         if value.get('monitoring_preferred')==n['id'] and n.get('monitoring_ready') is True and self.owner(value,'xiaozhi',live,elapsed) in MEMBERS:
             roles.append('Monitor')
+        if homeassistant_live(n,live,elapsed) and n['homeassistant']['state']!='standby':
+            roles.append('HA'+(' !' if self.owner(value,'homeassistant',live,elapsed)=='Conflict' else ''))
         if roles:return roles
         standby=all(n['vip'].get(key) is False for key in ('xiaozhi','dns','vpn')) and info is not None and info['state']=='standby'
         return ['Standby' if standby else 'Unconfirmed']
@@ -469,7 +500,14 @@ class Renderer:
         online=sum(node_live(n,live,elapsed) for n in value['nodes']) if value else 0
         self.text(d,(14,236),label,12,GREEN if live and mode=='adguard' else RED)
         self.right_text(d,(340,232,466,254),f'{online}/3 online',12,MUTED)
-        self.text(d,(14,256),'Touch a node for details',11,MUTED)
+        ha_owner=self.owner(value,'homeassistant',live,elapsed)
+        active=next((n for n in (value or {}).get('nodes',[]) if n['id']==ha_owner),None)
+        if active:
+            detail=homeassistant_detail(active,value,live,elapsed)
+            self.text(d,(14,256),'HA · '+ha_owner+' · '+detail['label'],11,GREEN if detail['ok'] and active['homeassistant']['ready'] else GOLD,width=310)
+            self.right_text(d,(338,251,466,273),detail['revision'],11,MUTED)
+        elif 'homeassistant' in (value or {}).get('owners',{}):self.text(d,(14,256),'HA · '+ha_owner,11,RED)
+        else:self.text(d,(14,256),'Touch a node for details',11,MUTED)
     def network(self,d,value,live,elapsed):
         self.text(d,(14,46),'Network collector',14,TEXT,True)
         owner=self.owner(value,'network',live,elapsed)
@@ -516,17 +554,13 @@ class Renderer:
             ready=n.get('vpn_ready')
             self.text(d,(26,184),'VPN eligibility',12,MUTED)
             self.right_text(d,(250,179,452,202),'Ready' if ready is True else 'Not eligible' if ready is False else 'Unconfirmed',12,GREEN if ready is True else MUTED)
-            detail=network_detail(n,value,live,elapsed)
-            d.rounded_rectangle((14,209,466,268),radius=8,fill=SURFACE,outline=BORDER)
-            self.text(d,(26,215),'Network · '+detail['role'],12,TEXT,True)
-            self.right_text(d,(310,210,452,234),detail['label'],12,GREEN if detail['ok'] else MUTED)
-            info=n.get('network') if network_live(n,live,elapsed) else None
-            scope='Waiting for fresh service metadata'
-            if info:
-                scope='LAN '+info['subnet']
-                if info['state']!='standby':scope+=' · '+(f'scan every {info["scan_minutes"]} min' if info['scan_minutes'] else (info.get('scan_schedule') or 'schedule unavailable'))
-            self.text(d,(26,235),scope,11,MUTED,width=426)
-            self.text(d,(26,251),detail['revision'],11,MUTED,width=426)
+            for box,title,detail in (((14,209,234,268),'Network',network_detail(n,value,live,elapsed)),
+                                     ((246,209,466,268),'Home Assistant',homeassistant_detail(n,value,live,elapsed))):
+                d.rounded_rectangle(box,radius=8,fill=SURFACE,outline=BORDER)
+                self.text(d,(box[0]+12,215),title,12,TEXT,True)
+                self.right_text(d,(box[0]+130,210,box[2]-12,233),detail['role'],11,GOLD if detail['role']=='Owner' else MUTED)
+                self.text(d,(box[0]+12,235),detail['label'],11,GREEN if detail['ok'] else MUTED,width=196)
+                self.text(d,(box[0]+12,251),detail['revision'],11,MUTED,width=196)
             return
         boxes=self.columns(d,(14,125,466,169),3)
         for box,(label,field,suffix) in zip(boxes,(('CPU','cpu_percent','%'),('Memory','memory_percent','%'),('Temp','temperature_c','°C'))):

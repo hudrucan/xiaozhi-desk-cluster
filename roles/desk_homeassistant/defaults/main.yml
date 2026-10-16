@@ -1,0 +1,5 @@
+---
+desk_homeassistant_enabled: false
+desk_homeassistant_action: present
+desk_homeassistant_seed_node: deskb1x
+desk_homeassistant_image: ghcr.io/home-assistant/home-assistant@sha256:17100609af8bb79bf5390f5d514b9aaeb00d184ce758f37769cd80c450851db7

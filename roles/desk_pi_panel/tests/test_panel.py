@@ -28,7 +28,42 @@ def network_fixture():
             'voter_ready':True,'revision':{'term':33,'node':'deskb1x','sequence':40}}
     return v
 
+def homeassistant_fixture():
+    v=fixture();v['owners']['homeassistant']={'state':'known','node':'deskb3x'}
+    for i,n in enumerate(v['nodes']):
+        n['homeassistant']={'state':'active' if i==2 else 'standby','sync':'synced','ready':i==2,
+            'checkpoint_revision':9,'pending_disk_changes':False if i==2 else None,'age_ms':1000,'checkpoint_age_ms':60000}
+    return v
+
 class PanelTests(unittest.TestCase):
+    def test_homeassistant_metadata_is_optional_and_validated(self):
+        panel.validate(fixture());panel.validate(homeassistant_fixture())
+        for change in ({'age_ms':float('nan')},{'ready':1},{'checkpoint_revision':True},{'pending_disk_changes':1},{'state':'standby','ready':True}):
+            v=homeassistant_fixture();v['nodes'][2]['homeassistant'].update(change)
+            with self.assertRaises(ValueError):panel.validate(v)
+    def test_homeassistant_roles_expire_and_standby_counts_match_revision(self):
+        v=homeassistant_fixture();r=panel.Renderer.__new__(panel.Renderer);n=v['nodes'][2]
+        self.assertIn('HA',r.overview_roles(n,v,True,0));self.assertEqual(r.owner(v,'homeassistant',True,0),'deskb3x')
+        self.assertEqual(panel.homeassistant_detail(n,v,True,0)['replicas'],3)
+        v['nodes'][0]['homeassistant']['checkpoint_revision']=8
+        self.assertEqual(panel.homeassistant_detail(n,v,True,0)['replicas'],2)
+        self.assertEqual(panel.homeassistant_detail(v['nodes'][0],v,True,0)['label'],'Pending')
+        self.assertEqual(panel.homeassistant_detail(v['nodes'][0],v,True,0)['revision'],'r8 · latest r9')
+        n['homeassistant']['pending_disk_changes']=True
+        self.assertEqual(panel.homeassistant_detail(n,v,True,0)['label'],'Ready · pending')
+        self.assertNotIn('HA',r.overview_roles(n,v,True,14000));self.assertEqual(r.owner(v,'homeassistant',True,14000),'Unconfirmed')
+        self.assertEqual(panel.homeassistant_detail(n,v,True,14000)['label'],'Unavailable')
+    def test_homeassistant_owner_with_unready_core_is_not_green(self):
+        v=homeassistant_fixture();n=v['nodes'][2];n['homeassistant']['ready']=False
+        detail=panel.homeassistant_detail(n,v,True,0)
+        self.assertEqual(detail['label'],'Not ready');self.assertFalse(detail['ok'])
+    def test_homeassistant_conflicting_owner_is_not_reported_ready(self):
+        v=homeassistant_fixture();v['owners']['homeassistant']={'state':'conflict','node':None};v['nodes'][1]['homeassistant'].update(state='starting',ready=False)
+        r=panel.Renderer.__new__(panel.Renderer);self.assertEqual(r.owner(v,'homeassistant',True,0),'Conflict')
+        self.assertIn('HA !',r.overview_roles(v['nodes'][2],v,True,0))
+        self.assertEqual(panel.homeassistant_detail(v['nodes'][2],v,True,0)['label'],'Conflict')
+        self.assertFalse(panel.homeassistant_detail(v['nodes'][2],v,True,0)['ok'])
+
     def test_fetch_interval_change_wakes_existing_worker_without_starting_another(self):
         model=panel.Model(60);first=threading.Event();second=threading.Event()
         response=Mock();response.__enter__=Mock(return_value=response);response.__exit__=Mock(return_value=False)

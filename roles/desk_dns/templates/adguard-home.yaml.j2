@@ -18,7 +18,7 @@ dns:
   upstream_mode: load_balance
   fallback_dns: []
   bootstrap_dns: []
-  allowed_clients: {{ (desk_dns_nodes.values() | map(attribute='private') | list + ['127.0.0.1'] + (['192.168.1.0/24', 'fe80::/10'] if desk_dns_client_identity_enabled | default(false) else [])) | to_json }}
+  allowed_clients: {{ (desk_dns_nodes.values() | map(attribute='private') | list + ['127.0.0.1'] + (['10.88.0.0/16'] if desk_homeassistant_enabled | default(false) | bool else []) + (['192.168.1.0/24', 'fe80::/10'] if desk_dns_client_identity_enabled | default(false) else [])) | to_json }}
 {% if desk_dns_client_identity_enabled | default(false) %}
   trusted_proxies: [127.0.0.1/32]
 {% endif %}

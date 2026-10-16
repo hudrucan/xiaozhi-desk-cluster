@@ -127,7 +127,58 @@ func networkMetadata(meta map[string]any, node string, now time.Time) *NetworkSt
 	return result
 }
 
+type HomeAssistantStatus struct {
+	State        string    `json:"state"`
+	Sync         string    `json:"sync"`
+	Ready        bool      `json:"ready"`
+	Revision     int       `json:"checkpoint_revision"`
+	CheckpointAt time.Time `json:"checkpoint_at"`
+	Pending      *bool     `json:"pending_disk_changes"`
+	At           time.Time `json:"observed_at"`
+}
+
+func validHomeAssistant(h *HomeAssistantStatus) bool {
+	if h == nil {
+		return true
+	}
+	if h.State != "active" && h.State != "starting" && h.State != "checkpointing" && h.State != "standby" {
+		return false
+	}
+	return (h.Sync == "synced" || h.Sync == "pending") && h.Revision >= 0 && h.Revision <= 1000000000 && !h.At.IsZero() && !h.CheckpointAt.IsZero() && (!h.Ready || h.State == "active")
+}
+func homeAssistantMetadata(meta map[string]any, node string, now time.Time) *HomeAssistantStatus {
+	stamp, ok := meta["observed_at"].(float64)
+	if !ok || math.IsNaN(stamp) || math.IsInf(stamp, 0) || meta["protocol"] != "desk-homeassistant-v1" || meta["node"] != node {
+		return nil
+	}
+	age := float64(now.UnixNano())/1e9 - stamp
+	if age < -5 || age >= 15 {
+		return nil
+	}
+	revision := number(meta["checkpoint_revision"])
+	checkpoint, ok := meta["checkpoint_at"].(float64)
+	if !ok || math.IsNaN(checkpoint) || math.IsInf(checkpoint, 0) || checkpoint <= 0 || checkpoint > stamp+5 || revision == nil {
+		return nil
+	}
+	state, _ := meta["state"].(string)
+	syncState, _ := meta["sync"].(string)
+	ready, ok := meta["ready"].(bool)
+	if !ok {
+		return nil
+	}
+	var pending *bool
+	if v, ok := meta["pending_disk_changes"].(bool); ok {
+		pending = &v
+	}
+	h := &HomeAssistantStatus{State: state, Sync: syncState, Ready: ready, Revision: *revision, CheckpointAt: time.Unix(0, int64(checkpoint*1e9)).UTC(), Pending: pending, At: time.Unix(0, int64(stamp*1e9)).UTC()}
+	if !validHomeAssistant(h) {
+		return nil
+	}
+	return h
+}
+
 type Node struct {
+	HomeAssistant        *HomeAssistantStatus  `json:"homeassistant,omitempty"`
 	Protocol             string                `json:"protocol"`
 	ID                   string                `json:"id"`
 	IP                   string                `json:"ip"`
@@ -773,6 +824,7 @@ func (d *Dashboard) collect(ctx context.Context) {
 	n.Config["xiaozhi"] = s
 	n.ServiceRoles = map[string]string{}
 	n.MonitoringReady = d.monitorHealthy
+	n.HomeAssistant = homeAssistantMetadata(readJSON("/run/desk-homeassistant/public.json", 4096), d.config.Node, time.Now())
 	n.Network = networkMetadata(readJSON("/run/desk-network/public.json", 2048), d.config.Node, time.Now())
 	if n.Network != nil && n.Network.State == "active" {
 		n.ServiceRoles["network"] = "active"
@@ -1073,7 +1125,7 @@ func validateNode(n Node, m Member, now time.Time) bool {
 	if n.MonitoringPreferred != "" && n.MonitoringPreferred != "deskb1x" && n.MonitoringPreferred != "deskb2x" && n.MonitoringPreferred != "deskb3x" {
 		return false
 	}
-	if !validNetwork(n.Network) {
+	if !validHomeAssistant(n.HomeAssistant) || !validNetwork(n.Network) {
 		return false
 	}
 	for key, value := range n.ServiceRoles {
@@ -1223,6 +1275,15 @@ type PanelNetwork struct {
 	ScanSchedule string           `json:"scan_schedule,omitempty"`
 	VoterReady   bool             `json:"voter_ready"`
 }
+type PanelHomeAssistant struct {
+	State           string `json:"state"`
+	Sync            string `json:"sync"`
+	Ready           bool   `json:"ready"`
+	Revision        int    `json:"checkpoint_revision"`
+	Pending         *bool  `json:"pending_disk_changes"`
+	AgeMS           *int64 `json:"age_ms"`
+	CheckpointAgeMS *int64 `json:"checkpoint_age_ms"`
+}
 type PanelNode struct {
 	ID              string               `json:"id"`
 	IP              string               `json:"ip"`
@@ -1243,6 +1304,7 @@ type PanelNode struct {
 	Components      map[string]string    `json:"components"`
 	Config          map[string]PanelSync `json:"configuration"`
 	Network         *PanelNetwork        `json:"network,omitempty"`
+	HomeAssistant   *PanelHomeAssistant  `json:"homeassistant,omitempty"`
 }
 type PanelDNS struct {
 	Mode     string   `json:"mode"`
@@ -1305,9 +1367,15 @@ func panelNetwork(value *NetworkStatus, now time.Time) *PanelNetwork {
 		AgeMS: panelAge(value.At, now), Subnet: value.Subnet, ScanMinutes: value.ScanMinutes,
 		ScanSchedule: value.ScanSchedule, VoterReady: value.VoterReady}
 }
+func panelHomeAssistant(h *HomeAssistantStatus, now time.Time) *PanelHomeAssistant {
+	if h == nil || !validHomeAssistant(h) || !panelFresh(h.At, now, 15*time.Second) || now.Sub(h.At) >= 15*time.Second {
+		return nil
+	}
+	return &PanelHomeAssistant{State: h.State, Sync: h.Sync, Ready: h.Ready, Revision: h.Revision, Pending: h.Pending, AgeMS: panelAge(h.At, now), CheckpointAgeMS: panelAge(h.CheckpointAt, now)}
+}
 func panelSnapshot(snapshot Snapshot, members []Member, now time.Time) Panel {
 	p := Panel{Protocol: panelProtocol, State: "unavailable", AgeMS: panelAge(snapshot.At, now), PollMS: int(interval / time.Millisecond), StaleMS: int(staleAfter / time.Millisecond),
-		Owners: map[string]PanelOwner{"xiaozhi": {State: "unknown"}, "dns": {State: "unknown"}, "vpn": {State: "unknown"}, "network": {State: "unknown"}}, DNS: PanelDNS{Mode: "unknown", Eligible: []string{}}, Nodes: []PanelNode{}, Client: PanelClient{State: "unknown"}, Events: []PanelEvent{}}
+		Owners: map[string]PanelOwner{"xiaozhi": {State: "unknown"}, "dns": {State: "unknown"}, "vpn": {State: "unknown"}, "network": {State: "unknown"}, "homeassistant": {State: "unknown"}}, DNS: PanelDNS{Mode: "unknown", Eligible: []string{}}, Nodes: []PanelNode{}, Client: PanelClient{State: "unknown"}, Events: []PanelEvent{}}
 	if !snapshot.At.IsZero() {
 		at := snapshot.At
 		p.At = &at
@@ -1359,6 +1427,21 @@ func panelSnapshot(snapshot Snapshot, members []Member, now time.Time) Panel {
 				p.Owners["network"] = PanelOwner{State: "known", Node: &id}
 			} else {
 				p.Owners["network"] = PanelOwner{State: "conflict"}
+			}
+		}
+	}
+	for _, m := range members {
+		if n, ok := fresh[m.ID]; ok {
+			h := panelHomeAssistant(n.HomeAssistant, now)
+			if h == nil || h.State == "standby" {
+				continue
+			}
+			if p.Owners["homeassistant"].State == "unknown" {
+				id := m.ID
+				p.Owners["homeassistant"] = PanelOwner{State: "known", Node: &id}
+			} else {
+				p.Owners["homeassistant"] = PanelOwner{State: "conflict"}
+				p.State = "degraded"
 			}
 		}
 	}
@@ -1426,6 +1509,7 @@ func panelSnapshot(snapshot Snapshot, members []Member, now time.Time) Panel {
 			monitorReady := value.MonitoringReady
 			n.MonitoringReady = &monitorReady
 			n.Network = panelNetwork(value.Network, now)
+			n.HomeAssistant = panelHomeAssistant(value.HomeAssistant, now)
 			n.Components["vpn"] = value.Components["vpn"]
 			for _, key := range []string{"xiaozhi", "dns", "vpn"} {
 				n.VIP[key] = value.VIP[key]
