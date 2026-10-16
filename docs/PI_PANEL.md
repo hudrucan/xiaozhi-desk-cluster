@@ -130,8 +130,11 @@ configuration and service were updated. No cluster or LCD driver change.
 
 ## Picture timeout
 
-In **Settings → Screen timeout**, choose **Off**, **30 sec**, **1 min**,
-**2 min**, **5 min** or **10 min**. Off is the default. A selection is saved
+In **Settings → Screen timeout**, open the dropdown and choose **Off**, **30 sec**,
+**1 min**, **2 min**, **5 min**, **10 min**, **15 min** or **30 min**. Swipe the
+dropdown to reach more options; opening it brings the current selection into
+view. Selecting an option closes the dropdown, and tapping outside dismisses it.
+Off is the default. A selection is saved
 immediately and atomically in `/var/lib/desk-cluster-panel/display.json`, mode
 0600, independently of calibration. A failed save leaves the previous timeout
 active and shows an error. Ansible does not overwrite this local preference.
@@ -153,15 +156,17 @@ change is made. References: [LCDWiki](https://www.lcdwiki.com/3.5inch_RPi_Displa
 ## On-screen recalibration
 
 Settings has separate **Touch calibration** and **Screen timeout** menu entries.
-Each opens only its own options, with **Back** returning to the Settings menu.
+Each opens only its own options, with a **<** icon to the left of the title
+returning to the Settings menu. Its touch target is 44×44 pixels.
 The menu uses list rows separated by dividers. Adding an entry to `SETTINGS_ITEMS`
 automatically extends the scrollable list; its header and bottom navigation stay
 fixed. Swipe vertically to scroll when the rows exceed the viewport. A scrollbar
 indicates position, and a swipe never opens an item on release.
 
-Settings/timeout validation: all 40 panel tests pass, and the Pi service is
+Settings/timeout validation: all 44 panel tests pass, and the Pi service is
 active after deployment. The saved calibration and 10-minute timeout were
-retained. Physical touch/wake and scrolling checks remain NOT RUN.
+retained. The user accepted the revised Back icon and timeout dropdown UI on
+2026-10-16 (PASS). Full physical touch/wake and scrolling checks remain NOT RUN.
 
 Open **Settings → Touch calibration → Calibrate touch → Start** on the Pi LCD. Hold each gold
 target briefly (at least 120 ms and five sensor samples), then lift. Four corner

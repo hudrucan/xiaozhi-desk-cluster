@@ -10,6 +10,15 @@ import display_idle as idle
 
 
 class DisplayIdleTests(unittest.TestCase):
+    def test_fifteen_and_thirty_minutes_persist_and_expire_at_the_selected_duration(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory)/'display.json'
+            for seconds in (900,1800):
+                idle.save(seconds,path);config={}
+                self.assertTrue(idle.restore(config,path))
+                display=idle.IdleDisplay(config['screen_timeout'],5)
+                self.assertFalse(display.tick(seconds+4.99))
+                self.assertTrue(display.tick(seconds+5))
     def test_disabled_and_exact_timeout_without_repeated_blanking(self):
         display=idle.IdleDisplay(0,0)
         self.assertFalse(display.tick(1000000))

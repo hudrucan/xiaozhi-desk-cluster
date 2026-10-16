@@ -26,6 +26,33 @@ def network_fixture():
     return v
 
 class PanelTests(unittest.TestCase):
+    def test_timeout_dropdown_opens_at_current_value_and_can_select_every_option(self):
+        menu=panel.TimeoutSelect()
+        for seconds,_ in panel.TIMEOUT_OPTIONS:
+            menu.open(seconds)
+            index=next(i for i,(value,_) in enumerate(menu.items) if value==seconds)
+            point=(40,menu.box[1]+index*menu.row_height-menu.offset+menu.row_height//2)
+            self.assertTrue(panel.inside(point,menu.box))
+            menu.begin(point);self.assertEqual(menu.end(point),seconds)
+            menu.close();self.assertFalse(menu.opened)
+    def test_timeout_dropdown_swipe_does_not_select_and_reaches_both_ends(self):
+        menu=panel.TimeoutSelect();menu.open(0)
+        menu.begin((40,250));menu.move((40,70))
+        self.assertEqual(menu.offset,menu.max_offset)
+        self.assertIsNone(menu.end((40,70)))
+        self.assertTrue(menu.opened)
+        menu.begin((40,250));self.assertEqual(menu.end((40,250)),1800)
+        menu.begin((40,130));menu.move((40,300))
+        self.assertEqual(menu.offset,0)
+        self.assertIsNone(menu.end((40,300)))
+        menu.begin((40,130));self.assertEqual(menu.end((40,130)),0)
+    def test_timeout_dropdown_dismissal_cancels_pending_selection(self):
+        menu=panel.TimeoutSelect();menu.open(600)
+        menu.begin((40,210));menu.close()
+        self.assertFalse(menu.opened);self.assertIsNone(menu.end((40,210)))
+        menu.open(600)
+        for point in ((28,25),(40,85),(40,300)):
+            menu.begin(point);self.assertIsNone(menu.end(point))
     def test_settings_taps_open_only_the_touched_row(self):
         menu=panel.SettingsMenu()
         menu.begin((30,80));self.assertEqual(menu.end((33,82)),'calibration')

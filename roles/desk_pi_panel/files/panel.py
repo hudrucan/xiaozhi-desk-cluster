@@ -29,9 +29,9 @@ TEXT, MUTED, GOLD, GREEN, RED = '#f3ead8', '#baad95', '#d5a85e', '#96c9a0', '#de
 SETTINGS_ITEMS = (('calibration','Touch calibration','Adjust touch alignment'),
                   ('timeout','Screen timeout','Choose when the picture goes black'))
 SETTINGS_LIST_BOX, SETTINGS_ROW_HEIGHT = (14,50,466,274), 72
-SETTINGS_BACK_BUTTON = (382,8,466,42)
+SETTINGS_BACK_BUTTON = (6,3,50,47)
 CALIBRATE_BUTTON = (130,195,350,243)
-TIMEOUT_BUTTONS = tuple((seconds,label,(14+(i%3)*155,75+(i//3)*50,156+(i%3)*155,115+(i//3)*50)) for i,(seconds,label) in enumerate(TIMEOUT_OPTIONS))
+TIMEOUT_SELECT_BUTTON, TIMEOUT_LIST_BOX = (14,64,466,110), (14,112,466,271)
 START_BUTTON, CONFIRM_CANCEL_BUTTON = (100, 243, 228, 291), (252, 243, 380, 291)
 APPLY_BUTTON, RETRY_BUTTON, CANCEL_BUTTON = (32, 243, 160, 291), (176, 243, 304, 291), (320, 243, 448, 291)
 COLLECT_CANCEL_BUTTON = (358, 275, 466, 319)
@@ -44,16 +44,16 @@ def inside(point, box):
 
 class SettingsMenu:
     """Bounded list scrolling; a drag never selects an item on release."""
-    def __init__(self,items=SETTINGS_ITEMS):
-        self.items=items;self.offset=0;self.cancel()
+    def __init__(self,items=SETTINGS_ITEMS,box=SETTINGS_LIST_BOX,row_height=SETTINGS_ROW_HEIGHT):
+        self.items=items;self.box=box;self.row_height=row_height;self.offset=0;self.cancel()
     @property
     def max_offset(self):
-        return max(0,len(self.items)*SETTINGS_ROW_HEIGHT-(SETTINGS_LIST_BOX[3]-SETTINGS_LIST_BOX[1]+1))
+        return max(0,len(self.items)*self.row_height-(self.box[3]-self.box[1]+1))
     def cancel(self):
         self.start=None;self.dragged=False
     def begin(self,point):
         self.cancel()
-        if inside(point,SETTINGS_LIST_BOX):self.start=point;self.anchor=self.offset
+        if inside(point,self.box):self.start=point;self.anchor=self.offset
     def move(self,point):
         if self.start is None:return False
         dx,dy=point[0]-self.start[0],point[1]-self.start[1]
@@ -64,10 +64,21 @@ class SettingsMenu:
     def end(self,point):
         self.move(point)
         start,dragged=self.start,self.dragged;self.cancel()
-        if start is None or dragged or not inside(point,SETTINGS_LIST_BOX):return None
-        row=(point[1]-SETTINGS_LIST_BOX[1]+self.offset)//SETTINGS_ROW_HEIGHT
-        first=(start[1]-SETTINGS_LIST_BOX[1]+self.offset)//SETTINGS_ROW_HEIGHT
+        if start is None or dragged or not inside(point,self.box):return None
+        row=(point[1]-self.box[1]+self.offset)//self.row_height
+        first=(start[1]-self.box[1]+self.offset)//self.row_height
         return self.items[row][0] if row==first and 0<=row<len(self.items) else None
+
+class TimeoutSelect(SettingsMenu):
+    def __init__(self):
+        super().__init__(TIMEOUT_OPTIONS,TIMEOUT_LIST_BOX,40)
+        self.opened=False
+    def open(self,current):
+        index=next(i for i,(seconds,_) in enumerate(self.items) if seconds==current)
+        self.offset=max(0,min(self.max_offset,(index-1)*self.row_height))
+        self.cancel();self.opened=True
+    def close(self):
+        self.opened=False;self.cancel()
 
 def finite(value):
     return type(value) in (int, float) and math.isfinite(value)
@@ -253,11 +264,11 @@ class Renderer:
             x=round(box[0]+i*width)
             d.line((x,box[1]+9,x,box[3]-9),fill=BORDER)
         return [(round(box[0]+i*width),box[1],round(box[0]+(i+1)*width),box[3]) for i in range(count)]
-    def settings(self,config,error=None,view='menu',menu=None):
+    def settings(self,config,error=None,view='menu',menu=None,timeout_select=None):
         image=Image.new('RGB',(WIDTH,HEIGHT),BG);d=ImageDraw.Draw(image)
         title={'menu':'Panel settings','calibration':'Touch calibration','timeout':'Screen timeout'}[view]
-        self.text(d,(14,12),title,18,TEXT,True)
-        if view!='menu':self.button(d,SETTINGS_BACK_BUTTON,'Back')
+        self.text(d,(60 if view!='menu' else 14,12),title,18,TEXT,True)
+        if view!='menu':self.center_text(d,SETTINGS_BACK_BUTTON,'<',22,GOLD)
         d.line((14,49,466,49),fill=BORDER)
         if view=='menu':
             menu=menu or SettingsMenu()
@@ -285,13 +296,37 @@ class Renderer:
             self.text(d,(14,153),label,12,GREEN if finite(error_px) else MUTED)
             self.button(d,CALIBRATE_BUTTON,'Calibrate touch',True)
         elif view=='timeout':
-            for seconds,label,box in TIMEOUT_BUTTONS:
-                self.button(d,box,label,config.get('screen_timeout',0)==seconds)
-            self.text(d,(14,187),'Blanks picture; backlight stays on.',13,MUTED)
-            self.text(d,(14,215),'Touch to wake; first touch only wakes.',12,MUTED)
-            if error:self.text(d,(14,244),error,12,RED,width=452)
+            current=config.get('screen_timeout',0)
+            opened=timeout_select is not None and timeout_select.opened
+            d.rounded_rectangle(TIMEOUT_SELECT_BUTTON,radius=6,fill=SURFACE,outline=GOLD if opened else BORDER)
+            self.text(d,(30,77),dict(TIMEOUT_OPTIONS)[current],16,TEXT,True)
+            if opened:d.line((432,89,438,83,444,89),fill=GOLD,width=2)
+            else:d.line((432,83,438,89,444,83),fill=GOLD,width=2)
+            self.text(d,(14,144),'Blanks picture; backlight stays on.',13,MUTED)
+            self.text(d,(14,174),'Touch to wake; first touch only wakes.',12,MUTED)
+            if error:self.text(d,(14,220),error,12,RED,width=452)
+            if opened:self.timeout_options(image,timeout_select,current)
         self.navigation(d,'settings')
         return image
+    def timeout_options(self,image,menu,current):
+        left,top,right,bottom=menu.box
+        viewport=Image.new('RGB',(right-left+1,bottom-top+1),SURFACE);d=ImageDraw.Draw(viewport)
+        for i,(seconds,label) in enumerate(menu.items):
+            y=i*menu.row_height-menu.offset
+            if y+menu.row_height<=0 or y>=viewport.height:continue
+            selected=seconds==current
+            if selected:d.rectangle((0,y,viewport.width-1,y+menu.row_height-1),fill=GOLD)
+            color=BG if selected else TEXT
+            self.center_text(d,(16,y,110,y+menu.row_height),label,14,color,selected)
+            if selected:self.center_text(d,(viewport.width-64,y,viewport.width-20,y+menu.row_height),'✓',16,color)
+            d.line((16,y+menu.row_height-1,viewport.width-16,y+menu.row_height-1),fill=BORDER)
+        # Position indicator stays inside the popup and cannot overlap navigation.
+        thumb=max(20,round(viewport.height*viewport.height/(len(menu.items)*menu.row_height)))
+        y=round((viewport.height-thumb)*menu.offset/menu.max_offset) if menu.max_offset else 0
+        d.line((viewport.width-4,0,viewport.width-4,viewport.height-1),fill=BORDER,width=2)
+        d.line((viewport.width-4,y,viewport.width-4,y+thumb-1),fill=GOLD,width=2)
+        d.rectangle((0,0,viewport.width-1,viewport.height-1),outline=BORDER)
+        image.paste(viewport,(left,top))
     def navigation(self,d,page):
         d.line((0,275,480,275),fill=BORDER)
         width=WIDTH//len(NAVIGATION)
@@ -555,11 +590,11 @@ def run(config):
     if rx is None or ry is None or rx.max<=rx.min or ry.max<=ry.min:raise ValueError('Invalid touchscreen range')
     thread=threading.Thread(target=model.poll,args=(config['url'],),daemon=True);thread.start()
     for sig in (signal.SIGTERM,signal.SIGINT):signal.signal(sig,lambda *_:model.stopped.set())
-    page,selected='overview',0;node_view='status';settings_view='menu';settings_menu=SettingsMenu();cal=None
+    page,selected='overview',0;node_view='status';settings_view='menu';settings_menu=SettingsMenu();timeout_select=TimeoutSelect();cal=None
     x,y=rx.min,ry.min;pressed=False;points=[];press_at=0;last_render=0;last_key=None
     try:
         while not model.stopped.is_set():
-            ready,_,_=select.select([touch.fd],[],[],0.08 if cal or (pressed and page=='settings' and settings_view=='menu') else 0.2)
+            ready,_,_=select.select([touch.fd],[],[],0.08 if cal or (pressed and page=='settings' and (settings_view=='menu' or timeout_select.opened)) else 0.2)
             if ready:
                 for event in touch.read():
                     now=time.monotonic()
@@ -570,6 +605,7 @@ def run(config):
                         if event.value==1:
                             pressed=True;points=[];press_at=now
                             settings_menu.cancel()
+                            timeout_select.cancel()
                             if idle.touch_down(now):last_key=None;last_render=0
                         elif pressed or idle.pressed:
                             was_pressed=pressed
@@ -598,20 +634,27 @@ def run(config):
                             elif page=='settings' and settings_view=='menu' and settings_menu.start is not None:
                                 target=settings_menu.end(touch_point(x,y,rx,ry,config))
                                 if target is not None:settings_view=target
+                            elif page=='settings' and settings_view=='timeout' and timeout_select.opened:
+                                if timeout_select.start is not None:
+                                    seconds=timeout_select.end(touch_point(x,y,rx,ry,config))
+                                    if seconds is not None:
+                                        timeout_select.close()
+                                        if seconds!=config['screen_timeout']:
+                                            try:save_display(seconds)
+                                            except (OSError,ValueError):settings_error='Could not save; previous timeout retained.'
+                                            else:
+                                                config['screen_timeout']=seconds;idle.configure(seconds,now);settings_error=None
+                                else:
+                                    timeout_select.close()
+                                    if inside((tx,ty),SETTINGS_BACK_BUTTON):settings_view='menu'
+                                    elif ty>=276:page=navigation_page(tx);settings_view='menu'
                             elif ty>=276:page=navigation_page(tx);settings_view='menu'
                             elif page=='settings':
                                 if settings_view!='menu' and inside((tx,ty),SETTINGS_BACK_BUTTON):settings_view='menu'
                                 elif settings_view=='calibration':
                                     if inside((tx,ty),CALIBRATE_BUTTON):cal=Calibration(config.get('rotation',0),now)
                                 elif settings_view=='timeout':
-                                    for seconds,_,box in TIMEOUT_BUTTONS:
-                                        if inside((tx,ty),box) and seconds!=config['screen_timeout']:
-                                            try:
-                                                save_display(seconds)
-                                            except (OSError,ValueError):settings_error='Could not save; previous timeout retained.'
-                                            else:
-                                                config['screen_timeout']=seconds;idle.configure(seconds,now);settings_error=None
-                                            break
+                                    if inside((tx,ty),TIMEOUT_SELECT_BUTTON):timeout_select.open(config['screen_timeout'])
                             elif page=='overview' and OVERVIEW_CARD_TOP<=ty<=OVERVIEW_CARD_BOTTOM:selected=min(2,max(0,(tx-14)//155));page='node'
                             elif page=='node' and NODE_TAB_TOP<=ty<=NODE_TAB_BOTTOM:selected=min(2,max(0,(tx-14)//155))
                             elif page=='node' and inside((tx,ty),NODE_STATUS_BUTTON):node_view='status'
@@ -623,6 +666,10 @@ def run(config):
                             point=touch_point(x,y,rx,ry,config)
                             if not points:settings_menu.begin(point)
                             elif settings_menu.move(point):last_render=0
+                        elif not cal and page=='settings' and settings_view=='timeout' and timeout_select.opened and not idle.consume_touch:
+                            point=touch_point(x,y,rx,ry,config)
+                            if not points:timeout_select.begin(point)
+                            elif timeout_select.move(point):last_render=0
                         if len(points)<256:points.append((x,y))
             now=time.monotonic()
             if cal and cal.tick(now):cal=None;page='settings';settings_view='calibration';last_render=0
@@ -637,9 +684,9 @@ def run(config):
                 live,elapsed=freshness(value,received,now)
                 online=tuple(node_live(n,live,elapsed) for n in value['nodes']) if value else ()
                 network_fresh=tuple(network_live(n,live,elapsed) for n in value['nodes']) if value else ()
-                key=('cal',id(cal),cal.version) if cal else ('settings',settings_view,settings_menu.offset,config.get('calibration_error'),config['screen_timeout'],settings_error) if page=='settings' else (id(value),live,ok,online,network_fresh,page,selected,node_view)
+                key=('cal',id(cal),cal.version) if cal else ('settings',settings_view,settings_menu.offset,timeout_select.opened,timeout_select.offset,config.get('calibration_error'),config['screen_timeout'],settings_error) if page=='settings' else (id(value),live,ok,online,network_fresh,page,selected,node_view)
                 if key!=last_key:
-                    image=renderer.calibration(cal) if cal else renderer.settings(config,settings_error,settings_view,settings_menu) if page=='settings' else renderer.draw(value,received,ok,page,selected,now,node_view)
+                    image=renderer.calibration(cal) if cal else renderer.settings(config,settings_error,settings_view,settings_menu,timeout_select) if page=='settings' else renderer.draw(value,received,ok,page,selected,now,node_view)
                     fb.show(image);last_key=key
                 last_render=now
     finally:
