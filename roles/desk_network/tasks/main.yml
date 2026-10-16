@@ -53,8 +53,18 @@
     dest: '/usr/local/libexec/desk-network/{{ item }}'
     mode: '0755'
     validate: /usr/bin/python3 -c "import ast,sys; ast.parse(open(sys.argv[1]).read())" %s
-  loop: [ha.py, seed.py, api-loopback.py, verify_ready.py, mdns.py, arp.py, discovery.py, bootstrap.py]
+  loop: [ha.py, seed.py, api-loopback.py, verify_ready.py, mdns.py, arp.py, discovery.py, bootstrap.py, checkpoint_budget.py]
   register: network_helpers
+- name: Install checkpoint-only resource budget without throttling lease renewal
+  ansible.builtin.template:
+    src: desk-network-checkpoint.slice.j2
+    dest: /etc/systemd/system/desk-network-checkpoint.slice
+    mode: '0644'
+  register: network_checkpoint_budget
+- name: Load the checkpoint resource budget
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+  when: network_checkpoint_budget.changed
 - name: Install native scan progress UI
   ansible.builtin.copy:
     src: scan-ui.js

@@ -43,12 +43,20 @@
         - {src: /etc/desk-network/config.json, name: config.json}
       no_log: true
     - block:
+        - name: Install independent checkpoint budget
+          ansible.builtin.template:
+            src: '{{ source }}/roles/desk_network/templates/desk-network-checkpoint.slice.j2'
+            dest: /etc/systemd/system/desk-network-checkpoint.slice
+            mode: '0644'
+        - name: Load checkpoint budget
+          ansible.builtin.systemd_service:
+            daemon_reload: true
         - name: Install tested canary lifecycle
           ansible.builtin.copy:
             src: '{{ source }}/roles/desk_network/files/{{ item }}'
             dest: '/usr/local/libexec/desk-network/{{ item }}'
             mode: '0755'
-          loop: [ha.py, warm_runtime.py, warm-backend.sh, warm-idle.sh]
+          loop: [checkpoint_budget.py, ha.py, warm_runtime.py, warm-backend.sh, warm-idle.sh]
         - name: Enable warm mode on this node only
           ansible.builtin.command:
             argv:

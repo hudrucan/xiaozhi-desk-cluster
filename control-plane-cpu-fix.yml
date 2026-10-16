@@ -1,0 +1,127 @@
+---
+- name: Roll tested defaults parsing fix without changing conversation workers
+  hosts: deskboxes
+  serial: 1
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  vars:
+    cpu_source: /Users/hudrucan/Personals/repos/xiaozhi-esp32-server/main/xiaozhi-server/config/google_drive_config.py
+    cpu_original_sha: a0ef8bd5c19a17b3142ce4a4b23049ad25a6f0cc0f23af5f0169e92e52a1cf2a
+    cpu_target: /opt/xiaozhi-control-plane/repo/main/xiaozhi-server/config/google_drive_config.py
+    cpu_backup: /var/lib/desk-control-plane-cpu-backup/google_drive_config.py
+  tasks:
+    - name: Check exact source compatibility
+      ansible.builtin.stat:
+        path: '{{ cpu_target }}'
+        checksum_algorithm: sha256
+      register: cpu_installed
+    - name: Hash reviewed candidate
+      ansible.builtin.stat:
+        path: '{{ cpu_source }}'
+        checksum_algorithm: sha256
+      delegate_to: localhost
+      become: false
+      register: cpu_candidate
+    - ansible.builtin.assert:
+        that: cpu_installed.stat.checksum in [cpu_original_sha, cpu_candidate.stat.checksum]
+    - name: Check safe-parser source compatibility
+      ansible.builtin.stat:
+        path: /opt/xiaozhi-control-plane/repo/main/xiaozhi-server/config/config_loader.py
+        checksum_algorithm: sha256
+      register: cpu_loader_installed
+    - name: Hash safe-parser candidate
+      ansible.builtin.stat:
+        path: /Users/hudrucan/Personals/repos/xiaozhi-esp32-server/main/xiaozhi-server/config/config_loader.py
+        checksum_algorithm: sha256
+      delegate_to: localhost
+      become: false
+      register: cpu_loader_candidate
+    - ansible.builtin.assert:
+        that: cpu_loader_installed.stat.checksum in ['d24b1134c8ccc5d0f01ea945c19abd5e3f90a2259e3c80477df9244af48944a6', cpu_loader_candidate.stat.checksum]
+    - name: Freeze protected service/config state, excluding only this expected PID restart
+      ansible.builtin.command:
+        argv: [python3, '-c', "{{ lookup('file',playbook_dir+'/roles/desk_ui/files/ui_guard.py') | replace(\"'xiaozhi-control-plane',\", '') }}", freeze]
+      register: cpu_protected
+      no_log: true
+      changed_when: false
+    - name: Preserve rollback copy
+      ansible.builtin.file:
+        path: /var/lib/desk-control-plane-cpu-backup
+        state: directory
+        mode: '0700'
+    - ansible.builtin.copy:
+        src: '{{ cpu_target }}'
+        dest: '{{ cpu_backup }}'
+        remote_src: true
+        force: false
+        mode: '0600'
+    - name: Preserve original safe-parser source
+      ansible.builtin.copy:
+        src: /opt/xiaozhi-control-plane/repo/main/xiaozhi-server/config/config_loader.py
+        dest: /var/lib/desk-control-plane-cpu-backup/config_loader.py
+        remote_src: true
+        force: false
+        mode: '0600'
+    - block:
+        - name: Install the reviewed two-file fix
+          ansible.builtin.copy:
+            src: '{{ cpu_source }}'
+            dest: '{{ cpu_target }}'
+            owner: root
+            group: root
+            mode: '0644'
+            validate: /usr/bin/python3 -c "import ast,sys; ast.parse(open(sys.argv[1]).read())" %s
+          register: cpu_patch
+        - name: Use the available LibYAML safe parser with safe Python fallback
+          ansible.builtin.copy:
+            src: /Users/hudrucan/Personals/repos/xiaozhi-esp32-server/main/xiaozhi-server/config/config_loader.py
+            dest: /opt/xiaozhi-control-plane/repo/main/xiaozhi-server/config/config_loader.py
+            owner: root
+            group: root
+            mode: '0644'
+            validate: /usr/bin/python3 -c "import ast,sys; ast.parse(open(sys.argv[1]).read())" %s
+          register: cpu_loader_patch
+        - name: Restart only this local control plane
+          ansible.builtin.systemd_service:
+            name: xiaozhi-control-plane
+            state: restarted
+          when: cpu_patch.changed or cpu_loader_patch.changed
+        - name: Wait for healthy reconciled local API and NATS
+          ansible.builtin.uri:
+            url: 'http://{{ cluster_ip }}:8004/api/cluster'
+            use_proxy: false
+            timeout: 3
+          register: cpu_health
+          until: cpu_health.status | default(0) == 200 and cpu_health.json.nats.state | default('') == 'connected' and cpu_health.json.reconciliation.state | default('') == 'ready' and cpu_health.json.configuration.sync_status | default('') == 'synced'
+          retries: 40
+          delay: 2
+          no_log: true
+      rescue:
+        - name: Restore previous source
+          ansible.builtin.copy:
+            src: '{{ cpu_backup }}'
+            dest: '{{ cpu_target }}'
+            remote_src: true
+            owner: root
+            group: root
+            mode: '0644'
+        - name: Restore previous safe-parser source
+          ansible.builtin.copy:
+            src: /var/lib/desk-control-plane-cpu-backup/config_loader.py
+            dest: /opt/xiaozhi-control-plane/repo/main/xiaozhi-server/config/config_loader.py
+            remote_src: true
+            owner: root
+            group: root
+            mode: '0644'
+        - ansible.builtin.systemd_service:
+            name: xiaozhi-control-plane
+            state: restarted
+        - ansible.builtin.fail:
+            msg: Control-plane CPU candidate failed readiness; previous source restored. Rollout stopped.
+      always:
+        - name: Verify other protected services/config remain unchanged
+          ansible.builtin.command:
+            argv: [python3, '-c', "{{ lookup('file',playbook_dir+'/roles/desk_ui/files/ui_guard.py') | replace(\"'xiaozhi-control-plane',\", '') }}", guard]
+            stdin: '{{ cpu_protected.stdout }}'
+          changed_when: false

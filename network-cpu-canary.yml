@@ -1,0 +1,97 @@
+---
+- name: Fix Network CPU overhead on one synced standby first
+  hosts: deskb1x
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  vars:
+    cpu_backup: /var/lib/desk-network/cpu-fix-backup
+  tasks:
+    - name: Check canary is a synced standby
+      ansible.builtin.uri:
+        url: 'http://{{ cluster_ip }}:20213/network/desk/status'
+        use_proxy: false
+      register: cpu_before
+    - ansible.builtin.assert:
+        that:
+          - cpu_before.json.state == 'standby'
+          - cpu_before.json.sync == 'synced'
+          - cpu_before.json.voter_ready | bool
+    - name: Freeze protected production services
+      ansible.builtin.command:
+        argv: [python3, '-c', "{{ lookup('file',playbook_dir+'/roles/desk_ui/files/ui_guard.py') }}", freeze]
+      register: cpu_protected
+      no_log: true
+      changed_when: false
+    - ansible.builtin.file:
+        path: '{{ cpu_backup }}'
+        state: directory
+        mode: '0700'
+    - name: Preserve previous runtime for rollback
+      ansible.builtin.copy:
+        src: '/usr/local/libexec/desk-network/{{ item }}'
+        dest: '{{ cpu_backup }}/{{ item }}'
+        remote_src: true
+        force: false
+        mode: '0600'
+      loop: [ha.py, warm_runtime.py]
+    - block:
+        - name: Install checkpoint-only resource limit
+          ansible.builtin.template:
+            src: roles/desk_network/templates/desk-network-checkpoint.slice.j2
+            dest: /etc/systemd/system/desk-network-checkpoint.slice
+            mode: '0644'
+        - name: Install bounded checkpoint runner before its caller
+          ansible.builtin.copy:
+            src: roles/desk_network/files/checkpoint_budget.py
+            dest: /usr/local/libexec/desk-network/checkpoint_budget.py
+            mode: '0755'
+            validate: /usr/bin/python3 -c "import ast,sys; ast.parse(open(sys.argv[1]).read())" %s
+        - name: Install the tested CPU fixes
+          ansible.builtin.copy:
+            src: 'roles/desk_network/files/{{ item }}'
+            dest: '/usr/local/libexec/desk-network/{{ item }}'
+            mode: '0755'
+            validate: /usr/bin/python3 -c "import ast,sys; ast.parse(open(sys.argv[1]).read())" %s
+          loop: [ha.py, warm_runtime.py]
+        - name: Recreate only the standby Network runtime
+          ansible.builtin.systemd_service:
+            name: desk-network
+            daemon_reload: true
+            state: restarted
+        - name: Wait for synced inactive warm canary and recovered voter
+          ansible.builtin.uri:
+            url: 'http://{{ cluster_ip }}:20213/network/desk/status'
+            use_proxy: false
+            timeout: 3
+          register: cpu_ready
+          until: cpu_ready.json.state | default('') == 'standby' and cpu_ready.json.warm_state | default('') == 'inactive' and cpu_ready.json.sync | default('') == 'synced' and cpu_ready.json.voter_ready | default(false)
+          retries: 65
+          delay: 3
+        - name: Verify original owner still serves native UI
+          ansible.builtin.command:
+            argv: [python3, /usr/local/libexec/desk-network/verify_ready.py]
+          changed_when: false
+      rescue:
+        - name: Stop only failed canary
+          ansible.builtin.systemd_service:
+            name: desk-network
+            state: stopped
+        - name: Restore old runtime
+          ansible.builtin.copy:
+            src: '{{ cpu_backup }}/{{ item }}'
+            dest: '/usr/local/libexec/desk-network/{{ item }}'
+            remote_src: true
+            mode: '0755'
+          loop: [ha.py, warm_runtime.py]
+        - ansible.builtin.systemd_service:
+            name: desk-network
+            state: started
+        - ansible.builtin.fail:
+            msg: CPU canary failed; previous standby restored and original owner retained.
+      always:
+        - name: Verify protected services unchanged
+          ansible.builtin.command:
+            argv: [python3, '-c', "{{ lookup('file',playbook_dir+'/roles/desk_ui/files/ui_guard.py') }}", guard]
+            stdin: '{{ cpu_protected.stdout }}'
+          changed_when: false

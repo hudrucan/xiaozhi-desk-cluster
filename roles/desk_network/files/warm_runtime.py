@@ -50,6 +50,12 @@ def live_group(group,proc=pathlib.Path('/proc')):
   except (OSError,ValueError,IndexError):pass
  return False
 
+def child_running(pid):
+ # Observe only our direct child, without reaping it or walking /proc. The
+ # complete process-group check is retained in stop() to fence descendants.
+ try:return os.waitid(os.P_PID,pid,os.WEXITED|os.WNOHANG|os.WNOWAIT) is None
+ except ChildProcessError:return False
+
 def reap():
  while True:
   try:
@@ -103,7 +109,7 @@ def main():
    desired=request()
    # A crashing native child must not be restarted repeatedly under the same
    # activation. Withdraw readiness and let the controller replace the canary.
-   if groups and (not live_group(groups[0]) or php.poll() is not None or cron.poll() is not None):
+   if groups and (not child_running(groups[0]) or php.poll() is not None or cron.poll() is not None):
     failed=generation;desired=None
    if desired!=generation or (desired is None and groups):
     if groups:stop(groups);groups=[];php=cron=None;clean_api()

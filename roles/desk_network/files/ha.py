@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """One LAN collector, majority leases, certified consistent SQLite checkpoints."""
 from contextlib import closing
-import discovery,bootstrap
+import discovery,bootstrap,checkpoint_budget
 import ast, signal, argparse, base64, concurrent.futures, gzip, hashlib, hmac, http.client, http.server, io, json, logging, os, pathlib, re, secrets, socket, sqlite3, ssl, subprocess, sys, threading, time, urllib.parse, urllib.request
 LOG = logging.getLogger('desk-network')
 TTL, MARGIN, LIMIT, DBLIMIT = 15., 5., 16*1024*1024, 64*1024*1024
@@ -105,7 +105,7 @@ def snapshot_worker(action,*,data=None,run=None,blob=None):
  # threads' allocator arenas. A short-lived interpreter releases all of them.
  cmd=[sys.executable,str(pathlib.Path(__file__).resolve()),'--snapshot-worker',action]
  if action=='create':cmd += ['--data',str(data),'--run',str(run)]
- result=subprocess.run(cmd,input=blob,stdout=subprocess.PIPE,stderr=subprocess.PIPE,check=True,timeout=15)
+ result=checkpoint_budget.execute(cmd,blob)
  if len(result.stdout)>LIMIT:raise Unavailable('Checkpoint exceeds byte limit')
  return result.stdout
 POLICY={
@@ -261,7 +261,7 @@ class Cluster:
    if self.store.head and sha(blob)==self.store.head['digest']:
     self.last_snapshot=clock();self.sync_state='synced';return
    self.sequence+=1;meta={'revision':self.term+[self.sequence],'digest':sha(blob),'at':time.time()}
-   replies=self.fanout('stage',{'meta':meta,'blob':base64.b64encode(blob).decode()},timeout=5)
+   replies=self.fanout('stage',{'meta':meta,'blob':base64.b64encode(blob).decode()},timeout=checkpoint_budget.STAGE_TIMEOUT)
    if len(replies)<2: self.sync_state='pending';raise Unavailable('Checkpoint needs two replicas')
    meta['certificate']=list(replies.values());self.store.verify(meta)
    if not self.owned():raise Unavailable('Lease expired during checkpoint')

@@ -1,10 +1,28 @@
-import importlib.util,json,pathlib,tempfile,threading,time,unittest
+import importlib.util,json,pathlib,tempfile,threading,time,unittest,os,subprocess,sys
 from unittest.mock import patch,MagicMock
 FILES=pathlib.Path(__file__).resolve().parents[1]/'files'
 if not (FILES/'warm_runtime.py').exists():FILES=pathlib.Path(__file__).parent
 spec=importlib.util.spec_from_file_location('warm_runtime',FILES/'warm_runtime.py');w=importlib.util.module_from_spec(spec);spec.loader.exec_module(w)
 spec=importlib.util.spec_from_file_location('warm_ha',FILES/'ha.py');ha=importlib.util.module_from_spec(spec);spec.loader.exec_module(ha)
 class Warm(unittest.TestCase):
+ def test_direct_child_observation_keeps_exit_status_and_never_scans_proc(self):
+  child=subprocess.Popen([sys.executable,'-c','import time;time.sleep(10)'])
+  try:
+   with patch.object(w,'live_group',side_effect=AssertionError('active loop must not scan proc')):
+    self.assertTrue(w.child_running(child.pid))
+    child.terminate()
+    deadline=time.monotonic()+5
+    while w.child_running(child.pid) and time.monotonic()<deadline:time.sleep(.01)
+    self.assertFalse(w.child_running(child.pid))
+   self.assertEqual(child.wait(),-15)
+   self.assertFalse(w.child_running(child.pid))
+  finally:
+   if child.poll() is None:child.kill();child.wait()
+ def test_stop_checks_all_descendant_groups_after_killing_leaders(self):
+  with patch.object(w.os,'killpg') as kill,patch.object(w,'reap'),patch.object(w,'live_group',side_effect=[True,False,False]),patch.object(w.time,'sleep'):
+   w.stop([10,11])
+   self.assertEqual(kill.call_count,2)
+   self.assertEqual(w.live_group.call_count,3)
  def test_control_permissions_are_ready_before_atomic_publication(self):
   with tempfile.TemporaryDirectory() as td:
    c=object.__new__(ha.Cluster);c.warm_path=pathlib.Path(td)/'warm';c.generation='a'*32;c.until=100;replace=ha.os.replace;seen=[]

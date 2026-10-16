@@ -3,6 +3,11 @@ import io,tracemalloc
 import re,subprocess,shutil,base64,gzip,hashlib,importlib.util,json,pathlib,sqlite3,tempfile,unittest
 spec=importlib.util.spec_from_file_location('ha',str(pathlib.Path(__file__).resolve().parents[1]/'files/ha.py'));ha=importlib.util.module_from_spec(spec);spec.loader.exec_module(ha)
 class Checks(unittest.TestCase):
+ def setUp(self):
+  # Existing protocol fixtures exercise child isolation on non-systemd CI hosts.
+  # The production systemd runner/failure paths have separate budget tests.
+  runner=patch.object(ha.checkpoint_budget,'execute',side_effect=lambda command,blob=None:subprocess.run(command,input=blob,stdout=subprocess.PIPE,stderr=subprocess.PIPE,check=True,timeout=60))
+  runner.start();self.addCleanup(runner.stop)
  def test_presence_and_events_wait_for_native_cache_bootstrap(self):
   for page in ('presence.php','events.php'):
    raw=b'<html><head></head><body><script>\nlet tableRows=NaN;\nmain(); // Initialize page\nfunction main(){calls++;}\n</script></body></html>'
