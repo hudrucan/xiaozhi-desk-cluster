@@ -18,6 +18,7 @@ def safe_name(name):
 
 def included(name):
  p=pathlib.PurePosixPath(name)
+ if p.parts[:2]==('www','tapo_control'):return False
  return not any(v in EXCLUDED for v in p.parts) and not p.name.startswith('home-assistant.log') and not p.name.endswith(('.db-wal','.db-shm','.pyc','~'))
 
 def config_digest(root):

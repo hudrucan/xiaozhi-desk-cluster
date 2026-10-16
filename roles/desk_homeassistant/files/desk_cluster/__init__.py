@@ -96,6 +96,11 @@ async def sync_command(hass,connection,msg):
  except Exception:connection.send_error(msg['id'],'sync_unavailable','Sync unavailable. Check that Core and the cluster are ready.')
 
 async def async_setup(hass,config):
+ # Pinned native backup has a module-level exclusion list. Add only this
+ # deployment's disposable playback cache, keeping upstream files unchanged.
+ from homeassistant.components.backup.const import EXCLUDE_FROM_BACKUP
+ for pattern in ('www/tapo_control','www/tapo_control/**'):
+  if pattern not in EXCLUDE_FROM_BACKUP:EXCLUDE_FROM_BACKUP.append(pattern)
  hass.data[DOMAIN]={'task':None,'stage':'idle','error':None}
  hass.http.register_view(Readiness(hass))
  await hass.http.async_register_static_paths([StaticPathConfig('/desk-cluster-assets/panel.js',str(pathlib.Path(__file__).parent/'panel.js'),False)])

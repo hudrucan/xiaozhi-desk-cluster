@@ -3,7 +3,9 @@
 Native UI: `http://192.168.1.186:8123/`. Use the existing Home Assistant account;
 its authentication remains enabled. The management VIP forwards HTTP/WebSocket
 traffic to the one native-ready Core, independently of which node holds that VIP.
-This phase installs Core only. Camera/media workers, HRI and other devices are deferred.
+Core ownership remains single-active. Camera live view uses separate go2rtc workers;
+Tapo Control and recordings playback remain on Core. See [CAMERA_MEDIA.md](CAMERA_MEDIA.md).
+The former `desk_remote` integration pilot has been retired.
 The former Generic Camera PoC entry is retained but disabled on initial import.
 
 ## Ownership and failure behavior

@@ -1,0 +1,11 @@
+---
+# Existing camera deployment only; never included by site.yml.
+- name: Maintain the approved camera media workers
+  hosts: deskboxes
+  become: true
+  gather_facts: false
+  serial: 1
+  any_errors_fatal: true
+  vars:
+    desk_camera_enabled: true
+  roles: [desk_camera]

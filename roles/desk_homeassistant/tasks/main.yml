@@ -33,6 +33,11 @@
     mode: '0700'
   loop: [agent.py, lease.py, config_journal.py, protocol.py, snapshot.py, ui_bridge.py, runtime.py, http_config.py, component_config.py, bootstrap.py, install_nats.py, install_proxy.py]
   register: homeassistant_helpers
+- name: Retain the optional stopped-Core camera migration hook
+  ansible.builtin.copy:
+    src: '{{ playbook_dir }}/roles/desk_camera/files/camera_config.py'
+    dest: /usr/local/libexec/desk-homeassistant/camera_config.py
+    mode: '0600'
 - name: Install readiness component source separately from executable helpers
   ansible.builtin.copy:
     src: desk_cluster/

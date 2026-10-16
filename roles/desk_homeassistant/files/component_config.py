@@ -9,3 +9,7 @@ def configure(root):
   p=target/name
   if p.is_symlink():raise ValueError('Cluster component file is a symlink')
   shutil.copyfile(source/name,p);p.chmod(0o600)
+ camera=pathlib.Path('/usr/local/libexec/desk-homeassistant/camera_config.py')
+ if camera.is_file():
+  from camera_config import configure as configure_camera
+  configure_camera(root)

@@ -32,6 +32,10 @@ class Snapshot(unittest.TestCase):
  def test_logs_and_live_lock_are_excluded_but_config_digest_detects_edits(self):
   first=snapshot.config_digest(self.root);(self.root/'home-assistant.log').write_text('private log');(self.root/'.ha_run.lock').write_text('stale')
   self.assertEqual(first,snapshot.config_digest(self.root));(self.root/'automations.yaml').write_text('[]');self.assertNotEqual(first,snapshot.config_digest(self.root))
+ def test_only_camera_hot_cache_is_excluded(self):
+  self.assertFalse(snapshot.included('www/tapo_control/entry/videos/clip.mp4'))
+  self.assertTrue(snapshot.included('www/family/photo.jpg'))
+  self.assertTrue(snapshot.included('.storage/tapo_control-entry'))
 class Framework(unittest.TestCase):
  def test_existing_lease_and_journal_are_reused_without_consensus_changes(self):
   original=FILES.parents[1]/'desk_network/files/ha.py'

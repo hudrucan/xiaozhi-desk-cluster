@@ -1,0 +1,15 @@
+{
+  "tapo": {
+    "repo": "JurajNyiri/HomeAssistant-Tapo-Control",
+    "sha": "057d7a8d0b47cbde283b77c19ca27bf4274b7594"
+  },
+  "webrtc": {
+    "repo": "AlexxIT/WebRTC",
+    "sha": "6471e0039c5c285634fe207587673144b5d9dc53"
+  },
+  "bundle_sha256": "049347171dd8b79c851437053f00bb2ed02c128ce973f102cfa1d99fa926e3e8",
+  "dependencies": [
+    "pytapo==3.4.26",
+    "rtp==0.0.4"
+  ]
+}

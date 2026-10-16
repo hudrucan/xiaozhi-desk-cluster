@@ -1,0 +1,98 @@
+---
+- ansible.builtin.assert:
+    that:
+      - desk_camera_enabled | bool
+      - ansible_play_hosts_all | sort == ['deskb1x','deskb2x','deskb3x']
+- name: Preserve existing protected service baseline
+  ansible.builtin.command:
+    argv: [python3, '-c', "{{ lookup('file',playbook_dir+'/roles/desk_ui/files/ui_guard.py') }}", freeze]
+  register: camera_guard
+  changed_when: false
+  no_log: true
+- ansible.builtin.file:
+    path: '{{ item }}'
+    state: directory
+    mode: '0700'
+  loop: [/etc/desk-camera, /var/lib/desk-camera, /var/lib/desk-camera/deps, /var/lib/desk-camera/cache/hot, /var/lib/desk-camera/cache/cold, /usr/local/libexec/desk-camera/components]
+- ansible.builtin.copy:
+    src: '{{ playbook_dir }}/secret/camera/{{ inventory_hostname }}.json'
+    dest: /etc/desk-camera/config.json
+    mode: '0600'
+  no_log: true
+  register: camera_definition
+- ansible.builtin.copy:
+    src: '{{ playbook_dir }}/secret/camera/{{ item }}'
+    dest: '/etc/desk-camera/{{ item }}'
+    mode: '0600'
+  loop: [nats-users.json, proxy.cfg, core-migration.json]
+  no_log: true
+  register: camera_private
+- ansible.builtin.copy:
+    src: '{{ playbook_dir }}/secret/camera/core-additions.json'
+    dest: /etc/desk-camera/core-additions.json
+    mode: '0600'
+  when: lookup('fileglob', playbook_dir+'/secret/camera/core-additions.json') | length > 0
+  no_log: true
+- ansible.builtin.copy:
+    src: '{{ item }}'
+    dest: '/usr/local/libexec/desk-camera/{{ item }}'
+    mode: '0600'
+  loop: [controller.py, transport.py, runtime.py, install_nats.py]
+  register: camera_helpers
+- ansible.builtin.unarchive:
+    src: components.tgz
+    dest: /usr/local/libexec/desk-camera/components
+    owner: root
+    group: root
+    mode: 'u=rwX,go='
+- ansible.builtin.copy:
+    src: camera_config.py
+    dest: /usr/local/libexec/desk-homeassistant/camera_config.py
+    mode: '0600'
+- name: Reuse the approved pinned ARM64 relay image
+  ansible.builtin.command:
+    argv: [podman, pull, --quiet, '{{ desk_camera_relay_image }}']
+  changed_when: false
+- name: Install only pinned additional wheels outside HA config
+  ansible.builtin.command:
+    argv: [podman, run, --rm, --pull=never, --network=bridge, --cpus=1, --memory=512m, --cap-drop=ALL, --read-only, '--tmpfs=/tmp:size=64m', '-v', '/var/lib/desk-camera/deps:/deps:rw', --entrypoint=python3, '{{ desk_camera_core_image }}', -m, pip, install, --target, /deps, '--only-binary=:all:', --no-deps, --no-compile, pytapo==3.4.26, rtp==0.0.4]
+    creates: /var/lib/desk-camera/deps/pytapo-3.4.26.dist-info/METADATA
+- ansible.builtin.command:
+    argv: [python3, /usr/local/libexec/desk-camera/install_nats.py]
+  register: camera_nats
+  changed_when: camera_nats.stdout == 'changed'
+  no_log: true
+- ansible.builtin.command:
+    argv: [haproxy, -c, -f, /etc/desk-camera/proxy.cfg]
+  changed_when: false
+- ansible.builtin.copy:
+    src: '{{ item.src }}'
+    dest: '/etc/systemd/system/{{ item.name }}'
+    mode: '0644'
+  loop:
+    - {src: controller.service, name: desk-camera.service}
+    - {src: runtime.service, name: desk-camera-relay.service}
+    - {src: proxy.service, name: desk-camera-proxy.service}
+  register: camera_units
+- ansible.builtin.systemd_service:
+    daemon_reload: true
+- ansible.builtin.systemd_service:
+    name: '{{ item }}'
+    enabled: true
+    state: "{{ 'restarted' if camera_definition.changed or camera_private.changed or camera_helpers.changed or camera_units.changed else 'started' }}"
+  loop: [desk-camera, desk-camera-relay, desk-camera-proxy]
+- name: Wait for this voter before updating another node
+  ansible.builtin.uri:
+    url: 'http://{{ cluster_ip }}:20226/status'
+    use_proxy: false
+    timeout: 3
+  register: camera_voter
+  until: camera_voter.json.voter_ready
+  retries: 25
+  delay: 2
+- name: Verify protected services remain available
+  ansible.builtin.command:
+    argv: [python3, '-c', "{{ lookup('file',playbook_dir+'/roles/desk_ui/files/ui_guard.py') }}", guard]
+    stdin: '{{ camera_guard.stdout }}'
+  changed_when: false
+  no_log: true

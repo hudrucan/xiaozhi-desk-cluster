@@ -43,6 +43,11 @@ def run():
   '--cap-drop=ALL','--security-opt=no-new-privileges','--read-only','--pids-limit=256','--cpus=1.0','--memory=1536m',
   '--log-driver=k8s-file','--log-opt=max-size=2mb','--tmpfs=/tmp:rw,nosuid,nodev,size=128m','-e','TZ=Asia/Ho_Chi_Minh',
   '-v','/var/lib/desk-homeassistant/current:/config:rw','-v','/var/lib/desk-homeassistant/ui:/run/desk-cluster:ro',c['image']]
+ if pathlib.Path('/etc/desk-camera/core-migration.json').is_file():
+  cmd[-1:-1]=['-e','PYTHONPATH=/opt/desk-camera-deps',
+   '-v','/var/lib/desk-camera/deps:/opt/desk-camera-deps:ro',
+   '-v','/var/lib/desk-camera/cache/cold:/media/tapo_control:rw',
+   '-v','/var/lib/desk-camera/cache/hot:/config/www/tapo_control:rw']
  proc=subprocess.Popen(cmd,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
  stopping=[False]
  signal.signal(signal.SIGTERM,lambda *_:stopping.__setitem__(0,True));signal.signal(signal.SIGINT,lambda *_:stopping.__setitem__(0,True))

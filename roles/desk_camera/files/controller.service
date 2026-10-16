@@ -1,0 +1,21 @@
+[Unit]
+Description=Camera media placement using the existing majority lease
+After=network-online.target nats-server.service
+Wants=network-online.target
+
+[Service]
+ExecStart=/opt/desk-homeassistant/bin/python /usr/local/libexec/desk-camera/controller.py
+Restart=on-failure
+RestartSec=5
+RuntimeDirectory=desk-camera
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
+UMask=0077
+Environment=PYTHONDONTWRITEBYTECODE=1
+CPUQuota=15%
+MemoryMax=96M
+Nice=15
+CPUWeight=1
+
+[Install]
+WantedBy=multi-user.target

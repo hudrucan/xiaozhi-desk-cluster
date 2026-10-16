@@ -1,0 +1,18 @@
+[Unit]
+Description=Warm go2rtc worker with independent camera-source fence
+After=network-online.target desk-camera.service
+Wants=network-online.target
+
+[Service]
+ExecStart=/opt/desk-homeassistant/bin/python /usr/local/libexec/desk-camera/runtime.py
+ExecStopPost=/opt/desk-homeassistant/bin/python /usr/local/libexec/desk-camera/runtime.py fence
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=15
+UMask=0077
+Environment=PYTHONDONTWRITEBYTECODE=1
+Nice=10
+CPUWeight=1
+
+[Install]
+WantedBy=multi-user.target
