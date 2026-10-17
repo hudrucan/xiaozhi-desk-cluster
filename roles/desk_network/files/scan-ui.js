@@ -6,6 +6,7 @@
  // Navigation scrolls independently on short screens; no fixed overlay.
  const tools=document.getElementById('desk-network-tools'),menu=tools?.closest('.sidebar-menu'),sidebar=menu?.closest('.sidebar');
  if(menu&&sidebar){
+  tools.querySelector('a>i')?.after(' '); // Match the native navigation's icon/text separator.
   const footer=document.createElement('ul');footer.className='sidebar-menu desk-network-footer';footer.append(tools);sidebar.append(footer);
   menu.classList.add('desk-network-menu');sidebar.classList.add('desk-network-sidebar');
   const style=document.createElement('style');style.id='desk-network-sidebar-dock';
