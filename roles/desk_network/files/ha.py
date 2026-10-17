@@ -13,6 +13,27 @@ NAME = 'desk-netalertx'
 IMAGE = 'ghcr.io/netalertx/netalertx@sha256:f95bca7a794141296dd1d16be5bb7f39f6fdbcd20353cdb51eee696e12d317f6'
 def encoded(v): return json.dumps(v,sort_keys=True,separators=(',',':')).encode()
 def sha(b): return hashlib.sha256(b).hexdigest()
+def resuming_https_handler(context):
+ # urllib's HTTPSHandler with the same pinned-CA handshake and hostname check, plus TLS session resumption:
+ # the abbreviated handshake skips the server's RSA signature on every peer RPC. Each (host,port) keeps the
+ # newest session; a rejected or expired session silently falls back to a full, fully verified handshake.
+ # Requests keep their own TCP connection (Connection: close) and every body is still HMAC-signed.
+ sessions={}
+ class Connection(http.client.HTTPSConnection):
+  def connect(self):
+   http.client.HTTPConnection.connect(self)
+   self.sock=self._context.wrap_socket(self.sock,server_hostname=self._tunnel_host or self.host,session=sessions.get((self.host,self.port)))
+  def close(self):
+   # http.client closes the connection inside getresponse() for Connection: close, after the
+   # server's post-handshake tickets have been read and before self.sock is released.
+   try:
+    session=self.sock.session if self.sock is not None else None
+    if session is not None and session.has_ticket:sessions[(self.host,self.port)]=session
+   except Exception:pass
+   super().close()
+ class Handler(urllib.request.HTTPSHandler):
+  def https_open(self,req):return self.do_open(Connection,req,context=self._context)
+ return Handler(context=context)
 def read_bounded(stream,limit):
  # read(limit+1) makes BufferedReader reserve the full ceiling, even for tiny replies.
  # Grow only with bytes actually received; never allocate the ceiling up front.
@@ -238,7 +259,7 @@ class Cluster:
   self.term=None;self.until=0.;self.running=False;self.ready=False;self.starting=False;self.sync_state='synced';self.last_snapshot=0.;self.last_health=0.;self.last_local=0.;self.local={};self.sequence=0;self._snap_backoff=0.;self._rebalance_retry=0.;self.pid=None;self.cooldown=0.;self.container_started=0.;self.boot_ready_seconds=None;self.unhealthy_since=0.
   self.warm=self.c.get("warm_standby") is True;self.generation=None;self.promotion_started=0.;self.promotion_seconds=None;self.warm_path=self.run/"warm"
   self.budget=bootstrap.Budget(clock);self.oplock=threading.RLock();self.snaplock=threading.Lock();self.pool=concurrent.futures.ThreadPoolExecutor(max_workers=8);self.stop=threading.Event();self.nonces={};self.authlock=threading.Lock();self.scan_lock=threading.Lock();self.scan_queued_at=0.;self.scan_cache={};self.scan_cache_at=0.
-  context=ssl.create_default_context(cafile=c['certificate']);self.opener=urllib.request.build_opener(urllib.request.ProxyHandler({}),urllib.request.HTTPSHandler(context=context))
+  context=ssl.create_default_context(cafile=c['certificate']);self.opener=urllib.request.build_opener(urllib.request.ProxyHandler({}),resuming_https_handler(context))
  def owned(self):return self.running and clock()<self.until
  def status(self):
   return {'node':self.node,'lease':self.lease.status(),'active':self.owned(),'ready':self.owned() and self.ready,'head':self.store.head,'eligible':self.eligible(),'score':self.score(),'sync':self.sync_state}

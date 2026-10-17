@@ -636,6 +636,34 @@ deskboxes, so `--limit` cannot be used for a canary.
 After rollout check `systemctl show desk-network-checkpoint.slice -p MemoryMax`
 (`402653184`) and that `/run/desk-network/` holds no `sqlite-*` file.
 
+### CPU follow-ups from py-spy profiling
+
+`diagnostics-profile.yml` installs a pinned py-spy wheel under `/opt/desk-diagnostics`
+(copied from the controller, no pip or internet on the nodes), samples the Python
+control-plane processes with `--nonblocking` at 50 Hz and fetches raw stacks to
+`/tmp/desk-diagnostics`; `scripts/profile-summary.py` summarises them and
+`-e diag_action=remove` deletes the tool. Percentages are trustworthy for host
+processes only: for processes inside the NetAlertX container py-spy reports sleeping
+threads as active, so read their stacks, not their percentages.
+
+- Peer RPC (`ha.py`, TLS port 20215) spent about half of its active time in
+  `ssl.do_handshake`: every call opened a new TCP connection and a full TLS handshake,
+  on both client and server. `resuming_https_handler` keeps the newest TLS session per
+  peer and resumes it. Certificate pinning, hostname verification, `Connection: close`
+  and the HMAC body signature are unchanged, and a rejected or expired ticket (for
+  example after the peer restarts) falls back to a full verified handshake. On the
+  nodes (Python 3.11.2, OpenSSL 3.0) a loopback benchmark showed 200/200 resumed
+  requests and 29.0 to 22.8 ms of combined client and server CPU per request, about
+  22% less. Most of the rest is Python/urllib/socket overhead, not the handshake, so
+  expect roughly 1.5% of one core per node, not more. Connection keep-alive would save
+  more but changes the server's concurrency model and was not attempted.
+- The warm runtime parent re-parses `control.json` only when it changes (`ControlReader`).
+  Measured per-process CPU in the NetAlertX container on the active node: backend child
+  4.5%, warm parent 1.0%, php/cron 0.2%; standby warm adds about 0.1%. The backend's cost
+  is its upstream five-second loop rebuilding derived API JSON after DB commits and every
+  30 seconds (`api_read_cache.MAX_AGE`); it was not changed.
+- The front panel's two activity readers are cached, see the README front-panel section.
+
 ### Observed result
 
 Reported after the first rollout: node 2 released 237 MiB of stale tmpfs data

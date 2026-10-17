@@ -3,6 +3,7 @@
 # Use this instead of network.yml when the only changes are in:
 #   roles/desk_network/files/{ha.py,checkpoint_budget.py,...}
 #   roles/desk_homeassistant/files/agent.py   (election score only)
+#   (warm_runtime.py is read by the warm containers when the controller restarts them below)
 #   roles/desk_network/templates/desk-network-checkpoint.slice.j2
 #
 # Completes in ~60–90 s vs ~5–8 min for the full network.yml.
@@ -35,7 +36,7 @@
         dest: '/usr/local/libexec/desk-network/{{ item }}'
         mode: '0755'
         validate: /usr/bin/python3 -c "import ast,sys; ast.parse(open(sys.argv[1]).read())" %s
-      loop: [ha.py, checkpoint_budget.py, bootstrap.py, discovery.py]
+      loop: [ha.py, checkpoint_budget.py, bootstrap.py, discovery.py, warm_runtime.py]
       register: network_helpers_files
 
     - name: Install Home Assistant election agent (score weights)
