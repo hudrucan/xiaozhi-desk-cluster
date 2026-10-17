@@ -8,6 +8,12 @@ class Checks(unittest.TestCase):
   # The production systemd runner/failure paths have separate budget tests.
   runner=patch.object(ha.checkpoint_budget,'execute',side_effect=lambda command,blob=None:subprocess.run(command,input=blob,stdout=subprocess.PIPE,stderr=subprocess.PIPE,check=True,timeout=60))
   runner.start();self.addCleanup(runner.stop)
+ def test_native_api_namespace_reaches_authenticated_loopback_service(self):
+  self.assertEqual(ha.native_route('10.10.10.11','/server/device/aa:bb:cc:dd:ee:ff?period=1'),('127.0.0.1',20212,'/device/aa:bb:cc:dd:ee:ff?period=1'))
+  self.assertEqual(ha.native_route('10.10.10.11','/php/server/util.php'),('10.10.10.11',20211,'/php/server/util.php'))
+  self.assertEqual(ha.native_route('10.10.10.11','/server.js'),('10.10.10.11',20211,'/server.js'))
+  body=json.dumps({'columnName':'devAlertEvents','columnValue':0}).encode()
+  self.assertTrue(ha.is_mutation('POST','/network/server/device/aa:bb:cc:dd:ee:ff/update-column',body))
  def test_presence_and_events_wait_for_native_cache_bootstrap(self):
   for page in ('presence.php','events.php'):
    raw=b'<html><head></head><body><script>\nlet tableRows=NaN;\nmain(); // Initialize page\nfunction main(){calls++;}\n</script></body></html>'
@@ -315,13 +321,13 @@ context.window.deskNetworkSessionStorage.clear();assert.equal(session.xiaozhi,'k
     with self.assertRaises(subprocess.CalledProcessError):ha.snapshot_worker('create',data=data,run=run)
    self.assertEqual(list(run.iterdir()),[]);db.close()
  def test_snapshot_rejects_stale_term_before_starting_worker(self):
-  c=ha.Cluster.__new__(ha.Cluster);c.snaplock=threading.Lock();c.term=[2,'a'];c.owned=lambda:True
+  c=ha.Cluster.__new__(ha.Cluster);c.snaplock=threading.Lock();c.oplock=threading.RLock();c.term=[2,'a'];c.owned=lambda:True
   with patch.object(ha,'snapshot_worker') as worker:
    with self.assertRaises(ha.Unavailable):c.snapshot(expected_term=[1,'a'])
   worker.assert_not_called()
  def test_snapshot_rejects_term_change_and_lease_loss_during_worker(self):
   for change in ('term','lease'):
-   c=ha.Cluster.__new__(ha.Cluster);c.snaplock=threading.Lock();c.term=[1,'a'];c.owned=lambda:True
+   c=ha.Cluster.__new__(ha.Cluster);c.snaplock=threading.Lock();c.oplock=threading.RLock();c.term=[1,'a'];c.owned=lambda:True
    c.root=pathlib.Path('/unused');c.run=c.root;c.store=MagicMock();c.fanout=MagicMock();c.last_snapshot=10.
    def changed(*args,**kwargs):
     if change=='term':c.term=[2,'a']
@@ -427,6 +433,23 @@ class Rebalance(ClusterFixture,unittest.TestCase):
   c=self.cluster({'admission':{'worker':True}},self.PEERS,snapshot=ha.Unavailable('no quorum'))
   c.run_loop()
   self.assertTrue(self.released(c));self.assertIsNone(c.term)
+class RpcCapacity(unittest.TestCase):
+ def test_checkpoint_executor_cannot_queue_ahead_of_lease_renewal(self):
+  import concurrent.futures
+  c=ha.Cluster.__new__(ha.Cluster);c.members={'a':'a','b':'b','c':'c'}
+  c.pool=concurrent.futures.ThreadPoolExecutor(max_workers=1);c.checkpoint_pool=concurrent.futures.ThreadPoolExecutor(max_workers=3)
+  release=threading.Event();started=[threading.Event() for _ in range(3)]
+  def call(node,action,value,timeout):
+   if action=='stage':started[list(c.members).index(node)].set();release.wait(3)
+   return {'ok':True}
+  c.call=call
+  with concurrent.futures.ThreadPoolExecutor(max_workers=1) as runner:
+   job=runner.submit(c.fanout,'stage',{},2)
+   try:
+    self.assertTrue(all(event.wait(1) for event in started))
+    self.assertEqual(len(c.fanout('lease',{},.2)),3)
+   finally:
+    release.set();job.result(2);c.pool.shutdown();c.checkpoint_pool.shutdown()
 class SnapshotBackoff(ClusterFixture,unittest.TestCase):
  def test_worker_failure_backs_off_exponentially_to_cap_and_resets(self):
   c=self.cluster({},snapshot=subprocess.CalledProcessError(137,'worker'))

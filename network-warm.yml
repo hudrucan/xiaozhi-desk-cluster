@@ -74,7 +74,7 @@
         src: 'roles/desk_network/files/{{ item }}'
         dest: '/usr/local/libexec/desk-network/{{ item }}'
         mode: '0755'
-      loop: [api_read_cache.py, checkpoint_budget.py, ha.py, warm_runtime.py, warm-backend.sh, warm-idle.sh]
+      loop: [api_read_cache.py, checkpoint_budget.py, checkpoint_source.py, peer_http.py, ha.py, warm_runtime.py, warm-backend.sh, warm-idle.sh]
       register: warm_helpers
     - name: Install Save progress and result feedback
       ansible.builtin.copy:

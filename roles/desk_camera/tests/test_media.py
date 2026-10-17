@@ -1,5 +1,6 @@
 """Focused offline checks for standby isolation, deadlines and ACL cleanup."""
 import importlib.util,json,math,pathlib,sys,tempfile,types,unittest
+from unittest.mock import patch
 ROOT=pathlib.Path(__file__).parent
 if not (ROOT/'runtime.py').exists():ROOT=ROOT.parent/'files'
 sys.path.insert(0,str(ROOT))
@@ -53,4 +54,30 @@ class MediaTests(unittest.TestCase):
   new=a.candidate(old,users)
   self.assertNotIn('REMOTE INTEGRATION',new);self.assertIn('{user: existing}',new);self.assertIn('routes: [unchanged]',new)
   self.assertNotIn('desk.ha.remote',new);self.assertEqual(a.candidate(new,users),new)
+ def test_cached_readiness_reuses_parse_but_checks_age_generation_and_lease(self):
+  with tempfile.TemporaryDirectory() as tmp:
+   p=pathlib.Path(tmp)/'runtime.json';p.write_text(json.dumps({'ready':True,'at':100.,'generation':'a'*32}))
+   agent=c.Controller.__new__(c.Controller);agent.run_dir=p.parent;agent.generation='a'*32;agent.owned=lambda:True;agent.files=c.StatusFiles()
+   with patch.object(c.time,'time',return_value=101.),patch.object(pathlib.Path,'read_bytes',autospec=True,side_effect=pathlib.Path.read_bytes) as reads:
+    self.assertTrue(agent.ready());self.assertTrue(agent.ready());self.assertEqual(reads.call_count,1)
+    agent.generation='b'*32;self.assertFalse(agent.ready());agent.generation='a'*32
+    agent.owned=lambda:False;self.assertFalse(agent.ready());self.assertEqual(reads.call_count,1)
+   agent.owned=lambda:True
+   with patch.object(c.time,'time',return_value=104.):self.assertFalse(agent.ready())
+   p.unlink();self.assertFalse(agent.ready());self.assertNotIn(p,agent.files.entries)
+ def test_status_cache_detects_atomic_replacement_and_rechecks_colliding_stat(self):
+  with tempfile.TemporaryDirectory() as tmp:
+   p=pathlib.Path(tmp)/'status.json';p.write_text('{"ready":true}');now=[0.];cache=c.StatusFiles(monotonic=lambda:now[0])
+   self.assertTrue(cache.read(p)['ready']);candidate=p.with_suffix('.tmp');candidate.write_text('{"ready":false}');candidate.replace(p)
+   self.assertFalse(cache.read(p)['ready']);st=p.stat();p.write_text('{"ready":true}')
+   with patch.object(pathlib.Path,'stat',return_value=st):
+    self.assertFalse(cache.read(p)['ready']);now[0]=1.1;self.assertTrue(cache.read(p)['ready'])
+ def test_shared_permit_cache_never_retains_expired_slot(self):
+  with tempfile.TemporaryDirectory() as tmp,patch.object(c,'RUN',pathlib.Path(tmp)):
+   own=c.RUN/'own';own.mkdir();other=c.RUN/'other';other.mkdir();p=other/'permit.json';p.write_text('{"until":110,"generation":"active"}')
+   agent=c.Controller.__new__(c.Controller);agent.run_dir=own;agent.local={'cpu':12};agent.files=c.StatusFiles()
+   with patch.object(c,'clock',return_value=100.):self.assertEqual(agent.placement_score(),112)
+   with patch.object(c,'clock',return_value=110.):self.assertEqual(agent.placement_score(),12)
+   p.write_text('invalid')
+   with patch.object(c,'clock',return_value=100.):self.assertEqual(agent.placement_score(),12)
 if __name__=='__main__':unittest.main()

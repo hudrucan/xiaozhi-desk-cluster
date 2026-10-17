@@ -40,7 +40,7 @@
         dest: '/usr/local/libexec/desk-network/{{ item }}'
         mode: '0755'
         validate: /usr/bin/python3 -c "import ast,sys; ast.parse(open(sys.argv[1]).read())" %s
-      loop: [ha.py, mdns.py, arp.py, discovery.py, bootstrap.py]
+      loop: [checkpoint_source.py, peer_http.py, ha.py, mdns.py, arp.py, discovery.py, bootstrap.py]
       register: scan_controller
     - name: Install native scan progress UI
       ansible.builtin.copy:

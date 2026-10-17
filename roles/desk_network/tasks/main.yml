@@ -53,7 +53,7 @@
     dest: '/usr/local/libexec/desk-network/{{ item }}'
     mode: '0755'
     validate: /usr/bin/python3 -c "import ast,sys; ast.parse(open(sys.argv[1]).read())" %s
-  loop: [ha.py, seed.py, api-loopback.py, verify_ready.py, mdns.py, arp.py, discovery.py, bootstrap.py, checkpoint_budget.py, api_read_cache.py]
+  loop: [checkpoint_source.py, peer_http.py, ha.py, seed.py, api-loopback.py, verify_ready.py, mdns.py, arp.py, discovery.py, bootstrap.py, checkpoint_budget.py, api_read_cache.py]
   register: network_helpers
 - name: Install checkpoint-only resource budget without throttling lease renewal
   ansible.builtin.template:

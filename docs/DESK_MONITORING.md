@@ -287,7 +287,12 @@ collector chooses the preferred hub. All three hubs remain running and healthy
 sticky sessions stay on their selected hub.
 
 The score is CPU percentage plus role costs: UI/Xiaozhi owner 20, DNS owner 10,
-VPN owner 5, network collector 10 and 30 for each active ASR/LLM/TTS stage.
+VPN owner 5, network collector 20, Home Assistant owner 20 and 30 for each active
+ASR/LLM/TTS stage. Each owner beyond the first adds 100 points, so a node already
+holding VPN and Network normally yields preference to a node holding only
+Xiaozhi. Home Assistant starting, active and checkpointing count as ownership;
+standby or stale Home Assistant metadata does not. Monitoring itself is not
+counted as an owner, avoiding a preference feedback loop.
 Offline, stale, unhealthy and maintenance nodes are excluded from preference.
 An unavailable preferred hub is replaced immediately; switching between healthy
 hubs requires an improvement of at least 15 points sustained for three minutes,
@@ -299,6 +304,18 @@ control availability. Missing or stale placement data returns neutral weights.
 Existing cookies retain healthy sessions even when their hub is not preferred.
 The dashboard displays **Monitoring preferred** on the choice reported by the
 single current UI VIP owner; conflicting/missing owners suppress the badge.
+
+Use `dashboard-helpers.yml` to build and roll out only a changed collector binary,
+with a rollback copy and protected-service checks. It does not reload ingress or
+restart the monitoring hubs.
+
+After the 2026-10-17 collector-only rollout on all three nodes, the shared panel
+reported `deskb2x` as preferred with VPN + Network on `deskb1x`, Xiaozhi on
+`deskb2x`, and DNS + Home Assistant on `deskb3x`. The UI owner's weight agent
+returned 10% / 100% / 10%. Of 24 requests without a session cookie through the
+management VIP, 20 reached `deskb2x` and two reached each other healthy hub.
+A request carrying the existing `deskb1x` cookie still reached `deskb1x`.
+Protected voice/DNS/VIP service checks passed on every node.
 
 An optional NetAlertX CPU canary is labelled **Network trial**, only while its
 private frontend is reachable and its RAM marker is present. This does not mean

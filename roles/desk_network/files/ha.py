@@ -2,6 +2,8 @@
 """One LAN collector, majority leases, certified consistent SQLite checkpoints."""
 from contextlib import closing
 import discovery,bootstrap,checkpoint_budget
+from checkpoint_source import CheckpointSource
+from peer_http import PeerHTTP
 import ast, signal, argparse, base64, concurrent.futures, gzip, hashlib, hmac, http.client, http.server, io, json, logging, os, pathlib, re, secrets, shutil, socket, sqlite3, ssl, struct, subprocess, sys, threading, time, urllib.parse, urllib.request, zlib
 LOG = logging.getLogger('desk-network')
 TTL, MARGIN, LIMIT, DBLIMIT = 15., 5., 16*1024*1024, 64*1024*1024
@@ -260,6 +262,8 @@ class Cluster:
   self.warm=self.c.get("warm_standby") is True;self.generation=None;self.promotion_started=0.;self.promotion_seconds=None;self.warm_path=self.run/"warm"
   self.budget=bootstrap.Budget(clock);self.oplock=threading.RLock();self.snaplock=threading.Lock();self.pool=concurrent.futures.ThreadPoolExecutor(max_workers=8);self.stop=threading.Event();self.nonces={};self.authlock=threading.Lock();self.scan_lock=threading.Lock();self.scan_queued_at=0.;self.scan_cache={};self.scan_cache_at=0.
   context=ssl.create_default_context(cafile=c['certificate']);self.opener=urllib.request.build_opener(urllib.request.ProxyHandler({}),resuming_https_handler(context))
+  self.peer_http=PeerHTTP(context,LIMIT*2)
+  self.checkpoint_pool=concurrent.futures.ThreadPoolExecutor(max_workers=3)
  def owned(self):return self.running and clock()<self.until
  def status(self):
   return {'node':self.node,'lease':self.lease.status(),'active':self.owned(),'ready':self.owned() and self.ready,'head':self.store.head,'eligible':self.eligible(),'score':self.score(),'sync':self.sync_state}
@@ -286,12 +290,13 @@ class Cluster:
   path='/peer/'+action;raw=encoded(value or {});stamp=str(int(time.time()));nonce=secrets.token_hex(16)
   signed=('POST\n'+path+'\n'+stamp+'\n'+nonce+'\n'+sha(raw)).encode()
   headers={'Content-Type':'application/json','X-Desk-Node':self.node,'X-Desk-Time':stamp,'X-Desk-Nonce':nonce,'X-Desk-Signature':hmac.new(self.key,signed,hashlib.sha256).hexdigest()}
-  req=urllib.request.Request('https://'+self.members[node]+':20215'+path,data=raw,headers=headers)
-  with self.opener.open(req,timeout=timeout) as r:
-   b=read_bounded(r,LIMIT*2)
-   return json.loads(b)
+  channel='checkpoint' if action in ('stage','commit','blob') else 'control'
+  status,b=self.peer_http.post(self.members[node],20215,path,raw,headers,timeout,channel)
+  if status!=200:raise Unavailable('Peer request rejected')
+  return json.loads(b)
  def fanout(self,action,value=None,timeout=1.2):
-  jobs={n:self.pool.submit(self.call,n,action,value,timeout) for n in self.members};out={}
+  pool=self.checkpoint_pool if action in ('stage','commit','blob') else self.pool
+  jobs={n:pool.submit(self.call,n,action,value,timeout) for n in self.members};out={}
   for n,f in jobs.items():
    try:out[n]=f.result(timeout=timeout+1)
    except Exception:pass
@@ -315,22 +320,41 @@ class Cluster:
   if not self.store.head or meta['revision']>self.store.head['revision']:
    blob=base64.b64decode(self.call(n,'blob',{'digest':meta['digest']},timeout=5)['blob'],validate=True)
    self.store.stage(meta,blob,self.node);self.store.commit(meta)
- def snapshot(self,expected_term=None):
+ def snapshot(self,expected_term=None,force=True):
   with self.snaplock:
-   if not self.owned() or (expected_term is not None and self.term!=expected_term):raise Unavailable('Collector does not hold expected lease')
-   term=list(self.term)
+   # Only the cheap change probe shares the ownership lock. Worker execution
+   # and replication remain outside it so renewal is never queued behind them.
+   with self.oplock:
+    if not self.owned() or (expected_term is not None and self.term!=expected_term):raise Unavailable('Collector does not hold expected lease')
+    term=list(self.term)
+    source=getattr(self,'_checkpoint_source',None)
+    if source is None:self._checkpoint_source=source=CheckpointSource(self.root/'data')
+    try:before=source.stamp()
+    except Exception:self.retire_checkpoint_source(source);source=None;before=None
+    if not self.owned() or self.term!=term:
+     self.retire_checkpoint_source(source);raise Unavailable('Lease changed during checkpoint probe')
+    if not force and source and self.store.head and source.unchanged(term,before,self.store.head['digest']):
+     self.last_snapshot=clock();self.sync_state='synced';return
    blob=snapshot_worker('create',data=self.root/'data',run=self.run)
    if not self.owned() or self.term!=term:raise Unavailable('Lease changed during checkpoint')
-   if self.store.head and sha(blob)==self.store.head['digest']:
-    self.last_snapshot=clock();self.sync_state='synced';return
-   self.sequence+=1;meta={'revision':term+[self.sequence],'digest':sha(blob),'at':time.time()}
-   replies=self.fanout('stage',{'meta':meta,'blob':base64.b64encode(blob).decode()},timeout=checkpoint_budget.STAGE_TIMEOUT)
-   if len(replies)<2: self.sync_state='pending';raise Unavailable('Checkpoint needs two replicas')
-   meta['certificate']=list(replies.values());self.store.verify(meta)
-   if not self.owned() or self.term!=term:raise Unavailable('Lease changed during checkpoint')
-   replies=self.fanout('commit',{'meta':meta},timeout=3)
-   if len(replies)<2:self.sync_state='pending';raise Unavailable('Checkpoint acknowledgment pending')
-   self.last_snapshot=clock();self.sync_state='synced'
+   if not self.store.head or sha(blob)!=self.store.head['digest']:
+    self.sequence+=1;meta={'revision':term+[self.sequence],'digest':sha(blob),'at':time.time()}
+    replies=self.fanout('stage',{'meta':meta,'blob':base64.b64encode(blob).decode()},timeout=checkpoint_budget.STAGE_TIMEOUT)
+    if len(replies)<2: self.sync_state='pending';raise Unavailable('Checkpoint needs two replicas')
+    meta['certificate']=list(replies.values());self.store.verify(meta)
+    if not self.owned() or self.term!=term:raise Unavailable('Lease changed during checkpoint')
+    replies=self.fanout('commit',{'meta':meta},timeout=3)
+    if len(replies)<2:self.sync_state='pending';raise Unavailable('Checkpoint acknowledgment pending')
+   with self.oplock:
+    if not self.owned() or self.term!=term:raise Unavailable('Lease changed during checkpoint commit')
+    if source:
+     try:source.accept(term,before,self.store.head['digest'])
+     except Exception:self.retire_checkpoint_source(source)
+    self.last_snapshot=clock();self.sync_state='synced'
+ def retire_checkpoint_source(self,source=None):
+  if source is None:source=getattr(self,'_checkpoint_source',None);self._checkpoint_source=None
+  elif getattr(self,'_checkpoint_source',None) is source:self._checkpoint_source=None
+  if source is not None:source.close()
  def command(self,*args,timeout=12):
   return subprocess.run(args,check=True,capture_output=True,timeout=timeout)
  def warm_control(self,active=False):
@@ -371,6 +395,7 @@ class Cluster:
      self.activate_warm()
     return
    if self.warm:self.warm_control()
+   self.retire_checkpoint_source()
    restore(self.store.blob(self.store.head['digest']),self.root/'data',self.run,self.c['api_token'])
    cmd=['podman','run','-d','--replace','--name',NAME,'--network=host','--read-only','--cpus=0.5','--cpu-shares=128','--memory=512m','--pids-limit=256','--log-driver=k8s-file','--log-opt=max-size=5mb','--cap-drop=ALL','--tmpfs','/tmp:rw,noexec,nosuid,nodev,mode=1700,size=256m','-v',str(self.root/'data')+':/data:rw','-v','/usr/local/libexec/desk-network/api-loopback.py:/app/server/api_server/api_server_start.py:ro','-v','/etc/desk-network/policy.json:/data/config/app_conf_override.json:ro','-v','/usr/local/libexec/desk-network/override-policy.sh:/entrypoint.d/35-apply-conf-override.sh:ro','-v','/usr/local/libexec/desk-network/lang-cached.php:/app/front/php/templates/language/lang.php:ro','-v','/usr/local/libexec/desk-network/opcache.so:/usr/lib/php83/modules/opcache.so:ro','-v','/usr/local/libexec/desk-network/opcache.ini:/etc/php83/conf.d/10_desk_opcache.ini:ro','-e','LISTEN_ADDR='+self.members[self.node],'-e','PORT=20211','-e','GRAPHQL_PORT=20212']
    cmd+=['-v','/usr/local/libexec/desk-network/mdns.py:/app/desk_network/mdns.py:ro','-v','/usr/local/libexec/desk-network/arp.py:/app/desk_network/arp.py:ro','-v','/usr/local/libexec/desk-network/discovery.py:/app/desk_network/discovery.py:ro']
@@ -394,12 +419,16 @@ class Cluster:
   if not self.owned() or self.warm_state().get('state')!='inactive':raise Unavailable('Warm runtime not inactive')
   # No PHP/backend/database handles survive this boundary. The preloaded parent
   # contains imports only; restore the latest majority-certified data first.
+  self.retire_checkpoint_source()
   restore(self.store.blob(self.store.head['digest']),self.root/'data',self.run,self.c['api_token'])
   if not self.owned():raise Unavailable('Lease expired during warm restore')
   self.generation=secrets.token_hex(16);self.promotion_started=clock();self.promotion_seconds=None
   self.boot_ready_seconds=None;self.container_started=clock();self.last_snapshot=clock();self.last_health=0.;self.unhealthy_since=0.
   self.warm_control(True)
  def kill_container(self,force=False):
+  # Retire the short probe without waiting for the startup/restore lock.
+  # A probe racing this boundary rechecks ownership before releasing oplock.
+  self.until=0.;self.ready=False;self.retire_checkpoint_source()
   if self.warm and self.running and not force and not self.stop.is_set():
    self.until=0.;self.ready=False
    with self.oplock:
@@ -529,7 +558,7 @@ class Cluster:
   except Exception:job['ok']=False
   finally:job['done'].set()
  def try_snapshot(self):
-  try:self.snapshot();self._snap_backoff=0.
+  try:self.snapshot(force=False);self._snap_backoff=0.
   except subprocess.SubprocessError as e:
    # Worker was OOM-killed or timed out.  Back off exponentially to avoid
    # hammering the tmpfs slice every ~34 s while the slice is overloaded.
@@ -553,6 +582,7 @@ def write_response(h,status,b,ctype='application/json',headers=None):
  h.end_headers()
  if h.command!='HEAD':h.wfile.write(b)
 class Peer(http.server.BaseHTTPRequestHandler):
+ protocol_version='HTTP/1.1'
  def log_message(self,*args):pass
  def do_POST(self):
   c=self.server.cluster
@@ -566,7 +596,9 @@ class Peer(http.server.BaseHTTPRequestHandler):
     if nonce in c.nonces or len(c.nonces)>512:raise Unavailable('Peer replay rejected')
     c.nonces[nonce]=clock()
    value=c.peer(node,self.path.removeprefix('/peer/'),json.loads(raw));write_response(self,200,encoded(value))
-  except Exception:write_response(self,409,encoded({'error':'Peer request rejected'}))
+  except Exception:
+   self.close_connection=True
+   write_response(self,409,encoded({'error':'Peer request rejected'}),headers={'Connection':'close'})
 def is_mutation(method,path,body):
  if method in ('GET','HEAD'):
   query=urllib.parse.parse_qs(urllib.parse.urlsplit(path).query)
@@ -627,6 +659,11 @@ def rewrite_text(raw,ctype,node='',path=''):
   script=script.replace('OWNER_JSON',json.dumps(node))
   text=text.replace('</body>',script+'<script defer src="/network/desk/scan-ui.js"></script></body>')
  return text.encode()
+def native_route(node,path):
+ # The same-origin /server namespace is the authenticated native API, not an
+ # nginx directory. Its token checks and the UI mutation quorum still apply.
+ if path.startswith('/server/'):return '127.0.0.1',20212,path[len('/server'):]
+ return node,20211,path
 class UI(http.server.BaseHTTPRequestHandler):
  protocol_version='HTTP/1.1'
  def log_message(self,*args):pass
@@ -669,7 +706,8 @@ class UI(http.server.BaseHTTPRequestHandler):
      with c.scan_lock:c.scan_queued_at=0;c.scan_cache_at=0
      return write_response(self,503,encoded({'error':'Native scan queue unavailable'}))
    path=self.path[len('/network'):];headers={k:v for k,v in self.headers.items() if k.lower() not in ('host','connection','transfer-encoding','content-length','accept-encoding')};headers['Host']='192.168.1.186';headers['Accept-Encoding']='identity'
-   conn=http.client.HTTPConnection(c.members[c.node],20211,timeout=20);conn.request(self.command,path,body=raw or None,headers=headers);r=conn.getresponse();ctype=r.getheader('Content-Type','application/octet-stream')
+   host,port,path=native_route(c.members[c.node],path)
+   conn=http.client.HTTPConnection(host,port,timeout=20);conn.request(self.command,path,body=raw or None,headers=headers);r=conn.getresponse();ctype=r.getheader('Content-Type','application/octet-stream')
    if 'text/event-stream' in ctype:
     self.send_response(r.status);self.send_header('Content-Type',ctype);self.send_header('Cache-Control','no-store');self.send_header('Connection','close');self.end_headers();self.close_connection=True
     while c.owned():
@@ -707,6 +745,7 @@ class Server(http.server.ThreadingHTTPServer):
    context=getattr(self,'tls_context',None)
    if context:
     request.settimeout(2);request=context.wrap_socket(request,server_side=True);request.settimeout(25)
+    request.setsockopt(socket.IPPROTO_TCP,socket.TCP_NODELAY,1)
    super().process_request_thread(request,client_address)
   except OSError:self.shutdown_request(request)
   finally:self.slots.release()
@@ -742,5 +781,7 @@ def main():
  for server in (peer,ui):threading.Thread(target=server.serve_forever,daemon=True).start()
  signal.signal(signal.SIGTERM,lambda *_:c.stop.set())
  try:c.run_loop()
- finally:c.stop.set();c.kill_container();peer.shutdown();ui.shutdown()
+ finally:
+  c.stop.set();c.kill_container();c.peer_http.close();peer.shutdown();ui.shutdown()
+  c.pool.shutdown(wait=False,cancel_futures=True);c.checkpoint_pool.shutdown(wait=False,cancel_futures=True)
 if __name__=='__main__':main()

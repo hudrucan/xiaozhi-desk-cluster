@@ -1049,3 +1049,76 @@ API ports were closed, and all container OOM-kill counters were zero. The active
 CPU sample includes verification/scan work and is not a steady-idle benchmark.
 The initial preload durations vary with startup load and the conditional CPU
 budget; they are not the warm activation times shown in the handoff table.
+
+## Idle resource follow-up
+
+The Network peer client reuses at most two pinned-TLS connections per peer and
+channel. Lease/status and checkpoint traffic have separate connection budgets and
+executors. Every request still verifies its HMAC, timestamp and nonce; uncertain
+POSTs are never replayed automatically. HTTP/1.0 peers remain compatible during
+rolling updates. Idle pooled sockets are discarded on checkout after eight seconds; server-side
+request admission and idle timeouts remain bounded. TLS responses disable Nagle buffering.
+
+Periodic checkpoints may skip backup/compression only after a successful certified
+snapshot of the same source, term and head digest. A retained read-only SQLite
+connection observes external commits through `data_version`, and database inode,
+configuration and workflow contents are checked too. Missing/broken metadata
+falls back to a full checkpoint. UI writes, rebalance and drains always request
+full snapshots. The detector never holds a read transaction across calls. Fencing retires its
+connection, and both cold restore and warm promotion close it before replacing
+the database; late jobs cannot reopen a retired detector.
+
+Static API read models use connection-local TEMP table-revision triggers for the
+exact pinned SELECTs. A write to Resource_History no longer invalidates Settings
+or language metadata on the same connection. External commits, schema changes,
+unknown SQL, force/ad-hoc requests and the existing thirty-second age bound retain
+conservative refresh behavior. TEMP state is not replicated and disappears when
+the native connection closes. No persistent schema or scan cadence changes.
+
+The same-origin `/network/server/` namespace forwards to the authenticated native
+API on loopback port 20212. Static/PHP pages continue to nginx. API writes still
+require the existing lease quorum and certified snapshot; native token checks are
+unchanged. This fixes the nginx 403 previously returned for API paths.
+
+For noisy devices, native **Alert Events** can be disabled per MAC. This filters
+ordinary connection/disconnection reports without deleting event history or
+changing device presence, New Device or Device Down semantics. Avoid disabling
+all event reports globally merely to quiet a few randomized phone identities.
+
+Deploy Network with `network-helpers.yml`; dependencies are installed before their
+caller and changed source files retain Ansible rollback copies. Camera controller
+metadata caching has a separate `camera-helpers.yml` rolling update, which leaves
+relay definitions and Home Assistant Core unchanged. Its existing
+`PartOf=desk-camera.service` relationship also restarts the thumbnail/playback
+SDK worker; the helper waits for that worker to finish preloading. It checks
+protected services and one ready owner per configured camera before completion.
+
+Read-only status RPC measurements on 2026-10-17, deskb1x to deskb2x over the
+private LAN (30 calls per mode): TLS resumption with a new connection had a
+34.00 ms median, versus 16.46 ms with a pooled connection. Client CPU per call
+fell from 13.12 to 6.55 ms; the pool created one connection and reused it 29 times,
+with no errors. This is RPC overhead, not a voice-turn latency measurement.
+
+The four previously identified randomized phone MACs now have native
+`devAlertEvents=0`, with `devAlertDown` unchanged. All three certified checkpoints
+were inspected and contained those flags, the same revision/digest and retained
+event history. No new persistent cache table/trigger was present in their schema.
+Existing report/history rows were not deleted and ARP remains every minute.
+
+Matched 90-second before/after observations on all three nodes (% of one CPU
+for service rows; whole-host rows use all four CPUs):
+
+| Metric | Before | After |
+| --- | ---: | ---: |
+| Network controller, node mean | 5.48% | 3.41% |
+| Camera controller, node mean | 6.86% | 6.26% |
+| deskb1x whole-host CPU | 22.88% | 21.50% |
+| deskb2x whole-host CPU | 20.10% | 19.62% |
+| deskb3x whole-host CPU | 20.70% | 20.18% |
+
+The active NetAlertX cgroup moved from 10.81 to 9.92% of one CPU and from
+186.92 to 177.87 MiB. Protected voice, DNS and Home Assistant Core retained their
+PIDs and policy. Network and camera controllers, dependent camera media workers,
+and subsequently the dashboard placement collectors were restarted. No checkpoint OOM counter
+increased. These are short uncontrolled idle observations after restarts, not
+a long-term memory soak or proof of voice/camera playback latency.

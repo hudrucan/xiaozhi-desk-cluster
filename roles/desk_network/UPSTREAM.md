@@ -74,7 +74,12 @@ not upstream's scan-pause feature or a supported upstream HA mode.
 preload. The parent holds an empty cache; each activation fills its own derived
 read-model metadata. No connection is opened during installation. Static models
 reuse their native endpoint only while the same SQLite connection's external
-`data_version`, local `total_changes` and query match, for at most 30 seconds.
+`data_version` and query match, for at most 30 seconds. Exact pinned table queries
+also use connection-local TEMP revision triggers to ignore unrelated backend
+writes (including Resource_History). External commits and main-schema changes
+invalidate conservatively; unknown SQL still uses global `total_changes`. The
+triggers and revision table are memory-only, disappear with the connection, and
+never enter the main schema or replicated checkpoints.
 Force/ad-hoc updates and time-sensitive/custom queries retain native behavior;
 the existing deferred JSON writer remains authoritative. Re-audit constructor
 call sites and query semantics when upgrading the pinned image.

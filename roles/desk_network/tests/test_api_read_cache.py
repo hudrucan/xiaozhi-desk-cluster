@@ -41,4 +41,28 @@ class Checks(unittest.TestCase):
  def test_metadata_failure_falls_back_and_install_is_idempotent(self):
   self.db.sql_connection=None;self.read();self.read();self.assertEqual(self.factory.call_count,2)
   native=SimpleNamespace(api_endpoint_class=self.factory);install(native);wrapper=native.api_endpoint_class;install(native);self.assertIs(native.api_endpoint_class,wrapper)
+ def test_table_versions_ignore_unrelated_own_writes_but_track_every_operation(self):
+  self.conn.execute('CREATE TABLE Settings(value)');self.conn.execute('CREATE TABLE Resource_History(value)')
+  schema=self.conn.execute('SELECT sql FROM main.sqlite_master ORDER BY name').fetchall()
+  def read():return self.read(query='SELECT * FROM Settings',path='/tmp/api/table_settings.json')
+  first=read();self.conn.execute('INSERT INTO Resource_History VALUES (1)');self.assertIs(read(),first)
+  for sql in ['INSERT INTO Settings VALUES (1)','UPDATE Settings SET value=2','DELETE FROM Settings']:
+   self.conn.execute(sql);current=read();self.assertIsNot(current,first);first=current
+  self.assertEqual(self.conn.execute('SELECT sql FROM main.sqlite_master ORDER BY name').fetchall(),schema)
+ def test_external_writes_and_table_recreation_invalidate_selective_cache(self):
+  self.conn.execute('CREATE TABLE Settings(value)')
+  def read():return self.read(query='SELECT * FROM Settings',path='/tmp/api/table_settings.json')
+  first=read()
+  with sqlite3.connect(str(pathlib.Path(self.tmp.name)/'db')) as other:other.execute('INSERT INTO Settings VALUES (1)')
+  second=read();self.assertIsNot(first,second)
+  self.conn.execute('DROP TABLE Settings');self.conn.execute('CREATE TABLE Settings(value)')
+  third=read();self.assertIsNot(second,third)
+  self.conn.execute('INSERT INTO Settings VALUES (2)');self.assertIsNot(read(),third)
+ def test_selective_versions_follow_rollback_and_keep_before_build_stamp(self):
+  self.conn.execute('CREATE TABLE Settings(value)');query='SELECT * FROM Settings';path='/tmp/api/table_settings.json'
+  first=self.read(query=query,path=path);self.conn.execute('BEGIN');self.conn.execute('INSERT INTO Settings VALUES (1)');self.conn.rollback()
+  self.assertIs(self.read(query=query,path=path),first)
+  def build(*args):self.conn.execute('INSERT INTO Settings VALUES (1)');return object()
+  self.factory.side_effect=build;self.time[0]=31;self.read(query=query,path=path);self.read(query=query,path=path)
+  self.assertEqual(self.factory.call_count,3)
 if __name__=='__main__':unittest.main()

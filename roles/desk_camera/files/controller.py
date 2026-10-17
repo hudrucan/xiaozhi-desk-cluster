@@ -12,6 +12,27 @@ from protocol import pack,unpack,MAX
 ROOT=pathlib.Path('/var/lib/desk-camera');RUN=pathlib.Path('/run/desk-camera')
 PREFIX='desk.ha.media'
 
+class StatusFiles:
+ """Share parsed metadata, but never cache readiness or lease deadlines."""
+ def __init__(self,max_age=1.,monotonic=time.monotonic):
+  self.max_age,self.monotonic=max_age,monotonic;self.entries={};self.paths=None;self.paths_key=None;self.paths_at=0.;self.lock=threading.RLock()
+ def read(self,path):
+  with self.lock:
+   try:
+    st=path.stat();key=(st.st_ino,st.st_mtime_ns,st.st_size);now=self.monotonic();old=self.entries.get(path)
+    if old and old[0]==key and now-old[1]<self.max_age:return old[2]
+    self.entries.pop(path,None)
+    if st.st_size>65536:raise ValueError('Camera status exceeds limit')
+    value=json.loads(path.read_bytes());self.entries[path]=(key,now,value);return value
+   except Exception:
+    self.entries.pop(path,None);raise
+ def permits(self):
+  with self.lock:
+   st=RUN.stat();key=(RUN,st.st_ino,st.st_mtime_ns);now=self.monotonic()
+   if self.paths is None or key!=self.paths_key or now-self.paths_at>=self.max_age:
+    self.paths=[RUN/'permit.json',*RUN.glob('*/permit.json')];self.paths_key=key;self.paths_at=now
+   return self.paths
+
 def paths(c):
  workload=c['workload']
  if not __import__('re').fullmatch(r'[a-z0-9_]{1,64}',workload):raise ValueError('Invalid camera workload')
@@ -26,11 +47,11 @@ class Telemetry:
    a.read_telemetry();self.value=a.local;self.at=a.local_at
 
 class Controller:
- def __init__(self,c,telemetry=None):
+ def __init__(self,c,telemetry=None,files=None):
   self.c=c;self.node=c['node'];self.members=c['members'];self.root,self.run_dir=paths(c);self.root.mkdir(parents=True,exist_ok=True,mode=0o700);self.run_dir.mkdir(parents=True,exist_ok=True,mode=0o700);self.lease=Lease(self.root/'vote.json')
   self.prefix=PREFIX if c['workload']=='tapo_c222_160' else PREFIX+'.'+c['workload'];self.telemetry=telemetry or Telemetry();self.health=CameraHealth();self.owner_seen=None;self.owner_changed_at=None;self.previous_owner=None
   self.until=0;self.term=None;self.generation=None;self.transport=None;self.fleet=None;self.stop=asyncio.Event();self.nonces={};self.heads={};self.local=None;self.local_at=0;self.started_at=0;self.cooldown=0
-  self.playback=Playback(self)
+  self.files=files or StatusFiles();self.playback=Playback(self)
   self.opener=urllib.request.build_opener(urllib.request.ProxyHandler({}))
  def owned(self):return self.term is not None and clock()<self.until
  def eligible(self):
@@ -38,16 +59,17 @@ class Controller:
  def ready(self):
   if not self.owned():return False
   try:
-   v=json.loads((self.run_dir/'runtime.json').read_bytes())
+   v=self.files.read(self.run_dir/'runtime.json')
    return self.owned() and v.get('generation')==self.generation and v.get('ready') is True and time.time()-v['at']<4
   except Exception:return False
  def placement_score(self):
   # Prefer a free relay slot; retain a healthy owner instead of constantly rebalancing.
   slots=0
-  for p in [RUN/'permit.json',*RUN.glob('*/permit.json')]:
+  files=getattr(self,'files',None)
+  for p in files.permits() if files else [RUN/'permit.json',*RUN.glob('*/permit.json')]:
    if p.parent==self.run_dir:continue
    try:
-    v=json.loads(p.read_bytes())
+    v=files.read(p) if files else json.loads(p.read_bytes())
     if v.get('generation') and clock()<v['until']<=clock()+11:slots+=1
    except Exception:pass
   return (self.health.penalty(self.local) if hasattr(self,'health') else (self.local.get('cpu',100) if self.local else 100))+100*slots
@@ -265,8 +287,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
 if __name__=='__main__':
  async def main():
-  config=json.loads(pathlib.Path('/etc/desk-camera/config.json').read_bytes());telemetry=Telemetry()
-  agents=[Controller(dict(config,**camera),telemetry) for camera in config.get('cameras',[{}])]
+  config=json.loads(pathlib.Path('/etc/desk-camera/config.json').read_bytes());telemetry=Telemetry();files=StatusFiles()
+  agents=[Controller(dict(config,**camera),telemetry,files) for camera in config.get('cameras',[{}])]
   transport=SharedRPC(agents);fleet=FleetStatus(agents,transport)
   for a in agents:a.transport=transport;a.fleet=fleet
   from thumbnail_decode import Decoder

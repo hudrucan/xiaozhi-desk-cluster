@@ -1738,9 +1738,11 @@ func monitorScore(n Node, now time.Time) (float64, bool) {
 		}
 	}
 	score := *n.CPU
+	owners := 0
 	for role, cost := range map[string]float64{"xiaozhi": 20, "dns": 10, "vpn": 5} {
 		if n.VIP[role] != nil && *n.VIP[role] {
 			score += cost
+			owners++
 		}
 	}
 	for _, job := range []string{"asr", "llm", "tts"} {
@@ -1749,7 +1751,17 @@ func monitorScore(n Node, now time.Time) (float64, bool) {
 		}
 	}
 	if n.ServiceRoles["network"] != "" {
-		score += 10
+		score += 20
+		owners++
+	}
+	if h := panelHomeAssistant(n.HomeAssistant, now); h != nil && h.State != "standby" {
+		score += 20
+		owners++
+	}
+	// Spread new monitoring sessions before stacking another role on busy owners.
+	// Health/admission still decide eligibility; this changes only the preference.
+	if owners > 1 {
+		score += float64(owners-1) * 100
 	}
 	return score, true
 }

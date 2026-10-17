@@ -50,6 +50,76 @@ func TestMonitoringPreferenceRejectsUnavailableAndMaintenance(t *testing.T) {
 		t.Fatal("Stale preference advertised")
 	}
 }
+
+func TestMonitoringSpreadsStackedNetworkAndHomeAssistantOwners(t *testing.T) {
+	now := time.Now()
+	nodes := []Node{readyMonitor("deskb1x", 22, now), readyMonitor("deskb2x", 20, now), readyMonitor("deskb3x", 21, now)}
+	yes := true
+	nodes[0].VIP["vpn"] = &yes
+	nodes[0].ServiceRoles = map[string]string{"network": "active"}
+	nodes[1].VIP["xiaozhi"] = &yes
+	nodes[2].VIP["dns"] = &yes
+	nodes[2].HomeAssistant = &HomeAssistantStatus{State: "active", Sync: "synced", Ready: true, At: now, CheckpointAt: now}
+	d := &Dashboard{preferredMonitor: "deskb1x", preferredSince: now.Add(-time.Hour)}
+	d.selectMonitoring(nodes, now)
+	if d.preferredMonitor != "deskb1x" || d.monitorCandidate != "deskb2x" {
+		t.Fatal("stacked owner did not yield a stable candidate")
+	}
+	for i := range nodes {
+		nodes[i].At = now.Add(3 * time.Minute)
+	}
+	nodes[2].HomeAssistant.At = nodes[2].At
+	d.selectMonitoring(nodes, nodes[0].At)
+	if d.preferredMonitor != "deskb2x" {
+		t.Fatal("monitoring stayed on VPN + Network instead of the single-role node")
+	}
+	// If the less-stacked hub becomes unhealthy, stacked nodes remain eligible.
+	nodes[1].MonitoringReady = false
+	d.selectMonitoring(nodes, nodes[0].At)
+	if d.preferredMonitor != "deskb1x" {
+		t.Fatal("owner penalty blocked the healthy fallback")
+	}
+}
+
+func TestMonitoringCountsOnlyFreshHomeAssistantOwnership(t *testing.T) {
+	now := time.Now()
+	for _, state := range []string{"starting", "active", "checkpointing", "standby"} {
+		t.Run(state, func(t *testing.T) {
+			a := readyMonitor("deskb1x", 20, now)
+			b := readyMonitor("deskb2x", 30, now)
+			a.HomeAssistant = &HomeAssistantStatus{State: state, Sync: "synced", At: now, CheckpointAt: now}
+			d := &Dashboard{}
+			d.selectMonitoring([]Node{a, b}, now)
+			expected := b.ID
+			if state == "standby" {
+				expected = a.ID
+			}
+			if d.preferredMonitor != expected {
+				t.Fatalf("unexpected preference for HA state %s: %s", state, d.preferredMonitor)
+			}
+			a.HomeAssistant.At = now.Add(-15 * time.Second)
+			d = &Dashboard{}
+			d.selectMonitoring([]Node{a, b}, now)
+			if d.preferredMonitor != a.ID {
+				t.Fatal("stale Home Assistant ownership affected preference")
+			}
+		})
+	}
+}
+
+func TestMonitoringChargesEachAdditionalOwner(t *testing.T) {
+	now := time.Now()
+	a := readyMonitor("deskb1x", 20, now)
+	b := readyMonitor("deskb2x", 90, now)
+	yes := true
+	a.VIP["xiaozhi"], a.VIP["dns"], a.VIP["vpn"] = &yes, &yes, &yes
+	b.VIP["dns"], b.VIP["vpn"] = &yes, &yes
+	d := &Dashboard{}
+	d.selectMonitoring([]Node{a, b}, now)
+	if d.preferredMonitor != b.ID {
+		t.Fatal("three owners incorrectly beat two owners despite the extra stacking cost")
+	}
+}
 func TestMonitorWeightsDoNotChangeHealthOrBlockFallback(t *testing.T) {
 	now := time.Now()
 	d := &Dashboard{preferredMonitor: "deskb1x", snapshot: Snapshot{At: now}}

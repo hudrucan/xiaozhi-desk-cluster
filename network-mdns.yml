@@ -38,7 +38,7 @@
         dest: '/usr/local/libexec/desk-network/{{ item }}'
         mode: '0755'
         validate: /usr/bin/python3 -c "import ast,sys; ast.parse(open(sys.argv[1]).read())" %s
-      loop: [mdns.py, arp.py, discovery.py, bootstrap.py, ha.py]
+      loop: [checkpoint_source.py, peer_http.py, mdns.py, arp.py, discovery.py, bootstrap.py, ha.py]
       register: mdns_helpers
     - name: Install native scan status UI
       ansible.builtin.copy:

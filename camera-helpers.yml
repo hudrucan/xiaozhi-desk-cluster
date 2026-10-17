@@ -1,0 +1,96 @@
+---
+# Controller-source rollout; existing PartOf media workers restart with each controller.
+- name: Update cached camera metadata readers one controller at a time
+  hosts: deskboxes
+  become: true
+  gather_facts: false
+  serial: 1
+  any_errors_fatal: true
+  tasks:
+    - name: Require the existing three-node camera deployment
+      ansible.builtin.assert:
+        that:
+          - ansible_play_hosts_all | sort == ['deskb1x','deskb2x','deskb3x']
+    - name: Freeze protected production services
+      ansible.builtin.command:
+        argv: [python3, '-c', "{{ lookup('file',playbook_dir+'/roles/desk_ui/files/ui_guard.py') }}", freeze]
+      register: camera_helpers_guard
+      changed_when: false
+      no_log: true
+    - name: Install only the cached camera controller with a rollback copy
+      ansible.builtin.copy:
+        src: roles/desk_camera/files/controller.py
+        dest: /usr/local/libexec/desk-camera/controller.py
+        mode: '0600'
+        backup: true
+        validate: /usr/bin/python3 -c "import ast,sys; ast.parse(open(sys.argv[1]).read())" %s
+      register: camera_helpers_source
+    - name: Restart only a changed controller
+      ansible.builtin.systemd_service:
+        name: desk-camera
+        state: restarted
+      when: camera_helpers_source.changed
+    - name: Wait for this voter before restarting another controller
+      ansible.builtin.uri:
+        url: 'http://{{ cluster_ip }}:20226/status'
+        use_proxy: false
+        timeout: 3
+      register: camera_helpers_status
+      until: camera_helpers_status.json.voter_ready | default(false)
+      retries: 30
+      delay: 2
+      changed_when: false
+    - name: Wait for the dependent thumbnail and playback SDK worker to preload
+      ansible.builtin.command:
+        argv:
+          - python3
+          - -c
+          - |
+            import socket,json
+            with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as s:
+                s.settimeout(3)
+                s.connect('/run/desk-camera-thumbnails/worker.sock')
+                s.sendall(json.dumps({'action':'status','id':'0'*32}).encode()+bytes([10]))
+                v=json.loads(s.makefile('rb').readline())
+                assert v['ok'] and 'media' in v['value']
+      register: camera_helpers_media_ready
+      until: camera_helpers_media_ready.rc == 0
+      retries: 40
+      delay: 2
+      changed_when: false
+    - name: Verify protected service PIDs and DNS policy unchanged
+      ansible.builtin.command:
+        argv: [python3, '-c', "{{ lookup('file',playbook_dir+'/roles/desk_ui/files/ui_guard.py') }}", guard]
+        stdin: '{{ camera_helpers_guard.stdout }}'
+      changed_when: false
+      no_log: true
+
+- name: Verify one ready owner per camera after the rolling update
+  hosts: deskboxes
+  become: true
+  gather_facts: false
+  run_once: true
+  any_errors_fatal: true
+  tasks:
+    - name: Read existing camera status without opening a camera session
+      ansible.builtin.command:
+        argv:
+          - python3
+          - -c
+          - |
+            import json,urllib.request
+            opener=urllib.request.build_opener(urllib.request.ProxyHandler({}))
+            states=[]
+            for ip in ('10.10.10.11','10.10.10.12','10.10.10.13'):
+                with opener.open('http://'+ip+':20226/status',timeout=3) as r: states.append(json.load(r))
+            assert all(v['voter_ready'] and v['transport']['connected'] for v in states)
+            for camera in states[0]['cameras']:
+                workload=camera['workload']
+                ready=[x for v in states for x in v['cameras'] if x['workload']==workload and x['local_ready']]
+                assert len(ready)==1, 'Expected exactly one ready camera owner'
+            print('Camera voters, transport and unique ready owners: PASS')
+      register: camera_helpers_ready
+      until: camera_helpers_ready.rc == 0
+      retries: 30
+      delay: 2
+      changed_when: false

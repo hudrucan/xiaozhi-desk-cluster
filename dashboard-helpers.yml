@@ -1,0 +1,89 @@
+---
+- name: Refresh only the dashboard placement collector one node at a time
+  hosts: deskboxes
+  become: true
+  gather_facts: false
+  serial: 1
+  any_errors_fatal: true
+  tasks:
+    - name: Require the existing symmetric deployment
+      ansible.builtin.assert:
+        that:
+          - ansible_play_hosts_all | sort == ['deskb1x','deskb2x','deskb3x']
+    - name: Freeze protected production services
+      ansible.builtin.command:
+        argv: [python3, '-c', "{{ lookup('file',playbook_dir+'/roles/desk_ui/files/ui_guard.py') }}", freeze]
+      register: dashboard_helpers_guard
+      changed_when: false
+      no_log: true
+    - name: Resolve the source-addressed collector artifact
+      ansible.builtin.set_fact:
+        dashboard_helpers_artifact: "/private/tmp/desk-dashboard-build/{{ lookup('file',playbook_dir+'/roles/desk_dashboard/files/dashboard.go') | hash('sha256') }}/desk-dashboard"
+    - name: Create the local artifact cache
+      ansible.builtin.file:
+        path: '{{ dashboard_helpers_artifact | dirname }}'
+        state: directory
+        mode: '0755'
+      delegate_to: localhost
+      become: false
+    - name: Build the ARM64 collector
+      ansible.builtin.command:
+        argv: [go, build, -trimpath, -ldflags, '-s -w -buildid=', -o, '{{ dashboard_helpers_artifact }}', '{{ playbook_dir }}/roles/desk_dashboard/files/dashboard.go']
+        creates: '{{ dashboard_helpers_artifact }}'
+      environment:
+        GOOS: linux
+        GOARCH: arm64
+        CGO_ENABLED: '0'
+        GO111MODULE: 'off'
+        GOTOOLCHAIN: local
+        GOCACHE: /private/tmp/desk-dashboard-go-cache
+      delegate_to: localhost
+      become: false
+    - name: Replace only the collector binary and retain a rollback copy
+      ansible.builtin.copy:
+        src: '{{ dashboard_helpers_artifact }}'
+        dest: /usr/local/libexec/desk-dashboard
+        owner: root
+        group: root
+        mode: '0755'
+        backup: true
+      register: dashboard_helpers_binary
+    - name: Restart only a changed collector
+      ansible.builtin.systemd_service:
+        name: desk-dashboard
+        state: restarted
+      when: dashboard_helpers_binary.changed
+    - name: Wait for collector readiness
+      ansible.builtin.uri:
+        url: 'http://{{ cluster_ip }}:{{ desk_dashboard_port | default(8010) }}/health'
+        use_proxy: false
+        timeout: 3
+      register: dashboard_helpers_ready
+      until: dashboard_helpers_ready.status == 200 and dashboard_helpers_ready.json.ready | default(false)
+      retries: 20
+      delay: 2
+      changed_when: false
+    - name: Verify protected service PIDs and DNS policy unchanged
+      ansible.builtin.command:
+        argv: [python3, '-c', "{{ lookup('file',playbook_dir+'/roles/desk_ui/files/ui_guard.py') }}", guard]
+        stdin: '{{ dashboard_helpers_guard.stdout }}'
+      changed_when: false
+      no_log: true
+
+- name: Verify the shared UI after collector replacement
+  hosts: deskboxes
+  become: true
+  gather_facts: false
+  run_once: true
+  any_errors_fatal: true
+  tasks:
+    - name: Require three fresh dashboard members through the management VIP
+      ansible.builtin.uri:
+        url: "http://{{ (dashboard_helpers_guard.stdout | from_json).vip }}/api/cluster/status"
+        use_proxy: false
+        timeout: 5
+      register: dashboard_helpers_cluster
+      until: dashboard_helpers_cluster.status == 200 and dashboard_helpers_cluster.json.nodes | selectattr('online') | list | length == 3
+      retries: 20
+      delay: 2
+      changed_when: false

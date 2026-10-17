@@ -35,8 +35,9 @@
         src: 'roles/desk_network/files/{{ item }}'
         dest: '/usr/local/libexec/desk-network/{{ item }}'
         mode: '0755'
+        backup: true
         validate: /usr/bin/python3 -c "import ast,sys; ast.parse(open(sys.argv[1]).read())" %s
-      loop: [ha.py, checkpoint_budget.py, bootstrap.py, discovery.py, warm_runtime.py]
+      loop: [checkpoint_source.py, peer_http.py, checkpoint_budget.py, bootstrap.py, discovery.py, api_read_cache.py, warm_runtime.py, ha.py]
       register: network_helpers_files
 
     - name: Install Home Assistant election agent (score weights)

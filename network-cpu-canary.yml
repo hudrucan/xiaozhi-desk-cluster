@@ -47,6 +47,16 @@
             dest: /usr/local/libexec/desk-network/checkpoint_budget.py
             mode: '0755'
             validate: /usr/bin/python3 -c "import ast,sys; ast.parse(open(sys.argv[1]).read())" %s
+        - name: Install checkpoint change detector
+          ansible.builtin.copy:
+            src: roles/desk_network/files/checkpoint_source.py
+            dest: /usr/local/libexec/desk-network/checkpoint_source.py
+            mode: '0755'
+        - name: Install bounded peer connections
+          ansible.builtin.copy:
+            src: roles/desk_network/files/peer_http.py
+            dest: /usr/local/libexec/desk-network/peer_http.py
+            mode: '0755'
         - name: Install native read model cache dependency
           ansible.builtin.copy:
             src: roles/desk_network/files/api_read_cache.py
