@@ -256,7 +256,7 @@ class Cluster:
  def __init__(self,c):
   self.c=c;self.key=base64.b64decode(c['key']);self.node=c['node'];self.members=c['members'];self.root=pathlib.Path('/var/lib/desk-network');self.run=pathlib.Path('/run/desk-network');self.run.mkdir(exist_ok=True)
   self.store=Store(self.root/'state',self.key,self.members);self.lease=Lease(self.root/'state/vote.json')
-  self.term=None;self.until=0.;self.running=False;self.ready=False;self.starting=False;self.sync_state='synced';self.last_snapshot=0.;self.last_health=0.;self.last_local=0.;self.local={};self.sequence=0;self._snap_backoff=0.;self._rebalance_retry=0.;self.pid=None;self.cooldown=0.;self.container_started=0.;self.boot_ready_seconds=None;self.unhealthy_since=0.
+  self.term=None;self.until=0.;self.running=False;self.ready=False;self.starting=False;self.sync_state='synced';self.last_snapshot=0.;self.last_health=0.;self.last_local=0.;self.local={};self.sequence=0;self._snap_backoff=0.;self._rebalance_retry=0.;self._rebalance=None;self.pid=None;self.cooldown=0.;self.container_started=0.;self.boot_ready_seconds=None;self.unhealthy_since=0.
   self.warm=self.c.get("warm_standby") is True;self.generation=None;self.promotion_started=0.;self.promotion_seconds=None;self.warm_path=self.run/"warm"
   self.budget=bootstrap.Budget(clock);self.oplock=threading.RLock();self.snaplock=threading.Lock();self.pool=concurrent.futures.ThreadPoolExecutor(max_workers=8);self.stop=threading.Event();self.nonces={};self.authlock=threading.Lock();self.scan_lock=threading.Lock();self.scan_queued_at=0.;self.scan_cache={};self.scan_cache_at=0.
   context=ssl.create_default_context(cafile=c['certificate']);self.opener=urllib.request.build_opener(urllib.request.ProxyHandler({}),resuming_https_handler(context))
@@ -315,17 +315,19 @@ class Cluster:
   if not self.store.head or meta['revision']>self.store.head['revision']:
    blob=base64.b64decode(self.call(n,'blob',{'digest':meta['digest']},timeout=5)['blob'],validate=True)
    self.store.stage(meta,blob,self.node);self.store.commit(meta)
- def snapshot(self):
+ def snapshot(self,expected_term=None):
   with self.snaplock:
-   if not self.owned():raise Unavailable('Collector does not hold lease')
+   if not self.owned() or (expected_term is not None and self.term!=expected_term):raise Unavailable('Collector does not hold expected lease')
+   term=list(self.term)
    blob=snapshot_worker('create',data=self.root/'data',run=self.run)
+   if not self.owned() or self.term!=term:raise Unavailable('Lease changed during checkpoint')
    if self.store.head and sha(blob)==self.store.head['digest']:
     self.last_snapshot=clock();self.sync_state='synced';return
-   self.sequence+=1;meta={'revision':self.term+[self.sequence],'digest':sha(blob),'at':time.time()}
+   self.sequence+=1;meta={'revision':term+[self.sequence],'digest':sha(blob),'at':time.time()}
    replies=self.fanout('stage',{'meta':meta,'blob':base64.b64encode(blob).decode()},timeout=checkpoint_budget.STAGE_TIMEOUT)
    if len(replies)<2: self.sync_state='pending';raise Unavailable('Checkpoint needs two replicas')
    meta['certificate']=list(replies.values());self.store.verify(meta)
-   if not self.owned():raise Unavailable('Lease expired during checkpoint')
+   if not self.owned() or self.term!=term:raise Unavailable('Lease changed during checkpoint')
    replies=self.fanout('commit',{'meta':meta},timeout=3)
    if len(replies)<2:self.sync_state='pending';raise Unavailable('Checkpoint acknowledgment pending')
    self.last_snapshot=clock();self.sync_state='synced'
@@ -469,18 +471,27 @@ class Cluster:
      held=other_owners(self.local)
      other_eligible=any(n!=self.node and h.get('eligible') and h.get('score',200)<OVERLOAD_PENALTY for n,h in heads.items())
      forced=any(v is True for v in self.local.get('admission',{}).values()) or (self.warm and (self.run/'warm-drain').exists())
-     rebalance=not forced and held>=2 and other_eligible and clock()>=self._rebalance_retry
-     if forced or rebalance:
-      # Voluntary rebalance must hand over a fresh checkpoint; only forced drains may release without one.
-      if rebalance:LOG.info('Rebalancing network: node holds %d other owners, eligible peer available',held)
-      try:self.snapshot();snapped=True
-      except Exception:snapped=False
-      if forced or snapped:
-       if rebalance:self.cooldown=clock()+60
-       self.kill_container();self.term=None
-      else:
-       self._rebalance_retry=clock()+60;LOG.warning('Rebalance deferred: checkpoint failed, keeping lease')
+     wanted=not forced and held>=2 and other_eligible
+     job=self._rebalance;handover=False
+     if job and job['done'].is_set():
+      self._rebalance=None
+      if wanted and clock()>=self._rebalance_retry:
+       # Hand over only a checkpoint that succeeded under the term still held now.
+       if job['ok'] and self.term==job['term'] and self.owned():handover=True
+       else:self._rebalance_retry=clock()+60;LOG.warning('Rebalance deferred: checkpoint failed or lease changed, keeping lease')
+      job=None
+     if forced:
+      try:self.snapshot()
+      except Exception:pass
+      self.kill_container();self.term=None
+     elif handover:
+      self.cooldown=clock()+60;self.kill_container();self.term=None
      else:
+      if wanted and job is None and clock()>=self._rebalance_retry:
+       # The checkpoint runs beside the loop so the lease keeps renewing while it waits on the worker, snaplock and replicas.
+       LOG.info('Rebalancing network: node holds %d other owners, eligible peer available',held)
+       self._rebalance={'done':threading.Event(),'ok':False,'term':list(self.term)}
+       threading.Thread(target=self.rebalance_checkpoint,args=(self._rebalance,),daemon=True).start()
       stamp=clock();votes=self.fanout('lease',{'term':self.term})
       if len(votes)>=2:self.renew(stamp,self.term)
       if clock()-self.last_health>3:
@@ -494,7 +505,7 @@ class Cluster:
        self.ready=healthy
        if not healthy and clock()-self.container_started>120 and clock()-self.unhealthy_since>20:
         self.cooldown=clock()+90;self.kill_container();self.term=None;LOG.warning('Unhealthy collector withdrawn')
-      if self.ready and clock()-self.last_snapshot>300:
+      if self.ready and self._rebalance is None and clock()-self.last_snapshot>300:
        # Snapshot work never blocks lease renewal or its fencing watchdog.
        if not self.snaplock.locked():threading.Thread(target=self.try_snapshot,daemon=True).start()
     else:
@@ -513,6 +524,10 @@ class Cluster:
    except Exception as e:LOG.warning('Network reconciliation pending (%s)',type(e).__name__)
    self.stop.wait(2)
   self.kill_container(force=True)
+ def rebalance_checkpoint(self,job):
+  try:self.snapshot(expected_term=job['term']);job['ok']=True
+  except Exception:job['ok']=False
+  finally:job['done'].set()
  def try_snapshot(self):
   try:self.snapshot();self._snap_backoff=0.
   except subprocess.SubprocessError as e:

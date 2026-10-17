@@ -604,7 +604,9 @@ The two penalties must stay equal. A lower score wins.
 
 The Network owner voluntarily gives up the lease when it holds two or more other
 roles and a peer is eligible with a score below `OVERLOAD_PENALTY`. It first takes a
-certified checkpoint; if that fails it keeps the lease, logs
+certified checkpoint in a background job while the main loop keeps renewing the
+lease. Handover requires a successful job for the term still held by the owner;
+stale jobs cannot hand over a later term. If the checkpoint fails it keeps the lease, logs
 `Rebalance deferred`, and tries again after 60 seconds. Only forced drains
 (admission closed or `warm-drain`) release without a fresh checkpoint. After a
 voluntary release the node holds a 60 second cooldown so it does not reclaim the

@@ -314,11 +314,27 @@ context.window.deskNetworkSessionStorage.clear();assert.equal(session.xiaozhi,'k
    with patch.object(ha.checkpoint_budget,'execute',side_effect=killed):
     with self.assertRaises(subprocess.CalledProcessError):ha.snapshot_worker('create',data=data,run=run)
    self.assertEqual(list(run.iterdir()),[]);db.close()
+ def test_snapshot_rejects_stale_term_before_starting_worker(self):
+  c=ha.Cluster.__new__(ha.Cluster);c.snaplock=threading.Lock();c.term=[2,'a'];c.owned=lambda:True
+  with patch.object(ha,'snapshot_worker') as worker:
+   with self.assertRaises(ha.Unavailable):c.snapshot(expected_term=[1,'a'])
+  worker.assert_not_called()
+ def test_snapshot_rejects_term_change_and_lease_loss_during_worker(self):
+  for change in ('term','lease'):
+   c=ha.Cluster.__new__(ha.Cluster);c.snaplock=threading.Lock();c.term=[1,'a'];c.owned=lambda:True
+   c.root=pathlib.Path('/unused');c.run=c.root;c.store=MagicMock();c.fanout=MagicMock();c.last_snapshot=10.
+   def changed(*args,**kwargs):
+    if change=='term':c.term=[2,'a']
+    else:c.owned=lambda:False
+    return b'checkpoint'
+   with patch.object(ha,'snapshot_worker',side_effect=changed):
+    with self.assertRaises(ha.Unavailable):c.snapshot(expected_term=[1,'a'])
+   c.fanout.assert_not_called();c.store.commit.assert_not_called();self.assertEqual(c.last_snapshot,10.)
 class ClusterFixture:
  def cluster(self,local,heads=None,snapshot=None):
   c=ha.Cluster.__new__(ha.Cluster)
   ticks=iter([False,True])
-  c.run=pathlib.Path(self.tmp);c.node='a';c.warm=False;c.local=local;c.term=[1,'a'];c.cooldown=0.;c._rebalance_retry=0.;c._snap_backoff=0.
+  c.run=pathlib.Path(self.tmp);c.node='a';c.warm=False;c.local=local;c.term=[1,'a'];c.cooldown=0.;c._rebalance_retry=0.;c._rebalance=None;c._snap_backoff=0.
   c.last_snapshot=1000.;c.sync_state='synced';c.root=pathlib.Path(self.tmp);c.snaplock=threading.Lock();c.ready=True;c.last_health=1000.;c.lease=MagicMock();c.public=lambda:{}
   c.stop=MagicMock(is_set=lambda:next(ticks),wait=lambda t=None:None)
   c.refresh_local=lambda:None;c.fanout=MagicMock(return_value=heads or {});c.owned=lambda:True;c.fence=lambda:None
@@ -340,16 +356,62 @@ class Rebalance(ClusterFixture,unittest.TestCase):
   self.assertEqual(c.score(),10+20+20+ha.OVERLOAD_PENALTY)
   c=self.cluster({'cpu':10,'vip':{'xiaozhi':True}})
   self.assertEqual(c.score(),10+20)
+ def rebalance(self,c,rounds=2):
+  ticks=iter([False]*rounds+[True]);c.stop=MagicMock(is_set=lambda:next(ticks),wait=lambda t=None:None)
+  with patch.object(ha.Cluster,'renew') as renew,patch.object(ha.Cluster,'native_health',return_value=True):c.run_loop()
+  return renew
+ def finish(self,c):
+  if c._rebalance:
+   self.assertTrue(c._rebalance['done'].wait(2),'checkpoint worker did not finish')
  def test_rebalance_snapshots_releases_and_cools_down(self):
   c=self.cluster(self.TWO,self.PEERS)
-  with self.assertLogs(ha.LOG,'INFO'):c.run_loop()
+  with self.assertLogs(ha.LOG,'INFO'):self.rebalance(c,1)
+  self.finish(c);self.assertFalse(self.released(c))
+  self.rebalance(c,1)
   c.snapshot.assert_called_once();self.assertTrue(self.released(c))
   self.assertIsNone(c.term);self.assertEqual(c.cooldown,1060.)
+ def test_lease_keeps_renewing_while_rebalance_checkpoint_is_slow(self):
+  gate=threading.Event();started=threading.Event();c=self.cluster(self.TWO,self.PEERS)
+  def slow(**kwargs):started.set();gate.wait(5)
+  c.snapshot=MagicMock(side_effect=slow)
+  self.addCleanup(gate.set)
+  c.last_snapshot=0.;c.try_snapshot=MagicMock()
+  renew=self.rebalance(c,3)
+  self.assertTrue(started.wait(2),'checkpoint did not start')
+  self.assertEqual(renew.call_count,3,'loop must reach lease renewal every round, not block on the checkpoint')
+  c.try_snapshot.assert_not_called()
+  c.snapshot.assert_called_once();self.assertFalse(self.released(c));self.assertEqual(c.term,[1,'a'])
+  gate.set();self.finish(c);self.rebalance(c,1);self.assertTrue(self.released(c))
+ def test_slow_checkpoint_keeps_lease_alive_beyond_original_deadline(self):
+  c=self.cluster(self.TWO,self.PEERS);gate=threading.Event();started=threading.Event();now=[1000.]
+  c.boot_ready_seconds=1.;c.container_started=900.
+  c.running=True;c.until=1010.;c.oplock=threading.RLock();c.owned=lambda:c.running and now[0]<c.until
+  def slow(**kwargs):started.set();gate.wait(5)
+  c.snapshot=MagicMock(side_effect=slow);self.addCleanup(gate.set)
+  ticks=iter([False]*4+[True]);deadlines=[]
+  def tick(delay):
+   self.assertTrue(started.wait(2),'checkpoint did not start')
+   now[0]+=4;deadlines.append(c.until)
+   self.assertTrue(c.owned(),'checkpoint blocked renewal until the fencing deadline')
+  c.stop=MagicMock(is_set=lambda:next(ticks),wait=tick)
+  try:
+   with patch.object(ha,'clock',side_effect=lambda:now[0]),patch.object(ha.Cluster,'native_health',return_value=True):c.run_loop()
+   self.assertGreater(now[0],1010.);self.assertEqual(deadlines,[1010.,1014.,1018.,1022.])
+   self.assertFalse(self.released(c));c.snapshot.assert_called_once()
+  finally:gate.set();self.finish(c)
  def test_rebalance_keeps_lease_when_checkpoint_fails(self):
   c=self.cluster(self.TWO,self.PEERS,snapshot=ha.Unavailable('no quorum'))
-  with self.assertLogs(ha.LOG,'WARNING'):c.run_loop()
+  with self.assertLogs(ha.LOG,'INFO'):self.rebalance(c,1)
+  self.finish(c)
+  with self.assertLogs(ha.LOG,'WARNING'):self.rebalance(c,1)
   self.assertFalse(self.released(c));self.assertEqual(c.term,[1,'a'])
   self.assertEqual(c._rebalance_retry,1060.);self.assertEqual(c.cooldown,0.)
+ def test_rebalance_does_not_hand_over_when_term_changed_during_checkpoint(self):
+  c=self.cluster(self.TWO,self.PEERS)
+  with self.assertLogs(ha.LOG,'INFO'):self.rebalance(c,1)
+  self.finish(c);c.term=[2,'a']
+  with self.assertLogs(ha.LOG,'WARNING'):self.rebalance(c,1)
+  self.assertFalse(self.released(c));self.assertEqual(c._rebalance_retry,1060.)
  def test_rebalance_not_retried_before_deferral_expires(self):
   c=self.cluster(self.TWO,self.PEERS);c._rebalance_retry=1030.
   with patch.object(ha.Cluster,'renew'),patch.object(ha.Cluster,'native_health',return_value=True),self.assertNoLogs(ha.LOG,'WARNING'):c.run_loop()
