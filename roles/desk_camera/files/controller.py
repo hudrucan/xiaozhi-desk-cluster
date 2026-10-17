@@ -1,10 +1,10 @@
 """Camera placement over the existing majority lease; no media in NATS."""
-import asyncio,base64,datetime,http.server,json,logging,math,os,pathlib,secrets,signal,sys,threading,time,urllib.request
+import asyncio,base64,datetime,http.server,ipaddress,json,logging,math,os,pathlib,secrets,signal,subprocess,sys,threading,time,urllib.request
 sys.path.insert(0,'/usr/local/libexec/desk-homeassistant')
 from transport import SharedRPC,FleetStatus
 from health import CameraHealth
 from cache_gc import cleanup as clean_cache
-from playback import Playback,clip_path
+from playback import Playback,PlaybackError,clip_path
 from lease import Lease,clock
 from config_journal import atomic,encoded
 from protocol import pack,unpack,MAX
@@ -71,10 +71,13 @@ class Controller:
   except Exception:pass
  def permit(self):atomic(self.run_dir/'permit.json',encoded({'until':self.until,'generation':self.generation if self.owned() else None}))
  def rpc(self,action,value,sender):
+  if action=='playback_inventory':return self.playback.inventory()
   if action=='playback_cached':return self.playback.cached(value)
   if action=='playback_prepare':
-   if self.fleet and any(a is not self and a.playback.active() for a in self.fleet.agents):raise ValueError('Another camera is preparing a clip on this node')
-   return self.playback.prepare(value)
+   try:
+    if self.fleet and any(a is not self and a.playback.active() for a in self.fleet.agents):raise PlaybackError('node_busy')
+    return self.playback.prepare(value['clip'],value.get('session'))
+   except PlaybackError as err:return {'state':'rejected','reason':err.code}
   if action=='playback_status':return self.playback.status(value['id'])
   if action=='status':return self.status()
   if action=='fleet_status' and self.prefix==PREFIX and self.fleet:return self.fleet.local()
@@ -139,13 +142,34 @@ async def local_client(reader,writer,agents):
    if cached:result=cached
    else:
     if len(owners)!=1:raise ValueError('No ready camera owner')
-    result=await agent.call(owners[0],'playback_prepare',value['clip'])
+    result=await agent.call(owners[0],'playback_prepare',{'clip':value['clip'],'session':value.get('session')})
+  elif action=='inventory':
+   replies=await agent.fanout('playback_inventory');items=[item for v in replies.values() for item in v.get('items',[])]
+   result={'items':items[:240],'complete':len(items)<=240 and len(replies)==len(agent.members) and all(not v.get('truncated') for v in replies.values())}
   elif action=='status' and value['node'] in agent.members:result=await agent.call(value['node'],'playback_status',{'id':value['id']})
   else:raise ValueError()
   out={'ok':True,'value':result}
  except Exception:out={'ok':False,'error':'Camera worker unavailable or busy. Retry when ready.'}
  try:writer.write(encoded(out)+b'\n');await writer.drain()
  finally:writer.close();await writer.wait_closed()
+
+class CoreArtifactPeer:
+ """Only the protected local Core container may fetch signed media over its bridge."""
+ def __init__(self):self.peers=set();self.until=0;self.lock=threading.Lock()
+ def allows(self,peer):
+  try:peer=str(ipaddress.ip_address(peer))
+  except ValueError:return False
+  with self.lock:
+   if time.monotonic()>=self.until:
+    self.peers=set()
+    try:
+     result=subprocess.run(['podman','inspect','--format','{"running":{{.State.Running}},"networks":{{json .NetworkSettings.Networks}}}','desk-homeassistant-core'],capture_output=True,timeout=5,check=True)
+     value=json.loads(result.stdout)
+     if value.get('running') is True:
+      self.peers={str(ipaddress.ip_address(network['IPAddress'])) for network in value['networks'].values() if network.get('IPAddress')}
+    except (OSError,subprocess.SubprocessError,ValueError,KeyError,TypeError):self.peers=set()
+    self.until=time.monotonic()+5
+   return peer in self.peers
 
 class Handler(http.server.BaseHTTPRequestHandler):
  def log_message(self,*a):pass
@@ -165,7 +189,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
  def artifact(self):
   try:
    a=self.server.agents[0]
-   if self.client_address[0] not in set(a.members.values())|{'127.0.0.1'}:raise ValueError()
    parts=self.path.split('/')
    if len(parts)!=4:raise ValueError()
    workload,ident=parts[2:];p=clip_path(workload,ident)
@@ -173,6 +196,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
    if len(token)>4096:raise ValueError()
    v=unpack(base64.b64decode(token,validate=True),a.c['key'])
    if v.get('recipient')!=a.node or v.get('action')!='artifact' or v.get('value')!={'workload':workload,'id':ident}:raise ValueError()
+   if self.client_address[0] not in set(a.members.values())|{'127.0.0.1'} and not self.server.core_artifact_peer.allows(self.client_address[0]):raise ValueError()
    if not p.is_file() or p.is_symlink() or not 1024<p.stat().st_size<=256*1024*1024:raise ValueError()
    p.touch();size=p.stat().st_size;start=0;end=size-1;code=200
    requested=self.headers.get('Range')
@@ -204,7 +228,7 @@ if __name__=='__main__':
   agents=[Controller(dict(config,**camera),telemetry) for camera in config.get('cameras',[{}])]
   transport=SharedRPC(agents);fleet=FleetStatus(agents,transport)
   for a in agents:a.transport=transport;a.fleet=fleet
-  server=http.server.ThreadingHTTPServer((agents[0].members[agents[0].node],20226),Handler);server.agents=agents;server.fleet=fleet;server.timeout=2
+  server=http.server.ThreadingHTTPServer((agents[0].members[agents[0].node],20226),Handler);server.agents=agents;server.fleet=fleet;server.core_artifact_peer=CoreArtifactPeer();server.timeout=2
   threading.Thread(target=server.serve_forever,daemon=True).start()
   local_path=RUN/'bridge.sock';local_path.unlink(missing_ok=True)
   local_server=await asyncio.start_unix_server(lambda reader,writer:local_client(reader,writer,agents),path=str(local_path));os.chmod(local_path,0o600)

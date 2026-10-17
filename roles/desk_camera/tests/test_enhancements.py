@@ -27,6 +27,19 @@ class PlaybackTests(unittest.TestCase):
    a=types.SimpleNamespace(c={'workload':'tapo_c222_160'},node='deskb1x');p=playback.Playback(a);ident='a'*32;path=playback.clip_path(a.c['workload'],ident);path.parent.mkdir(parents=True)
    self.assertEqual(p.status(ident)['state'],'missing');path.write_bytes(b'x'*2048);self.assertEqual(p.status(ident)['state'],'ready')
    path.unlink();path.symlink_to('/etc/passwd');self.assertEqual(p.status(ident)['state'],'missing')
+ def test_accepted_job_is_preparing_before_first_progress_file_exists(self):
+  a=types.SimpleNamespace(c={'workload':'tapo_c222_160'},node='deskb1x');p=playback.Playback(a);p.current='a'*32;p.task=Mock();p.task.done.return_value=False
+  with tempfile.TemporaryDirectory() as tmp,patch.object(playback,'ROOT',pathlib.Path(tmp)):
+   self.assertEqual(p.status(p.current)['state'],'preparing')
+ def test_inventory_requires_complete_artifact_and_never_returns_session_handle(self):
+  with tempfile.TemporaryDirectory() as tmp,patch.object(playback,'ROOT',pathlib.Path(tmp)):
+   a=types.SimpleNamespace(c={'workload':'tapo_c222_161'},node='deskb2x');p=playback.Playback(a);job=playback.validate(a.c['workload'],{'date':'20261016','start':1792112400,'end':1792112460});ident=playback.identity(job);path=playback.clip_path(a.c['workload'],ident);path.parent.mkdir(parents=True);(path.parent/'request.json').write_text(json.dumps(job))
+   self.assertEqual(p.inventory()['items'],[]);path.write_bytes(b'x'*2048);items=p.inventory()['items'];self.assertEqual(items[0]['state'],'ready');self.assertEqual(items[0]['id'],ident);self.assertNotIn('session',items[0])
+   path.unlink();self.assertEqual(p.inventory()['items'],[])
+ def test_recording_handle_is_bounded_and_rejects_arbitrary_nested_payloads(self):
+  self.assertEqual(playback.session_handle({'user_id':123,'player_id':'a-b'})['user_id'],123)
+  for v in (None,{'user_id':{},'player_id':'x'},{'user_id':True,'player_id':'x'},{'user_id':123,'player_id':'../secret'},{'user_id':123,'player_id':'x','password':'not accepted'}):
+   with self.assertRaises(playback.PlaybackError):playback.session_handle(v)
  def test_prepare_is_fenced_and_admission_is_required(self):
   with tempfile.TemporaryDirectory() as tmp,patch.object(playback,'ROOT',pathlib.Path(tmp)):
    a=types.SimpleNamespace(c={'workload':'tapo_c222_160'},node='deskb1x',owned=lambda:False,ready=lambda:True,eligible=lambda:True)

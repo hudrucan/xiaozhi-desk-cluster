@@ -12,7 +12,7 @@ DOMAIN='desk_cluster'
 SOCKET='/run/desk-cluster/bridge.sock'
 
 async def bridge(action,**data):
- async with asyncio.timeout(5):
+ async with asyncio.timeout(10):
   reader,writer=await asyncio.open_unix_connection(SOCKET,limit=65536)
   try:
    writer.write(json.dumps(dict(action=action,**data)).encode()+b'\n');await writer.drain()

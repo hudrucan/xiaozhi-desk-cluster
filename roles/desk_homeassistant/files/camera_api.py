@@ -33,8 +33,8 @@ async def playback(action,value):
  reader,writer=await asyncio.wait_for(asyncio.open_unix_connection('/run/desk-camera/bridge.sock'),2)
  try:
   writer.write(json.dumps(dict(value,action=action)).encode()+b'\n');await writer.drain()
-  raw=await asyncio.wait_for(reader.readline(),3)
-  if len(raw)>8192:raise ValueError()
+  raw=await asyncio.wait_for(reader.readline(),7)
+  if len(raw)>65536:raise ValueError()
   result=json.loads(raw)
   if result.get('ok') is not True:raise ValueError('Playback worker unavailable')
   return result['value']

@@ -274,3 +274,92 @@ Cluster now uses HA's native responsive `ha-menu-button` and the standard
 custom hamburger and a 64 px header. This static change requires a page reload,
 not a Core restart. Focused tests and sampled measurements are recorded in
 CAMERA_ENHANCEMENTS_VALIDATION.json. No sampled cgroup reported an OOM kill.
+
+
+### Recording stability fixes — 2026-10-17
+
+The distributed resolver initially allowed Core and each transient SDK worker to
+allocate separate camera recording user IDs. Live logs showed `-71102
+USER_ID_EMPLOYED` on Core index reads. Core is now the single allocator: the
+existing native controller supplies its media user/player handle to the selected
+worker. The signed, scoped metadata RPC carries it only between existing nodes;
+the worker input is a root-only tmpfs file, removed at job completion. It is not
+included in persistent requests, cache inventory, browser URLs or logs. This is
+an adapter to pinned pytapo 3.4.26, not a new authentication or ownership service.
+A cross-node canary read the same 321-item index with the same handle, then a
+separate 20-second contained-range download/remux passed (44.15 seconds including
+startup, 2,236,944-byte MP4). No camera setting or recording plan was changed.
+
+Native date/index results are kept briefly in RAM and reused during a camera's
+active preparation, rather than asking the camera for another index concurrently.
+A recent last-known list is available on transient read failure. Per-entry locks
+serialize index reads and handle allocation. Reopening an already-running clip
+rejoins that job, including after Core reconnect, instead of creating a second
+one. An accepted job reports Preparing even before its first progress file
+exists; previously that race could return Missing and fail the player's first
+request. Worker busy, low memory, disk-space and unavailable-session rejections
+now have separate bounded messages. SDK/worker errors still avoid logging secrets.
+
+The native folder browser joins a bounded cache inventory from reachable workers.
+A clip shows Downloaded only when a complete artifact exists, Preparing while
+its job runs, and Not downloaded when all nodes were checked and it is absent.
+Incomplete/offline inventory reports unavailable status rather than claiming
+absence. Existing completed native cache files can also be reused. Inventory
+contains typed ranges/identities/status, never video bytes or session handles.
+Markers refresh when HA refetches a date/parts folder and are removed after
+cache eviction. Native Back navigation can reuse an old frontend list; reload
+the page to force a refetch. The native list is not a live progress UI.
+
+Uncached original recordings longer than ten minutes expand into contiguous
+parts of at most ten minutes, using the same native HA folder UI. This handles
+the C222's roughly 34-minute files without submitting a >30-minute job or
+buffering the full original on a 4 GB node. A completed full cached clip remains
+directly playable. The worker validates that each requested range is contained
+in an actual camera index entry. It does not change or split the SD source file.
+
+The existing HA proxy's 60-second response wait could also cut off a slow
+uncached part. A validated `set-timeout server 15m` rule now applies only to
+`/api/desk_cluster/recording/`; other HA request timeouts, health checks and
+routing remain unchanged. Local bridge read deadlines cover the existing bounded
+RPC fan-outs. Signed byte ranges and cache cleanup regression tests pass.
+
+This remains **download/remux a whole part before playback**. It is not progressive
+YouTube-style playback. Immediate start while downloading would require a worker
+pipeline producing fragmented MP4/HLS as packets arrive, and a corresponding
+player/proxy path. Reducing part size and extending a scoped timeout do not
+implement that feature.
+
+The completed-artifact HTTP path also rejected local Core requests: Core runs on
+Podman's bridge, so a same-node request arrives from the container IP rather
+than a cluster member IP. The same signed 32-byte request returned 206 from the
+host but 404 from Core. Artifact authorization now verifies its signature and
+exact clip scope first, then admits only the exact IP of the running, protected
+`desk-homeassistant-core` container. It does not admit the entire bridge subnet
+or change status/health endpoint access. A five-second in-memory lookup cache
+avoids Podman subprocesses for every range request; lookups run only on signed
+artifact access, with a bounded five-second deadline accounting for the existing
+15% controller CPU cap. Missing/stopped Core or failed inspection fails closed.
+All three camera controllers received this fix serially, preserving Core PID.
+The actual Core container subsequently fetched 32 bytes with HTTP 206, and the
+native HA player decoded the cached 76-second clip at 2560×1440, readyState 4,
+with currentTime advancing from 1.26 to 40.54 seconds. Five artifact authorization
+and byte-range regressions pass. This demonstrates the tested path, not all
+camera/card/network-failure scenarios.
+
+A second uncached 98-second recording completed in 84 seconds (14,385,387 bytes),
+but the initially opened native video load remained blank/failed. Retrying the
+completed clip decoded normally at 2560×1440. Therefore the longer proxy timeout
+alone did not establish reliable first playback. The resolver now waits for its
+bounded, shielded background preparation task and verifies worker Ready before
+returning a PlayMedia URL. Cached requests still return immediately. Disconnecting
+the requesting page does not cancel the SDK job, and reopening rejoins it. Ten
+focused resolver/browser regressions pass; progressive playback is still separate.
+
+After a guarded clean checkpoint/restart (r30, all user config preserved), the
+corrected native resolver was verified with a fresh 114-second Bed recording on
+node 2. The worker reported Ready within 89 seconds, producing a 12,219,335-byte
+MP4. Without another click or reopening the clip, HA then opened its native player
+and decoded at readyState 4, 2560×1440, currentTime 19.76 seconds, duration 113.92,
+paused false and no video error. This verifies first-click download-then-play
+across nodes as well as the earlier same-node cached path. It does not establish
+progressive playback or fault recovery under every network/camera failure.

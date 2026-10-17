@@ -11,10 +11,12 @@ async def run():
  secret=c[job['workload']];password=secret['cloud_password']
  STAGE='camera_connection';save({'state':'preparing','stage':STAGE})
  tapo=await asyncio.to_thread(Tapo,secret['ip_address'],'admin',password,password,reuseSession=False,retryStok=False,controlPort=secret.get('control_port',443),isKLAP=False)
+ # Core is the only allocator; do not ask the camera for a competing user ID.
+ session=json.loads(pathlib.Path('/input/session.json').read_bytes());tapo.userID=session['user_id'];tapo.playerID=session['player_id']
  correction=await asyncio.to_thread(tapo.getTimeCorrection)
  STAGE='recording_index';save({'state':'preparing','stage':STAGE})
  recordings=await asyncio.to_thread(tapo.getRecordings,job['date'])
- if not any(int(v.get('startTime',0))==job['start'] and int(v.get('endTime',0))==job['end'] for record in recordings for v in record.values() if isinstance(v,dict)):raise ValueError('Clip not in camera index')
+ if not any(int(v.get('startTime',0))<=job['start']<job['end']<=int(v.get('endTime',0)) for record in recordings for v in record.values() if isinstance(v,dict)):raise ValueError('Clip not in camera index')
  def progress(v):
   if isinstance(v,dict):save({'state':'preparing','progress':v.get('progress',0),'total':v.get('total',0)})
  STAGE='download';save({'state':'preparing','stage':STAGE})

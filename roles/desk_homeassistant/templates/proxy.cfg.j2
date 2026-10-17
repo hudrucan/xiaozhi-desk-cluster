@@ -19,6 +19,8 @@ backend desk_homeassistant_core
     http-check expect status 200
     timeout connect 3s
     timeout server 60s
+    # Only uncached recording requests can wait for bounded worker preparation.
+    http-request set-timeout server 15m if { path_beg /api/desk_cluster/recording/ }
     timeout tunnel 1h
 {% for node in groups['deskboxes'] | sort %}
     server {{ node }} {{ hostvars[node].cluster_ip }}:18123 check port 20223 inter 3s fall 2 rise 1
