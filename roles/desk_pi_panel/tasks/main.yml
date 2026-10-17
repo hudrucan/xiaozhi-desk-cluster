@@ -16,7 +16,7 @@
       tags: [always, panel-preflight]
     - name: Install official framebuffer renderer and input dependencies
       ansible.builtin.apt:
-        name: [python3-pil, python3-evdev, gcc, fonts-dejavu-core]
+        name: [python3-pil, python3-evdev, gcc, fonts-dejavu-core, polkitd, raspi-utils-core]
         state: present
         install_recommends: false
     - name: Create isolated display client paths
@@ -74,6 +74,40 @@
         dest: /usr/local/libexec/desk-cluster-panel/console.py
         mode: '0755'
       register: panel_console
+    - name: Install local Pi telemetry and reboot controller
+      ansible.builtin.copy:
+        src: pi_system.py
+        dest: /usr/local/libexec/desk-cluster-panel/pi_system.py
+        mode: '0644'
+      register: panel_pi_system
+      tags: [panel-ui]
+    - name: Persist firmware telemetry access for the video group
+      ansible.builtin.copy:
+        src: 99-desk-panel-vcio.rules
+        dest: /etc/udev/rules.d/99-desk-panel-vcio.rules
+        mode: '0644'
+      register: panel_vcio_rule
+      tags: [panel-ui]
+    - name: Reload firmware device permissions without triggering devices
+      ansible.builtin.command: udevadm control --reload-rules
+      when: panel_vcio_rule.changed
+      changed_when: false
+      tags: [panel-ui]
+    - name: Allow the current firmware device through the video group
+      ansible.builtin.file:
+        path: /dev/vcio
+        owner: root
+        group: video
+        mode: '0660'
+      tags: [panel-ui]
+    - name: Allow only local reboot actions for the panel user
+      ansible.builtin.template:
+        src: desk-panel-reboot.rules.j2
+        dest: /etc/polkit-1/rules.d/49-desk-panel-reboot.rules
+        owner: root
+        group: root
+        mode: '0644'
+      tags: [panel-ui]
     - name: Install the optional four-point touch calibration helper
       ansible.builtin.copy:
         src: calibrate.py
@@ -91,6 +125,7 @@
         dest: /etc/systemd/system/desk-cluster-panel.service
         mode: '0644'
       register: panel_unit
+      tags: [panel-ui]
     - name: Start the external panel
       ansible.builtin.systemd_service:
         name: desk-cluster-panel
@@ -101,6 +136,7 @@
              (panel_source.changed | default(false)) or
              (panel_display_idle.changed | default(false)) or
              (panel_fetch_settings.changed | default(false)) or
+             (panel_pi_system.changed | default(false)) or
              (panel_calibration_ui.changed | default(false)) or
              (panel_console.changed | default(false)) or
              (panel_config.changed | default(false)) or

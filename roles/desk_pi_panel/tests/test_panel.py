@@ -36,6 +36,9 @@ def homeassistant_fixture():
     return v
 
 class PanelTests(unittest.TestCase):
+    def test_overview_local_clock_uses_twelve_hours_with_explicit_am_pm(self):
+        for hour,minute,expected in ((0,0,'12:00 AM'),(8,36,'8:36 AM'),(12,5,'12:05 PM'),(13,7,'1:07 PM'),(23,59,'11:59 PM')):
+            self.assertEqual(panel.local_clock(panel.datetime(2026,10,17,hour,minute)),expected)
     def test_homeassistant_metadata_is_optional_and_validated(self):
         panel.validate(fixture());panel.validate(homeassistant_fixture())
         for change in ({'age_ms':float('nan')},{'ready':1},{'checkpoint_revision':True},{'pending_disk_changes':1},{'state':'standby','ready':True}):
@@ -123,7 +126,7 @@ class PanelTests(unittest.TestCase):
         menu.begin((30,80));self.assertEqual(menu.end((33,82)),'calibration')
         menu.begin((30,150));self.assertEqual(menu.end((30,150)),'timeout')
         menu.begin((30,230));self.assertEqual(menu.end((30,230)),'fetch')
-        menu.begin((30,272));self.assertIsNone(menu.end((30,272)))
+        menu.begin((30,272));self.assertEqual(menu.end((30,272)),'system')
         # Small motion across a divider must not open the adjacent row.
         menu.begin((30,120));self.assertIsNone(menu.end((30,125)))
     def test_settings_scroll_reaches_later_rows_and_clamps_at_both_ends(self):

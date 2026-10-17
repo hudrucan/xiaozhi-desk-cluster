@@ -21,6 +21,7 @@ from PIL import Image, ImageDraw, ImageFont, ImageChops
 from calibration_ui import Calibration, TARGETS, restore as restore_calibration
 from display_idle import IdleDisplay, TIMEOUT_OPTIONS, valid_timeout, restore as restore_display, save as save_display
 from fetch_settings import MIN_INTERVAL, MAX_INTERVAL, DEFAULT_INTERVAL, valid_interval, parse_interval, restore as restore_fetch, save as save_fetch
+from pi_system import PiSystem, uptime_label
 
 WIDTH, HEIGHT = 480, 320
 MEMBERS = ('deskb1x', 'deskb2x', 'deskb3x')
@@ -29,7 +30,8 @@ BG, SURFACE, BORDER = '#100d08', '#211b12', '#443721'
 TEXT, MUTED, GOLD, GREEN, RED = '#f3ead8', '#baad95', '#d5a85e', '#96c9a0', '#de927f'
 SETTINGS_ITEMS = (('calibration','Touch calibration','Adjust touch alignment'),
                   ('timeout','Screen timeout','Choose when the picture goes black'),
-                  ('fetch','Fetch interval','Choose how often the panel fetches data'))
+                  ('fetch','Fetch interval','Choose how often the panel fetches data'),
+                  ('system','Pi system','CPU, RAM, temperature and reboot'))
 SETTINGS_LIST_BOX, SETTINGS_ROW_HEIGHT = (14,50,466,274), 72
 SETTINGS_BACK_BUTTON = (6,3,50,47)
 CALIBRATE_BUTTON = (130,195,350,243)
@@ -37,6 +39,8 @@ TIMEOUT_SELECT_BUTTON, TIMEOUT_LIST_BOX = (14,64,466,110), (14,112,466,271)
 FETCH_INPUT_BOX, FETCH_APPLY_BUTTON = (14,75,210,119), (14,134,210,178)
 FETCH_KEYS = tuple((label,(236+(i%3)*80,64+(i//3)*53,306+(i%3)*80,107+(i//3)*53))
                    for i,label in enumerate(('1','2','3','4','5','6','7','8','9','<','0','Clear')))
+PI_REBOOT_BUTTON = (306,224,466,268)
+PI_REBOOT_CANCEL, PI_REBOOT_CONFIRM = (48,191,228,235), (248,191,432,235)
 START_BUTTON, CONFIRM_CANCEL_BUTTON = (100, 243, 228, 291), (252, 243, 380, 291)
 APPLY_BUTTON, RETRY_BUTTON, CANCEL_BUTTON = (32, 243, 160, 291), (176, 243, 304, 291), (320, 243, 448, 291)
 COLLECT_CANCEL_BUTTON = (358, 275, 466, 319)
@@ -87,6 +91,10 @@ class TimeoutSelect(SettingsMenu):
 
 def finite(value):
     return type(value) in (int, float) and math.isfinite(value)
+
+def local_clock(wall=None):
+    wall=datetime.now() if wall is None else wall
+    return f'{wall.hour%12 or 12}:{wall.minute:02d} {"AM" if wall.hour<12 else "PM"}'
 
 def timestamp(value):
     try:
@@ -270,14 +278,21 @@ class Renderer:
             while value and d.textlength(value,font=font)>width:
                 value=value[:-2]+'…' if not value.endswith('…') else value[:-2]+'…'
         d.text(xy,value,font=font,fill=color)
-    def draw(self,value,received,ok,page='overview',selected=0,now=None,node_view='status'):
+    def draw(self,value,received,ok,page='overview',selected=0,now=None,node_view='status',clock=None):
         now=time.monotonic() if now is None else now
         live,elapsed=freshness(value,received,now)
         image=Image.new('RGB',(WIDTH,HEIGHT),BG);d=ImageDraw.Draw(image)
         font=self.bold[14];bounds=d.textbbox((0,0),'DESK CLUSTER',font=font)
         d.text((14-bounds[0],(35-(bounds[3]-bounds[1]))/2-bounds[1]),'DESK CLUSTER',font=font,fill=GOLD)
         status='Connecting' if value is None else 'Stale' if not live else 'Reconnecting' if not ok else value['state'].title()
-        self.right_text(d,(330,0,466,35),status,12,GREEN if live and ok and value['state']=='ready' else RED)
+        status_right=466
+        if page=='overview':
+            clock=local_clock() if clock is None else clock
+            self.right_text(d,(225,0,466,35),clock,12,MUTED)
+            separator_right=466-d.textlength(clock,font=self.fonts[12])-10
+            self.right_text(d,(225,0,separator_right,35),'·',12,MUTED)
+            status_right=separator_right-d.textlength('·',font=self.fonts[12])-10
+        self.right_text(d,(225,0,status_right,35),status,12,GREEN if live and ok and value['state']=='ready' else RED)
         d.line((14,35,466,35),fill=BORDER)
         if page=='overview':self.overview(d,value,live,elapsed)
         elif page=='node':self.node(d,value,live,elapsed,selected,node_view)
@@ -305,9 +320,9 @@ class Renderer:
             x=round(box[0]+i*width)
             d.line((x,box[1]+9,x,box[3]-9),fill=BORDER)
         return [(round(box[0]+i*width),box[1],round(box[0]+(i+1)*width),box[3]) for i in range(count)]
-    def settings(self,config,error=None,view='menu',menu=None,timeout_select=None,fetch_input=None,fetch_error=None):
+    def settings(self,config,error=None,view='menu',menu=None,timeout_select=None,fetch_input=None,fetch_error=None,system=None,reboot_state=None,reboot_confirm=False):
         image=Image.new('RGB',(WIDTH,HEIGHT),BG);d=ImageDraw.Draw(image)
-        title={'menu':'Panel settings','calibration':'Touch calibration','timeout':'Screen timeout','fetch':'Fetch interval'}[view]
+        title={'menu':'Panel settings','calibration':'Touch calibration','timeout':'Screen timeout','fetch':'Fetch interval','system':'Pi system'}[view]
         self.text(d,(60 if view!='menu' else 14,12),title,18,TEXT,True)
         if view!='menu':self.center_text(d,SETTINGS_BACK_BUTTON,'<',22,GOLD)
         d.line((14,49,466,49),fill=BORDER)
@@ -360,8 +375,48 @@ class Renderer:
             if fetch_error:self.text(d,(14,244),fetch_error,11,RED,width=206)
             elif value is None:self.text(d,(14,244),'Enter 1–60 seconds.',12,RED)
             for label,box in FETCH_KEYS:self.button(d,box,label)
+        elif view=='system':self.pi_system(d,system or {},reboot_state)
         self.navigation(d,'settings')
+        if view=='system' and reboot_confirm:
+            image=Image.blend(image,Image.new('RGB',(WIDTH,HEIGHT),'black'),.62);d=ImageDraw.Draw(image)
+            d.rounded_rectangle((28,64,452,254),radius=12,fill=SURFACE,outline=BORDER)
+            self.text(d,(48,82),'Reboot this Pi?',18,TEXT,True)
+            self.text(d,(48,120),'The panel will go offline briefly.',14,MUTED)
+            self.text(d,(48,148),'Settings and calibration are kept.',13,MUTED)
+            self.button(d,PI_REBOOT_CANCEL,'Cancel')
+            self.reboot_button(d,PI_REBOOT_CONFIRM,'Reboot')
         return image
+    def reboot_button(self,d,box,label):
+        d.rounded_rectangle(box,radius=8,fill='#603527',outline=RED)
+        self.center_text(d,box,label,14,TEXT,True)
+    def pi_system(self,d,value,reboot_state):
+        self.right_text(d,(300,7,466,42),'Pi Zero W',12,MUTED)
+        boxes=self.columns(d,(14,62,466,137),3)
+        percent=lambda n:f'{n:.0f}%' if finite(n) else '—'
+        mhz=value.get('mhz');used,total=value.get('used_mb'),value.get('total_mb');temp=value.get('temperature')
+        values=(percent(value.get('cpu')),percent(value.get('ram')),f'{temp:.1f}°C' if finite(temp) else '—')
+        details=(f'1 core · {mhz/1000:.1f} GHz' if finite(mhz) else 'Clock unavailable',
+                 f'{used:.0f} / {total:.0f} MB' if finite(used) and finite(total) else 'RAM unavailable','CPU temperature')
+        for box,label,metric,detail in zip(boxes,('CPU','RAM','Temp'),values,details):
+            self.center_text(d,(box[0],65,box[2],85),label,12,MUTED)
+            self.center_text(d,(box[0],85,box[2],112),metric,22,TEXT,True)
+            self.center_text(d,(box[0],115,box[2],135),detail,11,MUTED)
+        throttle=value.get('throttle')
+        bad=throttle is None or bool(throttle['current']) or bool(throttle['unknown'])
+        d.rounded_rectangle((14,149,466,211),radius=8,fill=SURFACE,outline=RED if bad else BORDER)
+        self.text(d,(28,157),'Throttle / power',12,MUTED)
+        short={'Under-voltage':'Low V','Freq capped':'Freq cap','Throttled':'Throttle','Temp limit':'Temp'}
+        if throttle is None:status,history='Unavailable','Since boot: unavailable'
+        else:
+            status=' / '.join(short[v] for v in throttle['current']) or ('Unknown flags' if throttle['unknown'] else f'OK · 0x{throttle["raw"]:x}')
+            history='Since boot: '+(' / '.join(short[v] for v in throttle['history']) or 'no warnings')
+            if throttle['unknown']:history+=' · unknown bits'
+        self.right_text(d,(180,151,452,177),status,12,RED if bad else GREEN)
+        self.text(d,(28,185),history,12,RED if throttle and throttle['history'] else MUTED,width=424)
+        self.text(d,(14,229),uptime_label(value.get('uptime')),13,TEXT)
+        message={'pending':'Requesting reboot…','requested':'Reboot requested','failed':'Reboot failed; try again.'}.get(reboot_state,'Local Pi health')
+        self.text(d,(14,251),message,11,RED if reboot_state=='failed' else MUTED,width=282)
+        self.reboot_button(d,PI_REBOOT_BUTTON,'Reboot Pi')
     def timeout_options(self,image,menu,current):
         left,top,right,bottom=menu.box
         viewport=Image.new('RGB',(right-left+1,bottom-top+1),SURFACE);d=ImageDraw.Draw(viewport)
@@ -655,6 +710,7 @@ def run(config):
     touch=InputDevice(config['touch']);rx=touch.absinfo(ecodes.ABS_X);ry=touch.absinfo(ecodes.ABS_Y)
     if rx is None or ry is None or rx.max<=rx.min or ry.max<=ry.min:raise ValueError('Invalid touchscreen range')
     thread=threading.Thread(target=model.poll,args=(config['url'],),daemon=True);thread.start()
+    pi=PiSystem();threading.Thread(target=pi.poll,daemon=True).start()
     for sig in (signal.SIGTERM,signal.SIGINT):signal.signal(sig,lambda *_:model.stopped.set())
     page,selected='overview',0;node_view='status';settings_view='menu';settings_menu=SettingsMenu();timeout_select=TimeoutSelect();cal=None
     x,y=rx.min,ry.min;pressed=False;points=[];press_at=0;last_render=0;last_key=None
@@ -697,6 +753,9 @@ def run(config):
                                         elif inside((tx,ty),CANCEL_BUTTON):cal.cancel()
                                     elif cal.phase=='review':cal.preview(raw)
                                 if cal.phase in ('cancelled','applied'):cal=None;page='settings';settings_view='calibration'
+                            elif page=='settings' and settings_view=='system' and pi.confirm_at is not None:
+                                if inside((tx,ty),PI_REBOOT_CANCEL) or inside((tx,ty),SETTINGS_BACK_BUTTON):pi.cancel()
+                                elif inside((tx,ty),PI_REBOOT_CONFIRM):pi.request_reboot(now)
                             elif page=='settings' and settings_view=='menu' and settings_menu.start is not None:
                                 target=settings_menu.end(touch_point(x,y,rx,ry,config))
                                 if target is not None:
@@ -740,6 +799,8 @@ def run(config):
                                                 elif label=='<':fetch_input=fetch_input[:-1]
                                                 elif len(fetch_input)<2:fetch_input+=label
                                                 fetch_error=None;break
+                                elif settings_view=='system' and inside((tx,ty),PI_REBOOT_BUTTON):
+                                    if pi.snapshot()[2] not in ('pending','requested'):pi.confirm(now)
                             elif page=='overview' and OVERVIEW_CARD_TOP<=ty<=OVERVIEW_CARD_BOTTOM:selected=min(2,max(0,(tx-14)//155));page='node'
                             elif page=='node' and NODE_TAB_TOP<=ty<=NODE_TAB_BOTTOM:selected=min(2,max(0,(tx-14)//155))
                             elif page=='node' and inside((tx,ty),NODE_STATUS_BUTTON):node_view='status'
@@ -758,24 +819,29 @@ def run(config):
                         if len(points)<256:points.append((x,y))
             now=time.monotonic()
             if cal and cal.tick(now):cal=None;page='settings';settings_view='calibration';last_render=0
+            if pi.tick(now):last_render=0
             # Emergency escape does not depend on the old or new coordinate mapping.
             if cal and pressed and now-press_at>=2:
                 cal=None;page='settings';settings_view='calibration';pressed=False;last_render=0
-            if idle.tick(now,inhibit=cal is not None):
+            if idle.tick(now,inhibit=cal is not None or pi.confirm_at is not None):
                 fb.show(Image.new('RGB',(WIDTH,HEIGHT),'black'))
+            if page=='settings' and settings_view=='system' and not idle.sleeping:pi.active.set()
+            else:pi.active.clear()
             if idle.sleeping:continue
             if now-last_render>=(0.08 if cal else 1):
                 value,received,ok=model.snapshot()
                 live,elapsed=freshness(value,received,now)
                 online=tuple(node_live(n,live,elapsed) for n in value['nodes']) if value else ()
                 network_fresh=tuple(network_live(n,live,elapsed) for n in value['nodes']) if value else ()
-                key=('cal',id(cal),cal.version) if cal else ('settings',settings_view,settings_menu.offset,timeout_select.opened,timeout_select.offset,config.get('calibration_error'),config['screen_timeout'],settings_error,config['fetch_interval'],fetch_input,fetch_error) if page=='settings' else (id(value),live,ok,online,network_fresh,page,selected,node_view)
+                system,system_version,reboot_state=pi.snapshot()
+                clock=local_clock() if page=='overview' else None
+                key=('cal',id(cal),cal.version) if cal else ('settings',settings_view,settings_menu.offset,timeout_select.opened,timeout_select.offset,config.get('calibration_error'),config['screen_timeout'],settings_error,config['fetch_interval'],fetch_input,fetch_error,system_version,pi.confirm_at,reboot_state) if page=='settings' else (id(value),live,ok,online,network_fresh,page,selected,node_view,clock)
                 if key!=last_key:
-                    image=renderer.calibration(cal) if cal else renderer.settings(config,settings_error,settings_view,settings_menu,timeout_select,fetch_input,fetch_error) if page=='settings' else renderer.draw(value,received,ok,page,selected,now,node_view)
+                    image=renderer.calibration(cal) if cal else renderer.settings(config,settings_error,settings_view,settings_menu,timeout_select,fetch_input,fetch_error,system,reboot_state,pi.confirm_at is not None) if page=='settings' else renderer.draw(value,received,ok,page,selected,now,node_view,clock)
                     fb.show(image);last_key=key
                 last_render=now
     finally:
-        model.stop();touch.close();fb.close()
+        model.stop();pi.stopped.set();pi.active.set();touch.close();fb.close()
 
 def load(path):
     config=json.loads(Path(path).read_text());url=urlparse(config['url'])

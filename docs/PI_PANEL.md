@@ -128,6 +128,42 @@ calibration; nine focused data/format/touch tests pass. Only this Pi's client
 configuration and service were updated. No cluster or LCD driver change.
 
 
+## Local Pi system and clock
+
+**Settings → Pi system** shows the Pi's own CPU utilization (counter delta),
+RAM used/total (using MemAvailable), CPU temperature, current CPU frequency,
+uptime and firmware throttle/power flags. A background worker samples about
+every two seconds while the page is visible and awake. The first CPU sample
+has no delta yet and shows a dash. Missing sensors show unavailable values.
+Current flags and sticky flags since boot are displayed separately; unknown
+firmware bits are treated as warnings. Low V means under-voltage, Freq cap means
+frequency capped, Throttle means throttled and Temp means soft temperature limit.
+Flag definitions follow the [Raspberry Pi vcgencmd documentation](https://www.raspberrypi.com/documentation/computers/os.html#get_throttled).
+
+The panel's existing video group gets access only to `/dev/vcio` for firmware
+queries, via a persistent udev rule and the service's device allowlist.
+**Reboot Pi** opens a confirmation dialog. Cancel, Back or 30 seconds of waiting
+discards it. Confirm sends only the fixed, normal `systemctl reboot` command in
+a background worker. Duplicate requests are ignored; failures are shown and can
+be retried. The wake gesture never activates the button. Polkit permits the
+panel user only the login1 reboot/reboot-multiple-sessions actions, without
+granting general unit management or bypassing shutdown inhibitors.
+
+Overview shows local time next to status, e.g. **Ready · 8:36 AM**, with explicit
+12-hour AM/PM formatting and minute refresh independent of API polling. It uses
+the Pi OS timezone; on 2026-10-17 the live Pi was verified as
+**Asia/Ho_Chi_Minh (+0700), NTP synchronized**. Timezone and NTP were not changed.
+
+Local verification: 63 tests pass; telemetry, unavailable and confirmation
+screens were rendered at 480×320. A transient service with User=pi,
+NoNewPrivileges and the panel's device restrictions read real telemetry and
+reported CanReboot=yes. On the user's request, a confirmed controller request
+performed a real reboot (PASS): the boot ID changed, the panel started
+automatically with NRestarts=0, and all three preference-file hashes were
+unchanged. `/dev/vcio` retained root:video 0660 and firmware status was 0x0.
+GMT+7 and NTP synchronization were verified again after boot. Physical touch
+and confirmation-button operation remain NOT RUN.
+
 ## Fetch interval
 
 Open **Settings → Fetch interval**, enter whole seconds on the numeric keypad,
@@ -177,7 +213,8 @@ change is made. References: [LCDWiki](https://www.lcdwiki.com/3.5inch_RPi_Displa
 
 ## On-screen recalibration
 
-Settings has separate **Touch calibration**, **Screen timeout** and **Fetch interval** menu entries.
+Settings has separate **Touch calibration**, **Screen timeout**, **Fetch interval**
+and **Pi system** menu entries.
 Each opens only its own options, with a **<** icon to the left of the title
 returning to the Settings menu. Its touch target is 44×44 pixels.
 The menu uses list rows separated by dividers. Adding an entry to `SETTINGS_ITEMS`

@@ -1,0 +1,2 @@
+# vcgencmd firmware telemetry for the panel's existing video group.
+SUBSYSTEM=="misc", KERNEL=="vcio", GROUP="video", MODE="0660"

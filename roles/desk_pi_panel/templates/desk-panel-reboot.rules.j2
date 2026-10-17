@@ -1,0 +1,9 @@
+// Local panel user may request reboot, including while an SSH session exists.
+// No permission to power off, suspend, change units or ignore inhibitors.
+polkit.addRule(function(action, subject) {
+    if (subject.user === {{ desk_pi_panel_user | to_json }} &&
+        (action.id === "org.freedesktop.login1.reboot" ||
+         action.id === "org.freedesktop.login1.reboot-multiple-sessions")) {
+        return polkit.Result.YES;
+    }
+});
