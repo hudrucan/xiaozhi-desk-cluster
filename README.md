@@ -558,6 +558,13 @@ running job's dark blink phase. Concurrent ASR and other compute may light both
 Clock and Play. Fresh DNS backend activity may pulse the colon independently;
 missing or stale DNS metadata leaves it off.
 
+The frame loop (every 50 ms) reads the worker and DNS activity files through a small
+read cache: a file is re-parsed only when its inode/mtime/size changes or after 0.5
+seconds, the boot id is read once per process, and freshness (`monotonic` age limits)
+is still judged against the clock on every frame. The cache exists only inside the
+running loop; the readers used by tests and other callers are uncached. Measured with
+py-spy, these two readers were most of the panel's ~5% CPU.
+
 Worker activity telemetry is not wired yet, so the live panel currently uses
 compute-idle defaults: Pause on, Clock/Play off. The planned LLM/VLM blink rate
 is 1 Hz when real worker telemetry is added. MQTT/core session counts must never

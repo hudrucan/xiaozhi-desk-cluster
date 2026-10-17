@@ -365,5 +365,93 @@ class PanelFixtures(unittest.TestCase):
                 panel.load_config(path)
 
 
+class ReadCacheTests(unittest.TestCase):
+    def setUp(self):
+        self.directory = TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.path = Path(self.directory.name) / "activity.json"
+        self.tick = [0.0]
+        self.cache = panel.ReadCache(monotonic=lambda: self.tick[0])
+        self.config = {"worker_activity_path": str(self.path), "dns_activity_path": str(self.path), "core_id": "deskb1x"}
+
+    def worker(self, **changes):
+        value = {"protocol": "xiaozhi-worker-activity-v1", "worker_id": "deskb1x", "instance": "a" * 32,
+                 "boot_id": "fixture-boot", "monotonic": 10.0, "asr": 1, "llm": 0}
+        value.update(changes)
+        return value
+
+    def test_unchanged_file_is_parsed_once_until_max_age_and_changes_are_seen(self):
+        self.path.write_text(json.dumps({"n": 1}))
+        with patch.object(panel, "read_json", wraps=panel.read_json) as read:
+            first = self.cache.json(str(self.path))
+            self.tick[0] += 0.1
+            self.assertIs(self.cache.json(str(self.path)), first)
+            self.assertEqual(read.call_count, 1)
+            self.path.write_text(json.dumps({"n": 22}))  # different size: a new stat key
+            self.assertEqual(self.cache.json(str(self.path)), {"n": 22})
+            self.assertEqual(read.call_count, 2)
+            self.tick[0] += panel.READ_CACHE_MAX_AGE_SECONDS
+            self.cache.json(str(self.path))
+            self.assertEqual(read.call_count, 3)
+
+    def test_errors_match_read_json_and_are_never_cached(self):
+        with self.assertRaises(OSError):self.cache.json(str(self.path))
+        self.path.write_text("{")
+        with self.assertRaises(ValueError):self.cache.json(str(self.path))
+        self.path.write_text(json.dumps({"ok": True}))
+        self.assertEqual(self.cache.json(str(self.path)), {"ok": True})
+        self.path.write_text(" " * (panel.MAX_JSON_BYTES + 1))
+        with self.assertRaises(ValueError):self.cache.json(str(self.path))
+        self.assertEqual(self.cache.entries, {})
+
+    def test_boot_id_is_read_once(self):
+        with patch.object(panel.Path, "read_text", return_value="fixture-boot\n") as read:
+            self.assertEqual(self.cache.boot_id(), "fixture-boot")
+            self.assertEqual(self.cache.boot_id(), "fixture-boot")
+            self.assertEqual(read.call_count, 1)
+
+    def test_cached_readers_return_what_uncached_readers_return(self):
+        steps = [(self.worker(), 10.0), (self.worker(monotonic=6.0), 10.0), (self.worker(boot_id="old-boot"), 10.0),
+                 (self.worker(asr=2, llm=2, tts=1), 10.0), ({"junk": 1}, 10.0), (self.worker(), 10.0)]
+        dns = {"protocol": "desk-dns-activity-v1", "node_id": "deskb1x", "instance": "b" * 32, "boot_id": "fixture-boot",
+               "monotonic": 10.0, "queries": 3, "last_query": 9.9}
+        steps += [(dns, 10.5), (dict(dns, queries=4), 10.5), (dict(dns, monotonic=1.0), 10.5)]
+        with patch.object(panel.Path, "read_text", return_value="fixture-boot"), patch.object(panel.time, "monotonic", return_value=10.0):
+            for value, now in steps:
+                self.path.write_text(json.dumps(value))
+                self.tick[0] += 1  # beyond max_age, so even a coarse mtime tick cannot hide the rewrite
+                with patch.object(panel, "_CACHE", None):
+                    expected = (panel.worker_activity(self.config), panel.dns_activity(self.config, now))
+                with patch.object(panel, "_CACHE", self.cache):
+                    self.assertEqual((panel.worker_activity(self.config), panel.dns_activity(self.config, now)), expected)
+
+    def test_freshness_is_judged_on_every_call_even_when_the_file_is_cached(self):
+        self.path.write_text(json.dumps(self.worker()))
+        with patch.object(panel.Path, "read_text", return_value="fixture-boot"), patch.object(panel, "_CACHE", self.cache):
+            with patch.object(panel.time, "monotonic", return_value=10.0):
+                self.assertIsNotNone(panel.worker_activity(self.config))
+            with patch.object(panel.time, "monotonic", return_value=13.5), patch.object(panel, "read_json") as read:
+                self.assertIsNone(panel.worker_activity(self.config))
+                read.assert_not_called()
+
+    def test_cache_is_enabled_only_inside_the_frame_loop(self):
+        seen = []
+        driver = SimpleNamespace(DIGITS={"0": 0x3F, "2": 0x5B}, DIGIT_ADDRS=(0x68, 0x6A, 0x6C, 0x6E), ICON_ADDR=0x66,
+            ICON_COLON=0x10, ICON_CLOCK=1, ICON_PLAY=8, ICON_PAUSE=4, ICON_WIFI=0x40, initialize=Mock(), write_register=Mock(),
+            GPIO_FDS={}, LOCK_PATH=str(Path(self.directory.name) / "panel.lock"))
+        stop = Mock()
+        stop.is_set.side_effect = [False, True]
+        config = {"node_number": 2, "management_interface": "wlan0", "cluster_interface": "end0"}
+        self.assertIsNone(panel._CACHE)
+        with patch.object(panel.signal, "signal"), patch.object(panel.threading, "Event", return_value=stop), \
+             patch.object(panel, "local_vip_owner", return_value=False), patch.object(panel, "mqtt_connection_active", return_value=False), \
+             patch.object(panel, "core_session_active", return_value=False), patch.object(panel, "connectivity_icons", return_value=0), \
+             patch.object(panel, "management_addresses", return_value=[]), patch.object(panel, "worker_icons", side_effect=lambda *a: seen.append(panel._CACHE) or 0), \
+             patch.object(panel, "dns_activity", return_value=None):
+            panel.run(config, driver)
+        self.assertIsInstance(seen[0], panel.ReadCache)
+        self.assertIsNone(panel._CACHE)
+
+
 if __name__ == "__main__":
     unittest.main()

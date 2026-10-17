@@ -42,6 +42,50 @@ def read_json(path):
     return json.loads(data)
 
 
+BOOT_ID_PATH = "/proc/sys/kernel/random/boot_id"
+READ_CACHE_MAX_AGE_SECONDS = 0.5
+_CACHE = None  # Set only while run() is looping; None keeps every reader uncached.
+
+
+class ReadCache:
+    """Reuse parsed JSON while its file is unchanged and the boot id for the process lifetime.
+
+    The frame loop reads two small status files every 50 ms. A file is re-read when its
+    (inode, mtime, size) changes, and in any case at least every READ_CACHE_MAX_AGE_SECONDS, so
+    a missed stat change can stay stale for at most that long. Freshness is still judged by the
+    callers against the current clock on every frame. Errors surface exactly as read_json's do."""
+
+    def __init__(self, max_age=READ_CACHE_MAX_AGE_SECONDS, monotonic=time.monotonic):
+        self.max_age, self.monotonic = max_age, monotonic
+        self.entries = {}
+        self.boot = None
+
+    def json(self, path):
+        stat = os.stat(path)
+        key = (stat.st_ino, stat.st_mtime_ns, stat.st_size)
+        now = self.monotonic()
+        entry = self.entries.get(path)
+        if entry and entry[0] == key and now - entry[1] < self.max_age:
+            return entry[2]
+        self.entries.pop(path, None)
+        value = read_json(path)
+        self.entries[path] = (key, now, value)
+        return value
+
+    def boot_id(self):
+        if self.boot is None:
+            self.boot = Path(BOOT_ID_PATH).read_text().strip()
+        return self.boot
+
+
+def _read_json(path):
+    return _CACHE.json(path) if _CACHE is not None else read_json(path)
+
+
+def _boot_id():
+    return _CACHE.boot_id() if _CACHE is not None else Path(BOOT_ID_PATH).read_text().strip()
+
+
 def load_config(path):
     config = read_json(path)
     if not isinstance(config, dict):
@@ -218,8 +262,8 @@ def worker_activity(config):
     if path is None:
         return {"asr": 0, "llm": 0}  # Legacy panel configuration.
     try:
-        value = read_json(path)
-        boot = Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+        value = _read_json(path)
+        boot = _boot_id()
         if (not isinstance(value, dict) or set(value) not in (
                     {"protocol", "worker_id", "instance", "boot_id", "monotonic", "asr", "llm"},
                     {"protocol", "worker_id", "instance", "boot_id", "monotonic", "asr", "llm", "tts"})
@@ -249,8 +293,8 @@ def dns_activity(config, now):
     if path is None:
         return None
     try:
-        value = read_json(path)
-        boot = Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+        value = _read_json(path)
+        boot = _boot_id()
         if (not isinstance(value, dict) or set(value) != {
                 "protocol", "node_id", "instance", "boot_id", "monotonic", "queries", "last_query"}
                 or value["protocol"] != "desk-dns-activity-v1"
@@ -329,6 +373,7 @@ def load_driver():
 
 
 def run(config, driver, placeholder=False):
+    global _CACHE
     stopping = threading.Event()
     signal.signal(signal.SIGTERM, lambda *_: stopping.set())
     signal.signal(signal.SIGINT, lambda *_: stopping.set())
@@ -337,6 +382,8 @@ def run(config, driver, placeholder=False):
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         try:
             driver.initialize()
+            if not placeholder:
+                _CACHE = ReadCache()
             previous_segments = None
             previous_icons = None
             previous_owner = None
@@ -403,6 +450,7 @@ def run(config, driver, placeholder=False):
                     break
                 stopping.wait(FRAME_INTERVAL_SECONDS)
         finally:
+            _CACHE = None
             for descriptor in driver.GPIO_FDS.values():
                 os.close(descriptor)
             driver.GPIO_FDS.clear()
