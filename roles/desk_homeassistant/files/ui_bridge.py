@@ -69,12 +69,15 @@ class OnlineSync:
    elif v=={'action':'cameras'}:
     from camera_api import status
     result=await asyncio.to_thread(status)
-   elif v.get('action') in ('camera_prepare','camera_status','camera_inventory') and set(v)=={'action','value'}:
+   elif v.get('action') in ('camera_prepare','camera_status','camera_inventory','camera_cancel','camera_touch') and set(v)=={'action','value'}:
     from camera_api import playback
-    result=await playback({'camera_prepare':'prepare','camera_status':'status','camera_inventory':'inventory'}[v['action']],v['value'])
+    result=await playback({'camera_prepare':'prepare','camera_status':'status','camera_inventory':'inventory','camera_cancel':'cancel','camera_touch':'touch'}[v['action']],v['value'])
    elif v.get('action')=='camera_artifact' and set(v)=={'action','value'}:
     from camera_api import artifact
     result=artifact(v['value'])
+   elif v.get('action')=='camera_thumbnail' and set(v)=={'action','value'}:
+    from camera_api import thumbnail_ticket
+    result=thumbnail_ticket(v['value'])
    elif v=={'action':'begin'}:result=self.ui_begin()
    elif set(v)=={'action','ticket','filename','backup_id'} and v['action']=='import':
     result=await self.ui_import(v['ticket'],v['filename'],v['backup_id'])

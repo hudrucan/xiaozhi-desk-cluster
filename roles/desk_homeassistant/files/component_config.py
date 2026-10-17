@@ -5,7 +5,7 @@ def configure(root):
  source=pathlib.Path(__file__).parent/'desk_cluster';target=pathlib.Path(root)/'custom_components/desk_cluster'
  target.mkdir(parents=True,exist_ok=True,mode=0o700)
  if target.is_symlink():raise ValueError('Cluster component must be a real directory')
- for name in ('__init__.py','manifest.json','panel.js','reminder.py','camera-card.js','camera_recordings.py','recording_view.py','camera_storage.py','recording_model.py'):
+ for name in ('__init__.py','manifest.json','panel.js','reminder.py','camera-card.js','camera_recordings.py','recording_view.py','camera_storage.py','recording_model.py','hls_manifest.py','thumbnail_probe.py','thumbnail_cache.py','recording_thumbnails.py','thumbnail-focus.js','recording_sessions.py','recording-loading.svg'):
   p=target/name
   if p.is_symlink():raise ValueError('Cluster component file is a symlink')
   shutil.copyfile(source/name,p);p.chmod(0o600)

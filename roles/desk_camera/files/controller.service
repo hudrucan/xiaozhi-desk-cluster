@@ -12,7 +12,8 @@ RuntimeDirectoryMode=0700
 RuntimeDirectoryPreserve=yes
 UMask=0077
 Environment=PYTHONDONTWRITEBYTECODE=1
-CPUQuota=15%
+# Allow authenticated media HTTP bursts without starving the lease loop.
+CPUQuota=40%
 MemoryMax=96M
 Nice=15
 CPUWeight=1

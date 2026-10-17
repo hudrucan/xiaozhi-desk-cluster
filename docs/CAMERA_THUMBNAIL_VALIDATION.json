@@ -1,0 +1,32 @@
+{
+  "date": "2026-10-17",
+  "camera": "Bed C222 .160",
+  "recording_date": "2026-10-16",
+  "status": "ready",
+  "width": 640,
+  "height": 360,
+  "jpeg_bytes": 34784,
+  "events_in_single_page": 128,
+  "snapshot_seconds": 0.126,
+  "index_event_lookup_and_snapshot_seconds": 1.127,
+  "jpeg_requests": 1,
+  "video_downloads_for_test": 0,
+  "session": "existing native Core controller; no separate client ID allocator",
+  "jpeg_exported_or_persisted": false,
+  "bulk_preload_enabled": false,
+  "checkpoint_revision": 34,
+  "offline_tests": {
+    "probe": 4,
+    "adapter": 13
+  },
+  "post_probe_index_read": true,
+  "post_probe_cached_playback": {
+    "readyState": 4,
+    "currentTime": 2.626301,
+    "duration": 64,
+    "paused": false,
+    "error": null,
+    "width": 2560,
+    "height": 1440
+  }
+}

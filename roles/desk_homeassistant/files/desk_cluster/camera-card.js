@@ -82,3 +82,100 @@ class DeskCameraCard extends HTMLElement {
 if(!customElements.get('desk-camera-card'))customElements.define('desk-camera-card',DeskCameraCard);
 window.customCards=window.customCards||[];
 if(!window.customCards.some(c=>c.type==='desk-camera-card'))window.customCards.push({type:'desk-camera-card',name:'Cluster camera',description:'WebRTC camera with automatic stream recovery'});
+
+/* Native Media Browser feedback. Viewer-scoped preparation in HA's own player.
+ * The native image placeholder opens immediately; showDialog() swaps that same
+ * native popup to video/HLS when ready. No frontend prototype or player fork.
+ */
+(() => {
+  if(typeof window.addEventListener!=='function'||window.deskRecordingFeedback)return;
+  window.deskRecordingFeedback=true;
+  const random=()=>Array.from(crypto.getRandomValues(new Uint8Array(16)),n=>n.toString(16).padStart(2,'0')).join('');
+  const client=random(),tag='hui-dialog-web-browser-play-media';
+  let sequence=0,pending,draining=Promise.resolve();
+  function api(action,p,extra={}) {
+    // Existing HA WebSocket bypasses the browser's six HTTP connections,
+    // which native thumbnail downloads can otherwise monopolize.
+    return p.hass.callWS({type:'desk_cluster/recording_session',value:{action,client,sequence:p.sequence,scope:p.scope,...extra}})
+      .then(value=>({ok:true,json:async()=>value}));
+  }
+  function findDialog(root=document) {
+    for(const el of root.querySelectorAll('*')) {
+      if(el.localName===tag)return el;
+      if(el.shadowRoot){const found=findDialog(el.shadowRoot);if(found)return found;}
+    }
+  }
+  function release(p,closePopup=true) {
+    if(pending!==p)return;
+    pending=undefined;p.closed=true;clearInterval(p.timer);
+    // Wait for acknowledgement before a subsequent clip can allocate a handle.
+    window.dispatchEvent(new CustomEvent('desk-recording-viewer',{detail:{entry:p.entry,active:false}}));
+    draining=api('close',p).catch(()=>undefined).then(()=>window.dispatchEvent(new CustomEvent('desk-recording-viewer',{detail:{entry:p.entry,active:false,drained:true}})));
+    if(closePopup)(p.dialog||findDialog())?.closeDialog();
+  }
+  function errorImage() {
+    return 'data:image/svg+xml;charset=utf-8,'+encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="640" height="360"><text x="320" y="180" text-anchor="middle" fill="#888" font-family="Roboto,Arial,sans-serif" font-size="18">Unable to prepare recording. Close and retry.</text></svg>');
+  }
+  async function open(p,clip) {
+    try {
+      await draining;if(pending!==p)return;
+      const response=await api('open',p,{clip});
+      if(!response.ok)throw Error('Recording unavailable');
+      const result=await response.json();if(pending!==p)return;
+      // Native dialog import/render can still be in flight for an instant hit.
+      for(let i=0;i<60&&pending===p;i++) {
+        p.dialog=findDialog();if(p.dialog?.showDialog)break;
+        await new Promise(resolve=>setTimeout(resolve,50));
+      }
+      if(pending!==p)return;
+      if(!p.dialog?.showDialog)throw Error('Player unavailable');
+      // Only cluster media routes are accepted; no worker URL or credential is
+      // exposed to the player. The Core response already signs these routes.
+      if(!result.url?.startsWith('/api/desk_cluster/recording/')||!['video/mp4','application/x-mpegURL'].includes(result.mime_type))throw Error('Invalid recording');
+      p.dialog.showDialog({sourceUrl:result.url,sourceType:result.mime_type,title:p.title,can_play:true});
+    } catch(error) {
+      if(pending!==p)return;
+      p.dialog=p.dialog||findDialog();release(p,false);
+      p.dialog?.showDialog({sourceUrl:errorImage(),sourceType:'image/svg+xml',title:p.title});
+    }
+  }
+  function picked(event) {
+    let url;try{url=new URL(event.detail?.item?.media_content_id);}catch{return;}
+    if(url.protocol!=='media-source:'||url.hostname!=='tapo_control'||!url.searchParams.has('entry')||!/^\d+$/.test(url.searchParams.get('startDate')||'')||!/^\d+$/.test(url.searchParams.get('endDate')||''))return;
+    const path=event.composedPath(),panel=path.find(el=>el.localName==='ha-panel-media-browser');
+    const browser=path.find(el=>el.localName==='ha-media-player-browse')||panel?.shadowRoot?.querySelector('ha-media-player-browse');
+    const player=panel?.shadowRoot?.querySelector('ha-bar-media-player');
+    const hass=panel?.hass||browser?.hass;
+    if(!browser||player?.entityId!=='browser'||!hass?.callWS)return;
+    event.preventDefault();event.stopImmediatePropagation();
+    if(pending)return;
+    const item=event.detail.item;
+    const p={hass,panel,path:location.pathname,sequence:++sequence,scope:random(),entry:url.searchParams.get('entry'),title:String(item.title||'Camera recording').slice(0,200)};
+    pending=p;
+    window.dispatchEvent(new CustomEvent('desk-recording-viewer',{detail:{entry:p.entry,active:true}}));
+    p.timer=setInterval(()=>{
+      if(pending!==p)return;
+      if(!p.panel.isConnected){release(p);return;}
+      p.dialog=p.dialog||findDialog();
+      api('touch',p).catch(()=>undefined);
+    },5000);
+    // Use the native media-picked flow to load its standard dialog module.
+    // This is a static local SVG, never a camera request or a fake media stream.
+    const placeholder=new CustomEvent('media-picked',{bubbles:true,composed:true,detail:{...event.detail,item:{...item,title:'Preparing recording',media_content_id:'media-source://tapo_control/tapo_control/?desk_loading='+p.scope,media_content_type:'image/svg+xml'}}});
+    browser.dispatchEvent(placeholder);
+    open(p,{entry:url.searchParams.get('entry'),date:url.searchParams.get('date'),start:Number(url.searchParams.get('startDate')),end:Number(url.searchParams.get('endDate'))});
+  }
+  window.addEventListener('media-picked',picked,true);
+  window.addEventListener('show-dialog',event=>{
+    if(event.detail?.dialogTag!==tag)return;
+    const source=event.detail.dialogParams?.sourceUrl||'';
+    let url;try{url=new URL(source,location.origin);}catch{return;}
+    const loadingScope=url.protocol==='data:'&&url.hash.startsWith('#viewer=')?url.hash.slice(8):url.pathname==='/desk-cluster-assets/recording-loading.svg'?url.searchParams.get('viewer'):null;
+    if(loadingScope!==null&&(!pending||loadingScope!==pending.scope)){event.preventDefault();event.stopImmediatePropagation();}
+  },true);
+  window.addEventListener('dialog-closed',event=>{if(pending&&event.detail?.dialog===tag)release(pending,false);},true);
+  const navigate=()=>{if(pending&&location.pathname!==pending.path)release(pending);};
+  window.addEventListener('location-changed',navigate);
+  window.addEventListener('popstate',navigate);
+  window.addEventListener('pagehide',()=>{if(pending)release(pending);});
+})();

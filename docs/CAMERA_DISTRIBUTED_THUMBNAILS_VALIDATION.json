@@ -1,0 +1,180 @@
+{
+  "status": "deployed_live_verified",
+  "approved": "Explicit user approval for persistent workers, three-node serial rollout and config-preserving Core handoff",
+  "date": "2026-10-17",
+  "checkpoint_revision": 37,
+  "core_owner": "deskb1x",
+  "camera_owners": {
+    "Bed": "deskb3x",
+    "Guess": "deskb2x",
+    "Makeup": "deskb1x"
+  },
+  "execution": {
+    "core": "Native media handle allocation, authenticated routing, RAM image cache. No event search, JPEG retrieval, preview transport or frame decoding in the normal Core thumbnail path. Native recording-index browsing and other Tapo integration functions still run on Core.",
+    "worker": "Existing lease-selected camera owner fetches event JPEG or a bounded preview and decodes one frame. Pinned SDK and image; no new NATS subjects/users or ownership framework.",
+    "media_handle": "Core getUserID/playerID supplied transiently, worker never allocates a competing getUserID."
+  },
+  "scopes": {
+    "identity": "HA user + tab nonce + monotonic sequence + scope nonce",
+    "range": "Camera entry, date, optional exact parent clip bounds",
+    "navigation": "Native media-browsed current event rewrites only thumbnail URLs; location-changed/popstate/pagehide revoke old tab scope",
+    "sharing": "Same image job shared across tabs; navigation cancels only when its last valid consumer leaves",
+    "cleanup": "Explicit signed worker cancel acknowledged after SDK task/session and original HTTP admission drain. Independent owner-generation lease watch at 250ms and 32-second worker job deadline.",
+    "heartbeat_seconds": 15,
+    "tab_expiry_seconds": 90,
+    "max_tabs": 64,
+    "max_pending_images": 64,
+    "max_active_images": 2,
+    "node_limit": "One fetch per worker node; camera lock shared with playback",
+    "source_request_deadline_seconds": 40
+  },
+  "cache": {
+    "storage": "Core RAM",
+    "max_bytes": 16777216,
+    "max_images": 512,
+    "success_ttl_seconds": 3600,
+    "placeholder_ttl_seconds": 20,
+    "scope_rejection_and_cancel_cached": false,
+    "housekeeping_seconds": 5,
+    "browser_private_max_age_seconds": 300,
+    "persisted_or_replicated_images": false
+  },
+  "resources": {
+    "container_cpu_cores": 0.3,
+    "container_memory_mib": 320,
+    "host_launcher_cpu_cores": 0.35,
+    "host_launcher_memory_mib": 384,
+    "preload": "SDK/Pillow imports before socket readiness, no camera login. About 47 seconds at cold worker startup on the approved CPU cap; workers stay warm afterwards.",
+    "measurement_cgroup": "Actual Podman container cgroup located from its init PID. Host launcher memory (~10 MiB) is separate and must not be reported as the whole worker.",
+    "performance": {
+      "1": {
+        "worker": {
+          "samples": 80,
+          "duration_seconds": 79.376,
+          "cpu_mean_one_core_percent": 0.0,
+          "cpu_p95_one_core_percent": 0.0,
+          "ram_peak_mib": 46.77,
+          "oom_events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\n"
+        },
+        "core": {
+          "samples": 80,
+          "duration_seconds": 79.376,
+          "cpu_mean_one_core_percent": 2.5,
+          "cpu_p95_one_core_percent": 12.82,
+          "ram_peak_mib": 293.29,
+          "oom_events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\n"
+        }
+      },
+      "2": {
+        "worker": {
+          "samples": 80,
+          "duration_seconds": 79.202,
+          "cpu_mean_one_core_percent": 13.67,
+          "cpu_p95_one_core_percent": 30.25,
+          "ram_peak_mib": 89.88,
+          "oom_events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\n"
+        }
+      },
+      "3": {
+        "worker": {
+          "samples": 80,
+          "duration_seconds": 79.198,
+          "cpu_mean_one_core_percent": 0.0,
+          "cpu_p95_one_core_percent": 0.0,
+          "ram_peak_mib": 46.79,
+          "oom_events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\n"
+        }
+      }
+    }
+  },
+  "offline_tests": {
+    "core_scope_cache_transport": 14,
+    "worker_runtime_admission": 10,
+    "native_recording_adapter": 13,
+    "signed_ticket_scope": 4,
+    "legacy_frame_decoder": 5,
+    "frontend_native_folder_events": 4,
+    "playback_feedback_script": 1
+  },
+  "offline_total": 51,
+  "live_checks": {
+    "native_folder_navigation": "Date -> parts: seq 2 -> 3, exact scope bounds [1792172826,1792173946], scope POSTs HTTP 200, both native thumbnails image/jpeg by 20.841-second observation upper bound",
+    "worker_fetch_and_cancel": "Guess runtime on node2 recorded 31 completed and 4 cancelled, 0 runtime failures and busy=false after current folder finished. Host failed counter includes the normal cancelled request transport.",
+    "keyframe_worker_seconds": 6.396,
+    "warm_cache": "RAM reuse observed across new tab nonces/scopes; native UI reload displayed existing JPEGs. No isolated exact warm latency claim due launch-screen ordering.",
+    "event_worker": "Bed event JPEG and keyframe fetched remotely on node3 before preload; final Bed/playback check recorded below.",
+    "no_media_export": "No image pixels, transport bytes, credentials, session handles or signed URLs are saved in these reports.",
+    "final_core_counters": {
+      "requests": 447,
+      "hits": 161,
+      "worker_requests": 118,
+      "event_jpegs": 60,
+      "preview_frames": 27,
+      "cancelled": 28,
+      "scope_rejections": 8,
+      "inflight": 0,
+      "cache_entries": 87,
+      "cache_bytes": 2539186,
+      "last_event": {
+        "node": "deskb3x",
+        "bytes": 37518,
+        "seconds": 2.212
+      },
+      "note": "Global counters include the initial cold-preload rollout and frontend validation iterations, not a failure-free controlled batch."
+    },
+    "playback_after_preemption": {
+      "current_time": 47.611832,
+      "duration": 64,
+      "ready_state": 4,
+      "paused": false,
+      "error": null,
+      "width": 2560,
+      "height": 1440,
+      "camera_media_download_started": false
+    },
+    "native_ui_images": "Two JPEGs appeared in the native in-app parts folder after navigation, with HTTP 200 scope acknowledgements. Closing the test tab left zero thumbnail jobs.",
+    "final_worker_runtime": {
+      "deskb1x": {
+        "completed": 0,
+        "cancelled": 0,
+        "failed": 0,
+        "busy": false
+      },
+      "deskb2x": {
+        "completed": 31,
+        "cancelled": 4,
+        "failed": 0,
+        "busy": false
+      },
+      "deskb3x": {
+        "completed": 30,
+        "cancelled": 0,
+        "failed": 0,
+        "busy": false,
+        "last_event_seconds": 0.226,
+        "last_http_seconds": 0.232
+      }
+    },
+    "overview_reloaded": "Existing user Overview restored after handoff; final accessibility state has no Connection lost banner."
+  },
+  "live_fixes": [
+    "Cold SDK import initially ran inside an active fetch and delayed cancellation. Moved module preload before readiness; final workers passed readiness on all three nodes.",
+    "Worker cancellation now waits for the old HTTP handler to release admission before acknowledging; short admission wait covers scheduling handover.",
+    "Native media-browsed is authoritative. Avoid URL-order guards: HA may deliver a result before updating browser history. Retain monotonic server scope rejection for out-of-order POSTs."
+  ],
+  "limits": [
+    "The source request deadline includes queue time. A large folder requiring many expensive keyframes can still show placeholders; this does not promise an instant full-day thumbnail index.",
+    "An in-flight SDK control HTTP call finishes before cancellation acknowledgement; cancellation is not zero-latency. Media generators and FFmpeg children close on cancellation.",
+    "Cross-tab isolation/deduplication and late-scope rejection were tested offline; live browser checks used a separate native tab and node2/node3 workers.",
+    "The prior one-hour TTL and quota tests remain offline; no forced production cache fill or one-hour wait.",
+    "Native Core-only thumbnail capability probe remains a separate explicit diagnostic, outside the normal UI thumbnail path."
+  ],
+  "final_health": {
+    "checkpoint_revision": 37,
+    "replicas_synced": 3,
+    "core_ready": true,
+    "all_camera_owners_ready": true,
+    "pending_local_config_changes": true,
+    "pending_policy": "Preserved; no automatic config sync or overwrite."
+  }
+}

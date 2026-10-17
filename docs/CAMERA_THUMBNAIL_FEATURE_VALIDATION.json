@@ -1,0 +1,102 @@
+{
+  "status": "deployed_live_verified",
+  "production_changed_by_rollout": true,
+  "offline_tests": {
+    "cache_and_provider": 8,
+    "native_adapter": 13,
+    "worker_decoder": 5,
+    "artifact_regressions": 6,
+    "ticket_scope": 3
+  },
+  "total_tests": 35,
+  "cache": {
+    "storage": "Core RAM",
+    "limit_bytes": 16777216,
+    "max_entries": 512,
+    "ttl_seconds": 3600,
+    "negative_ttl_seconds": 20,
+    "cleanup_interval_seconds": 60,
+    "replicated": false
+  },
+  "live_batch_performance": {
+    "scope": "Whole Core cgroup, mixed native browsing; not isolated incremental per-thumbnail CPU. Concurrent browsing makes global counter deltas unsuitable for zero-new-camera-request attribution.",
+    "core_samples": 100,
+    "sample_period_seconds": 1,
+    "cpu_one_core_percent_mean": 11.96,
+    "cpu_one_core_percent_p95": 36.96,
+    "cpu_one_core_percent_max": 64.47,
+    "ram_start_mib": 274.7,
+    "ram_peak_mib": 290.05,
+    "oom_events": 0,
+    "cold_native_list_observation": {
+      "seconds_upper_bound": 6.723,
+      "jpeg_images_already_rendered": 5
+    },
+    "cold_batch_observation": {
+      "seconds_upper_bound": 23.703,
+      "rendered_jpegs": 44,
+      "placeholders": 0
+    },
+    "warm_two_part_folder": {
+      "list_and_two_jpegs_seconds": 0.603,
+      "browser_positive_cache_seconds": 300
+    },
+    "ram_cache_observed": {
+      "entries": 169,
+      "bytes": 6049002,
+      "hits": 4,
+      "event_jpegs": 167,
+      "preview_frames": 2,
+      "placeholders_during_rollout_and_probes": 13,
+      "note": "Counters include concurrent browsing and the temporary controller quarantine while fixes rolled out."
+    },
+    "sampling_duration_seconds": 124.972,
+    "sampling_actual_mean_interval_seconds": 1.262,
+    "sampling_note": "One-second sleep plus inspection overhead; CPU percentages use actual elapsed timestamps."
+  },
+  "deployment_script": "/private/tmp/desk-thumbnail-feature/deploy.py",
+  "approval": "User explicitly approved rollout and live measurement on 2026-10-17",
+  "checkpoint_revision": 35,
+  "core_owner": "deskb1x",
+  "replicas_synced": 3,
+  "worker_frame_live": {
+    "cached_hls_http": 200,
+    "cached_hls_roundtrip_seconds": 15.387,
+    "cached_hls_jpeg_bytes": 9477,
+    "transport_preview_input_bytes": 325240,
+    "transport_preview_jpeg_bytes": 9324,
+    "transport_preview_provider_seconds": 18.478,
+    "decoder_last_request_seconds": 11.499,
+    "decoder_last_ffmpeg_wrapper_seconds": 4.903,
+    "decoder_last_cpu_usage_usec": 1623897,
+    "decoder_last_memory_peak_bytes": 51027968,
+    "decoder_last_oom_events": 0,
+    "decoder_limit": "Transient systemd job 25% one CPU / 320 MiB enclosing Podman 0.25 CPU / 256 MiB; controller keeps its existing 15% / 96 MiB limit.",
+    "live_fix": "Initial direct child inherited controller cgroup and timed out. Reused existing transient playback-job isolation pattern, retested 5 decoder cases, serial idle-only rollout to all three nodes.",
+    "decoder_sha256": "8172426d231661743d26ae5a0cb873e4f6e3f028e8b0501363cf882be1a60356"
+  },
+  "playback_regression": {
+    "clip_seconds": 64,
+    "ready_state": 4,
+    "video_width": 2560,
+    "video_height": 1440,
+    "error": null,
+    "observed_current_time": 64,
+    "result": "Reached end after resolving while thumbnails were present; no new video download needed."
+  },
+  "verification_limits": [
+    "One-hour TTL and byte/entry eviction were verified with offline time-controlled tests, not a one-hour production wait or a forced 16 MiB production fill.",
+    "Worker decode measured on node 1; identical decoder hashes and readiness verified on nodes 2 and 3.",
+    "JPEG pixels, transport bytes, credentials and signed URLs were not persisted in measurement reports.",
+    "One-frame fallback is deliberately bounded and slower (about 18 seconds end-to-end in this sample); event JPEGs remain preferred."
+  ],
+  "final_health": {
+    "one_active_core": true,
+    "checkpoint_revision": 35,
+    "replicas_synced": 3,
+    "all_cameras_ready": true,
+    "temporary_drains_absent": true,
+    "new_local_changes_pending": true,
+    "note": "Latest final read reports new pending config changes after the earlier clean r35 verification. Left untouched; manual sync policy remains in force."
+  }
+}

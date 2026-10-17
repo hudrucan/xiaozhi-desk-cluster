@@ -76,8 +76,9 @@ class Controller:
   if action=='playback_prepare':
    try:
     if self.fleet and any(a is not self and a.playback.active() for a in self.fleet.agents):raise PlaybackError('node_busy')
-    return self.playback.prepare(value['clip'],value.get('session'))
+    return self.playback.prepare(value['clip'],value.get('session'),value.get('managed',False))
    except PlaybackError as err:return {'state':'rejected','reason':err.code}
+  if action in ('playback_cancel','playback_touch'):return self.playback.viewer_action(value['id'],value['attempt'],action=='playback_cancel')
   if action=='playback_status':return self.playback.status(value['id'])
   if action=='status':return self.status()
   if action=='fleet_status' and self.prefix==PREFIX and self.fleet:return self.fleet.local()
@@ -137,21 +138,42 @@ async def local_client(reader,writer,agents):
   value=json.loads(raw);agent=next(a for a in agents if a.c['workload']==value['workload'])
   action=value['action']
   if action=='prepare':
-   caches=await agent.fanout('playback_cached',value['clip']);cached=next((v for v in caches.values() if v.get('state')=='ready'),None)
+   caches=await agent.fanout('playback_cached',value['clip']);cached=next((v for v in caches.values() if v.get('state') in ('ready','playable')),None)
    heads=await agent.fanout('status');owners=[n for n,h in heads.items() if h.get('owned') and h.get('ready')]
    if cached:result=cached
    else:
     if len(owners)!=1:raise ValueError('No ready camera owner')
-    result=await agent.call(owners[0],'playback_prepare',{'clip':value['clip'],'session':value.get('session')})
+    result=await agent.call(owners[0],'playback_prepare',{'clip':value['clip'],'session':value.get('session'),'managed':value.get('managed',False)})
   elif action=='inventory':
    replies=await agent.fanout('playback_inventory');items=[item for v in replies.values() for item in v.get('items',[])]
    result={'items':items[:240],'complete':len(items)<=240 and len(replies)==len(agent.members) and all(not v.get('truncated') for v in replies.values())}
+  elif action in ('cancel','touch') and value['node'] in agent.members:result=await agent.call(value['node'],'playback_'+action,{'id':value['id'],'attempt':value['attempt']})
   elif action=='status' and value['node'] in agent.members:result=await agent.call(value['node'],'playback_status',{'id':value['id']})
   else:raise ValueError()
   out={'ok':True,'value':result}
  except Exception:out={'ok':False,'error':'Camera worker unavailable or busy. Retry when ready.'}
  try:writer.write(encoded(out)+b'\n');await writer.drain()
  finally:writer.close();await writer.wait_closed()
+
+def thumbnail_request(handler):
+ try:
+  parts=handler.path.split('/')
+  if len(parts)!=4 or parts[1]!='thumbnail':raise ValueError()
+  workload,ident=parts[2:];clip_path(workload,ident)
+  agent=handler.server.agents[0];token=handler.headers.get('X-Desk-Artifact','')
+  if len(token)>4096:raise ValueError()
+  value=unpack(base64.b64decode(token,validate=True),agent.c['key']);scope=value['value']
+  if value['recipient']!=agent.node or value['action']!='thumbnail' or scope.get('workload')!=workload or scope.get('id')!=ident:raise ValueError()
+  if handler.client_address[0] not in set(agent.members.values())|{'127.0.0.1'} and not handler.server.core_artifact_peer.allows(handler.client_address[0]):raise ValueError()
+  length=int(handler.headers.get('Content-Length','-1'))
+  if not 0<=length<=1024*1024:raise ValueError()
+  handler.connection.settimeout(5);data=handler.rfile.read(length)
+  if len(data)!=length:raise ValueError()
+  if scope.get('source') in ('fetch','cancel'):result,kind=handler.server.thumbnail_fetcher.request(handler.server.agents,scope,data)
+  else:result=handler.server.thumbnail_decoder.decode(handler.server.agents,scope,data);kind='keyframe'
+  handler.send_response(200);handler.send_header('Content-Type','image/jpeg' if kind!='cancelled' else 'application/octet-stream');handler.send_header('X-Thumbnail-Source',kind);handler.send_header('Content-Length',str(len(result)));handler.send_header('Connection','close');handler.end_headers();handler.wfile.write(result)
+ except (BrokenPipeError,ConnectionResetError):pass
+ except Exception:handler.send_error(404,'Thumbnail unavailable')
 
 class CoreArtifactPeer:
  """Only the protected local Core container may fetch signed media over its bridge."""
@@ -172,33 +194,51 @@ class CoreArtifactPeer:
    return peer in self.peers
 
 class Handler(http.server.BaseHTTPRequestHandler):
+ def do_POST(self):return thumbnail_request(self)
  def log_message(self,*a):pass
  def do_GET(self):
-  if self.path.startswith('/artifact/'):
+  if self.path.startswith(('/artifact/','/hls/')):
    return self.artifact()
   agents=self.server.agents;a=agents[0];status=200;body=b'{}'
   selected=next((x for x in agents if self.path=='/ready/'+x.c['workload']),None)
   if self.client_address[0] not in set(a.members.values())|{'127.0.0.1'}:status=403
   elif selected is not None:status=200 if selected.ready() else 503
   elif self.path=='/ready':status=200 if a.ready() else 503
-  elif self.path=='/status':body=encoded(dict(a.public(),cameras=[x.public() for x in agents],transport=self.server.fleet.public(),voter_ready=all(clock()>=x.lease.quarantine for x in agents)))
+  elif self.path=='/status':body=encoded(dict(a.public(),cameras=[x.public() for x in agents],transport=self.server.fleet.public(),thumbnail_decoder=self.server.thumbnail_decoder.public(),thumbnail_fetcher=self.server.thumbnail_fetcher.public(),voter_ready=all(clock()>=x.lease.quarantine for x in agents)))
   else:status=404
   self.send_response(status);self.send_header('Content-Type','application/json');self.send_header('Content-Length',str(len(body)));self.send_header('Connection','close');self.end_headers()
   try:self.wfile.write(body)
   except (BrokenPipeError,ConnectionResetError):pass
  def artifact(self):
+  stream=None
   try:
    a=self.server.agents[0]
    parts=self.path.split('/')
-   if len(parts)!=4:raise ValueError()
-   workload,ident=parts[2:];p=clip_path(workload,ident)
+   hls=parts[1]=='hls'
+   if len(parts)!=(6 if hls else 4):raise ValueError()
+   workload,ident=parts[2:4];p=clip_path(workload,ident)
+   scope={'workload':workload,'id':ident}
+   if hls:
+    from hls_files import artifact_path
+    generation,name=parts[4:];scope.update(generation=generation,file=name)
+    p=artifact_path(p.parent,generation,name)
    token=self.headers.get('X-Desk-Artifact','')
    if len(token)>4096:raise ValueError()
    v=unpack(base64.b64decode(token,validate=True),a.c['key'])
-   if v.get('recipient')!=a.node or v.get('action')!='artifact' or v.get('value')!={'workload':workload,'id':ident}:raise ValueError()
+   if v.get('recipient')!=a.node or v.get('action')!='artifact' or v.get('value')!=scope:raise ValueError()
    if self.client_address[0] not in set(a.members.values())|{'127.0.0.1'} and not self.server.core_artifact_peer.allows(self.client_address[0]):raise ValueError()
-   if not p.is_file() or p.is_symlink() or not 1024<p.stat().st_size<=256*1024*1024:raise ValueError()
-   p.touch();size=p.stat().st_size;start=0;end=size-1;code=200
+   if hls:
+    selected=next(x for x in self.server.agents if x.c['workload']==workload)
+    status=selected.playback.status(ident)
+    if status.get('format')!='hls' or status.get('generation')!=generation or status.get('state') not in ('ready','playable'):raise ValueError()
+   limit=131072 if hls and name=='index.m3u8' else 16*1024*1024 if hls else 256*1024*1024
+   minimum=0 if hls else 1024
+   if not p.is_file() or p.is_symlink() or not minimum<p.stat().st_size<=limit:raise ValueError()
+   if hls:(clip_path(workload,ident).parent/'.access').touch()
+   else:p.touch()
+   stream=p.open('rb');size=os.fstat(stream.fileno()).st_size
+   if not minimum<size<=limit:raise ValueError()
+   start=0;end=size-1;code=200
    requested=self.headers.get('Range')
    if requested:
     match=__import__('re').fullmatch(r'bytes=(\d*)-(\d*)',requested)
@@ -208,18 +248,19 @@ class Handler(http.server.BaseHTTPRequestHandler):
     else:start=max(0,size-int(right))
     if not 0<=start<=end<size:raise ValueError()
     code=206
-   self.send_response(code);self.send_header('Content-Type','video/mp4');self.send_header('Accept-Ranges','bytes');self.send_header('Content-Length',str(end-start+1))
+   self.send_response(code);self.send_header('Content-Type',('application/x-mpegURL' if name=='index.m3u8' else 'video/mp4') if hls else 'video/mp4');self.send_header('Accept-Ranges','bytes');self.send_header('Content-Length',str(end-start+1))
    if code==206:self.send_header('Content-Range',f'bytes {start}-{end}/{size}')
    self.send_header('Connection','close');self.end_headers()
-   with p.open('rb') as stream:
-    stream.seek(start);remaining=end-start+1
-    while remaining:
-     chunk=stream.read(min(65536,remaining))
-     if not chunk:break
-     self.wfile.write(chunk);remaining-=len(chunk)
+   stream.seek(start);remaining=end-start+1
+   while remaining:
+    chunk=stream.read(min(65536,remaining))
+    if not chunk:break
+    self.wfile.write(chunk);remaining-=len(chunk)
   except (BrokenPipeError,ConnectionResetError):pass
   except Exception:
    self.send_error(404,'Recording unavailable')
+  finally:
+   if stream is not None:stream.close()
 
 
 if __name__=='__main__':
@@ -228,7 +269,9 @@ if __name__=='__main__':
   agents=[Controller(dict(config,**camera),telemetry) for camera in config.get('cameras',[{}])]
   transport=SharedRPC(agents);fleet=FleetStatus(agents,transport)
   for a in agents:a.transport=transport;a.fleet=fleet
-  server=http.server.ThreadingHTTPServer((agents[0].members[agents[0].node],20226),Handler);server.agents=agents;server.fleet=fleet;server.core_artifact_peer=CoreArtifactPeer();server.timeout=2
+  from thumbnail_decode import Decoder
+  from thumbnail_fetch import Fetcher
+  server=http.server.ThreadingHTTPServer((agents[0].members[agents[0].node],20226),Handler);server.agents=agents;server.fleet=fleet;server.core_artifact_peer=CoreArtifactPeer();server.thumbnail_decoder=Decoder();server.thumbnail_fetcher=Fetcher();server.timeout=2
   threading.Thread(target=server.serve_forever,daemon=True).start()
   local_path=RUN/'bridge.sock';local_path.unlink(missing_ok=True)
   local_server=await asyncio.start_unix_server(lambda reader,writer:local_client(reader,writer,agents),path=str(local_path));os.chmod(local_path,0o600)

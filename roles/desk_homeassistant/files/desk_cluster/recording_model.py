@@ -18,8 +18,9 @@ def parts(start,end):
 def cached_state(items,workload,date,start,end):
  ident=clip_id(workload,date,start,end)
  states={v.get('state') for v in items if v.get('workload')==workload and (v.get('id')==ident or (v.get('legacy') is True and v.get('start')==int(start) and v.get('end')==int(end)))}
- return 'ready' if 'ready' in states else 'preparing' if 'preparing' in states else 'missing'
+ return 'ready' if 'ready' in states else 'playable' if 'playable' in states else 'preparing' if 'preparing' in states else 'missing'
 def label(title,state,complete=True):
  if state=='ready':return '✓ '+title.lstrip('✓').strip()+' · Downloaded'
+ if state=='playable':return '▶ '+title+' · Ready to play'
  if state=='preparing':return '⏳ '+title+' · Preparing'
  return title.lstrip('✓').strip()+(' · Not downloaded' if complete else ' · Cache status unavailable')

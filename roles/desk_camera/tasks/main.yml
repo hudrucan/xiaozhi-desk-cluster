@@ -13,13 +13,19 @@
     path: '{{ item }}'
     state: directory
     mode: '0700'
-  loop: [/etc/desk-camera, /var/lib/desk-camera, /var/lib/desk-camera/deps, /var/lib/desk-camera/cache/hot, /var/lib/desk-camera/cache/cold, /usr/local/libexec/desk-camera/components]
+  loop: [/etc/desk-camera, /var/lib/desk-camera, /var/lib/desk-camera/deps, /var/lib/desk-camera/playback, /var/lib/desk-camera/cache/hot, /var/lib/desk-camera/cache/cold, /usr/local/libexec/desk-camera/components]
 - ansible.builtin.copy:
     src: '{{ playbook_dir }}/secret/camera/{{ inventory_hostname }}.json'
     dest: /etc/desk-camera/config.json
     mode: '0600'
   no_log: true
   register: camera_definition
+- name: Set progressive playback for configured cameras
+  ansible.builtin.command:
+    argv: [python3, -c, "import json,pathlib; p=pathlib.Path('/etc/desk-camera/config.json'); v=json.loads(p.read_bytes()); desired={{ desk_camera_progressive | bool | ternary('True','False') }}; changed=any(c.get('progressive',False)!=desired for c in v['cameras']); [c.update(progressive=desired) for c in v['cameras']]; q=p.with_suffix('.candidate'); q.write_text(json.dumps(v)) if changed else None; q.chmod(0o600) if changed else None; q.replace(p) if changed else None; print('changed' if changed else 'unchanged')"]
+  register: camera_progressive
+  changed_when: camera_progressive.stdout == 'changed'
+  no_log: true
 - ansible.builtin.copy:
     src: '{{ playbook_dir }}/secret/camera/{{ item }}'
     dest: '/etc/desk-camera/{{ item }}'
@@ -37,7 +43,7 @@
     src: '{{ item }}'
     dest: '/usr/local/libexec/desk-camera/{{ item }}'
     mode: '0600'
-  loop: [controller.py, transport.py, runtime.py, install_nats.py, health.py, playback.py, playback_worker.py, cache_gc.py]
+  loop: [controller.py, transport.py, runtime.py, install_nats.py, health.py, playback.py, playback_worker.py, hls_worker.py, hls_files.py, thumbnail_decode.py, thumbnail_fetch.py, thumbnail_worker.py, warm_playback.py, media_rpc.py, cache_gc.py]
   register: camera_helpers
 - ansible.builtin.unarchive:
     src: components.tgz
@@ -72,6 +78,7 @@
   loop:
     - {src: controller.service, name: desk-camera.service}
     - {src: runtime.service, name: desk-camera-relay.service}
+    - {src: thumbnail.service, name: desk-camera-thumbnails.service}
     - {src: proxy.service, name: desk-camera-proxy.service}
   register: camera_units
 - ansible.builtin.systemd_service:
@@ -79,8 +86,8 @@
 - ansible.builtin.systemd_service:
     name: '{{ item }}'
     enabled: true
-    state: "{{ 'restarted' if camera_definition.changed or camera_private.changed or camera_helpers.changed or camera_units.changed else 'started' }}"
-  loop: [desk-camera, desk-camera-relay, desk-camera-proxy]
+    state: "{{ 'restarted' if camera_definition.changed or camera_progressive.changed or camera_private.changed or camera_helpers.changed or camera_units.changed else 'started' }}"
+  loop: [desk-camera, desk-camera-relay, desk-camera-proxy, desk-camera-thumbnails]
 - name: Wait for this voter before updating another node
   ansible.builtin.uri:
     url: 'http://{{ cluster_ip }}:20226/status'
@@ -89,6 +96,14 @@
   register: camera_voter
   until: camera_voter.json.voter_ready
   retries: 25
+  delay: 2
+- name: Wait for preloaded media SDK before accepting playback
+  ansible.builtin.command:
+    argv: [python3, -c, "import socket,json; s=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM); s.settimeout(3); s.connect('/run/desk-camera-thumbnails/worker.sock'); s.sendall(json.dumps({'action':'status','id':'0'*32}).encode()+bytes([10])); v=json.loads(s.makefile('rb').readline()); assert v['ok'] and 'media' in v['value']; s.close()"]
+  register: camera_media_ready
+  changed_when: false
+  until: camera_media_ready.rc == 0
+  retries: 40
   delay: 2
 - name: Verify protected services remain available
   ansible.builtin.command:

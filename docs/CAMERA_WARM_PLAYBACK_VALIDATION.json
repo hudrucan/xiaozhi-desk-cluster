@@ -1,0 +1,259 @@
+{
+  "date": "2026-10-17",
+  "scope": "warm runtime only; no first-seconds prefetch",
+  "core_checkpoint": 45,
+  "camera": "Guess .163",
+  "clip_duration_seconds": 122,
+  "cold_baseline": {
+    "node": "deskb2x",
+    "first_playable_worker_age_seconds": 45.517
+  },
+  "warm_success": {
+    "node": "deskb3x",
+    "first_playable_sample": {
+      "age": 8.229,
+      "duration": 122,
+      "state": "playable",
+      "runtime": "warm",
+      "warm_elapsed_seconds": 7.607,
+      "first_playable_seconds": 6.871,
+      "progress": 3.942,
+      "total": 122
+    },
+    "last_sample": {
+      "age": 93.007,
+      "duration": 122,
+      "state": "ready",
+      "runtime": "warm",
+      "warm_elapsed_seconds": 77.814,
+      "first_playable_seconds": 6.871,
+      "finished_seconds": 77.078,
+      "progress": 118.208,
+      "total": 122
+    },
+    "seconds_saved": 37.288,
+    "percent_saved": 81.92,
+    "packager_finished_seconds": 77.078,
+    "total_job_finished_seconds": 77.814,
+    "browser_at_seconds_after_click": 79.515,
+    "browser": {
+      "current_time": 70.071108,
+      "duration": 122.2793336667,
+      "readyState": 4,
+      "paused": false,
+      "error": null
+    },
+    "controller_cpu_percent_one_core": 12.13,
+    "media_cpu_percent_one_core": 49.8,
+    "playback_run_peak_mib": 117.55,
+    "lease_health_samples": 16,
+    "min_remaining_lease_seconds": 7.804,
+    "generation_changed": false
+  },
+  "canary_corrections": {
+    "initial_warm_canaries": "Played early but stopped when the existing owner fence lost its lease; not counted as stable successes.",
+    "packet_processing": "Yields to existing warm IPC and cancellation callbacks.",
+    "controller_headroom": "Existing HTTP media + lease controller limit increased from 15% to 40% of one core after observed throttling. No lease TTL, quorum, voter or consensus changes."
+  },
+  "reuse_and_cancel": {
+    "same_warm_pid_before_after": 1858889,
+    "next_clip_admitted": true,
+    "close_stopped_only_job": true,
+    "session_files": 0
+  },
+  "thumbnail_ui": {
+    "native_part_folders_checked": 19,
+    "part_folders_with_thumbnail_element": 0,
+    "cached_rows_after_close": [
+      "ready",
+      "ready"
+    ],
+    "uncached_resume_rows_observed_after_close_seconds": 25.611,
+    "uncached_resume_final": [
+      "ready",
+      "ready"
+    ],
+    "visible_preview_unavailable_text_count": 0,
+    "resume_latency": "Not continuously measured; final sample is an upper bound."
+  },
+  "idle_samples": [
+    {
+      "node": "deskb1x",
+      "idle_sample": true,
+      "seconds": 10.0,
+      "cpu_percent_one_core": 0.0289,
+      "resident_mib": 47.23
+    },
+    {
+      "node": "deskb2x",
+      "idle_sample": true,
+      "seconds": 10.0,
+      "cpu_percent_one_core": 0.0298,
+      "resident_mib": 47.49
+    },
+    {
+      "node": "deskb3x",
+      "idle_sample": true,
+      "seconds": 10.0,
+      "cpu_percent_one_core": 0.027,
+      "resident_mib": 108.66
+    }
+  ],
+  "final_health": [
+    {
+      "node": "deskb1x",
+      "core": {
+        "owner": "deskb1x",
+        "ready": true,
+        "state": "active",
+        "sync": "synced",
+        "checkpoint_revision": 45,
+        "pending_disk_changes": false,
+        "error": null
+      },
+      "cameras": [
+        {
+          "workload": "tapo_c222_160",
+          "owner": "deskb2x",
+          "ready": true,
+          "playback_active": false
+        },
+        {
+          "workload": "tapo_c222_161",
+          "owner": "deskb1x",
+          "ready": true,
+          "playback_active": false
+        },
+        {
+          "workload": "tapo_c222_163",
+          "owner": "deskb3x",
+          "ready": true,
+          "playback_active": false
+        }
+      ],
+      "warm_sdk_ready": true,
+      "warm_pid": 1902376,
+      "thumbnail_busy": false,
+      "media": {
+        "busy": false,
+        "completed": 0,
+        "cancelled": 0,
+        "failed": 0,
+        "last": null
+      },
+      "memory_mib": 47.23,
+      "peak_mib": 52.99,
+      "oom": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\n",
+      "controller_cpu_max": "40000 100000",
+      "drains": 0,
+      "session_files": 0
+    },
+    {
+      "node": "deskb2x",
+      "core": {
+        "owner": null,
+        "ready": false,
+        "state": "standby",
+        "sync": "synced",
+        "checkpoint_revision": 45,
+        "pending_disk_changes": null,
+        "error": null
+      },
+      "cameras": [
+        {
+          "workload": "tapo_c222_160",
+          "owner": "deskb2x",
+          "ready": true,
+          "playback_active": false
+        },
+        {
+          "workload": "tapo_c222_161",
+          "owner": "deskb1x",
+          "ready": true,
+          "playback_active": false
+        },
+        {
+          "workload": "tapo_c222_163",
+          "owner": "deskb3x",
+          "ready": true,
+          "playback_active": false
+        }
+      ],
+      "warm_sdk_ready": true,
+      "warm_pid": 1701183,
+      "thumbnail_busy": false,
+      "media": {
+        "busy": false,
+        "completed": 0,
+        "cancelled": 0,
+        "failed": 0,
+        "last": null
+      },
+      "memory_mib": 47.24,
+      "peak_mib": 52.98,
+      "oom": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\n",
+      "controller_cpu_max": "40000 100000",
+      "drains": 0,
+      "session_files": 0
+    },
+    {
+      "node": "deskb3x",
+      "core": {
+        "owner": null,
+        "ready": false,
+        "state": "standby",
+        "sync": "synced",
+        "checkpoint_revision": 45,
+        "pending_disk_changes": null,
+        "error": null
+      },
+      "cameras": [
+        {
+          "workload": "tapo_c222_160",
+          "owner": "deskb2x",
+          "ready": true,
+          "playback_active": false
+        },
+        {
+          "workload": "tapo_c222_161",
+          "owner": "deskb1x",
+          "ready": true,
+          "playback_active": false
+        },
+        {
+          "workload": "tapo_c222_163",
+          "owner": "deskb3x",
+          "ready": true,
+          "playback_active": false
+        }
+      ],
+      "warm_sdk_ready": true,
+      "warm_pid": 1858889,
+      "thumbnail_busy": false,
+      "media": {
+        "busy": false,
+        "completed": 1,
+        "cancelled": 3,
+        "failed": 0,
+        "last": {
+          "state": "cancelled",
+          "reason": "controller_cancel",
+          "workload": "tapo_c222_163"
+        }
+      },
+      "memory_mib": 108.65,
+      "peak_mib": 149.86,
+      "oom": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\n",
+      "controller_cpu_max": "40000 100000",
+      "drains": 0,
+      "session_files": 0
+    }
+  ],
+  "limits": [
+    "First playable is a one-second worker sample, not exact click-to-first-frame.",
+    "Cold baseline and warm run used different cluster nodes; same camera and 122-second clip.",
+    "Warm removes repeated SDK startup; first uncached playback still requires camera I/O and HLS packaging.",
+    "No prefetch, new broker, public media exposure or new resident service.",
+    "No exhaustive browser or network-fault matrix."
+  ]
+}

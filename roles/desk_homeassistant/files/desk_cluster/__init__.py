@@ -72,6 +72,25 @@ async def sync_config(hass,state,ticket):
    except Exception:_LOGGER.warning('Cluster temporary backup cleanup deferred')
   state['task']=None
 
+@websocket_api.websocket_command({probatio.Required('type'):'desk_cluster/recording_session',probatio.Required('value'):dict})
+@websocket_api.async_response
+async def recording_session_command(hass,connection,msg):
+ try:
+  source=hass.data[DOMAIN]['recording_source']
+  value=await source.viewer_manager().action(connection.user.id,msg['value'])
+  connection.send_result(msg['id'],value)
+ except asyncio.CancelledError:raise
+ except Exception:connection.send_error(msg['id'],'recording_unavailable','Recording closed or worker unavailable; close and retry.')
+
+@websocket_api.websocket_command({probatio.Required('type'):'desk_cluster/thumbnail_scope',probatio.Required('value'):dict})
+@websocket_api.async_response
+async def thumbnail_scope_command(hass,connection,msg):
+ try:
+  source=hass.data[DOMAIN]['recording_source']
+  result=await source.thumbnail_manager().focus(connection.user.id,msg['value'])
+  connection.send_result(msg['id'],result)
+ except Exception:connection.send_error(msg['id'],'thumbnail_scope_unavailable','Folder preview unavailable; reopen the folder.')
+
 @websocket_api.require_admin
 @websocket_api.websocket_command({probatio.Required('type'):'desk_cluster/status'})
 @websocket_api.async_response
@@ -137,11 +156,20 @@ async def async_setup(hass,config):
  hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP,lambda _:task.cancel())
  from .camera_recordings import install as install_recordings
  install_recordings(hass)
- from .recording_view import RecordingView
+ from .recording_view import RecordingView,HlsRecordingView
  hass.http.register_view(RecordingView(hass))
+ hass.http.register_view(HlsRecordingView(hass))
+ from .recording_sessions import RecordingSessionView
+ hass.http.register_view(RecordingSessionView(hass))
+ from .recording_thumbnails import ThumbnailView,ThumbnailScopeView
+ hass.http.register_view(ThumbnailView(hass))
+ hass.http.register_view(ThumbnailScopeView(hass))
  hass.http.register_view(Readiness(hass))
- await hass.http.async_register_static_paths([StaticPathConfig('/desk-cluster-assets/'+name,str(pathlib.Path(__file__).parent/name),False) for name in ('panel.js','camera-card.js')])
- frontend.add_extra_js_url(hass,'/desk-cluster-assets/camera-card.js?v=1.1.0')
+ await hass.http.async_register_static_paths([StaticPathConfig('/desk-cluster-assets/'+name,str(pathlib.Path(__file__).parent/name),False) for name in ('panel.js','camera-card.js','thumbnail-focus.js','recording-loading.svg')])
+ frontend.add_extra_js_url(hass,'/desk-cluster-assets/camera-card.js?v=1.3.0')
+ frontend.add_extra_js_url(hass,'/desk-cluster-assets/thumbnail-focus.js?v=2.2.0')
+ websocket_api.async_register_command(hass,thumbnail_scope_command)
+ websocket_api.async_register_command(hass,recording_session_command)
  websocket_api.async_register_command(hass,cameras_command)
  websocket_api.async_register_command(hass,camera_storage_command)
  websocket_api.async_register_command(hass,status_command)

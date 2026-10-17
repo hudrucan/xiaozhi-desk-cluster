@@ -2,3 +2,6 @@
 desk_camera_enabled: false
 desk_camera_relay_image: docker.io/alexxit/go2rtc@sha256:5644b2c8861da33ff6dadb75d9f9a3069611b59c4b5ccbdbae7f05ccf54d0f3c
 desk_camera_core_image: ghcr.io/home-assistant/home-assistant@sha256:17100609af8bb79bf5390f5d514b9aaeb00d184ce758f37769cd80c450851db7
+
+# Progressive microSD playback on every configured camera with storage.
+desk_camera_progressive: true

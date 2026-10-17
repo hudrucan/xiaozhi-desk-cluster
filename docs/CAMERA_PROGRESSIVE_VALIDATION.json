@@ -1,0 +1,118 @@
+{
+  "date": "2026-10-17",
+  "scope": "Bed C222 .160 only; MP4 remains on other cameras and for old completed cache",
+  "versions": {
+    "core": "2026.10.1",
+    "frontend": "20260930.3",
+    "pytapo": "3.4.26",
+    "ffmpeg_worker": "8.1.2"
+  },
+  "live_first_canary": {
+    "worker": "deskb2x",
+    "requested_duration_seconds": 134,
+    "two_completed_segments_after_request_seconds": 41.377,
+    "browser_sample_after_click_seconds": 76.271,
+    "browser": {
+      "readyState": 4,
+      "currentTime": 56.678904,
+      "duration_growing": 75.9176667,
+      "buffered_end": 59.966666,
+      "width": 2560,
+      "height": 1440,
+      "paused": false,
+      "error": null
+    },
+    "worker_still_downloading_at_browser_playback": true,
+    "final_segments": 66,
+    "final_bytes": 16359478,
+    "packager_first_playable_seconds_excludes_startup": 6.722,
+    "packager_finished_seconds_excludes_startup": 66.206,
+    "resource_samples": 104,
+    "worker_average_cpu_percent_one_core": 49.3,
+    "worker_peak_cpu_percent_one_core": 52.96,
+    "worker_peak_memory_mib": 81.45,
+    "controller_average_cpu_percent_one_core": 11.95,
+    "cgroup_io_rbytes_max": 2215936,
+    "cgroup_io_wbytes_max": 8716288,
+    "oom_counter_sampled": false
+  },
+  "cached_codec_probe": {
+    "video": "hevc",
+    "video_start_seconds": 0.064,
+    "audio": "aac",
+    "sample_rate": 16000,
+    "channels": 1,
+    "audio_start_seconds": 0
+  },
+  "live_after_holdback_fix": {
+    "core_checkpoint": 32,
+    "requested_duration_seconds": 64,
+    "browser_first_observed": {
+      "currentTime": 0.515547,
+      "duration_growing": 17.966667,
+      "playbackRate": 1,
+      "readyState": 4,
+      "width": 2560,
+      "height": 1440,
+      "error": null
+    },
+    "browser_later": {
+      "currentTime": 18.231903,
+      "duration_growing": 45.81666666666666,
+      "playbackRate": 1,
+      "readyState": 4,
+      "error": null
+    },
+    "worker_observed_playable": {
+      "progress": 49.966667,
+      "total": 64,
+      "segments": 24
+    },
+    "worker_completed": {
+      "segments": 31,
+      "bytes": 7210668,
+      "packager_first_playable_seconds": 5.604,
+      "packager_finished_seconds": 29.516,
+      "has_audio": true
+    },
+    "transient_worker_and_session_removed": true,
+    "second_viewer_decoded_completed_same_clip": true,
+    "seek_in_completed_buffer": {
+      "before_seconds": 36.129625,
+      "after_seconds": 35.330953,
+      "readyState": 4,
+      "error": null
+    },
+    "concurrent_viewers_while_job_active": "not established live; resolver reuse covered offline",
+    "second_resource_sampler": "no samples: job preceded sampler; not treated as zero resource use"
+  },
+  "offline_checks": {
+    "hls_pipeline_synthetic": 2,
+    "hls_manifest_paths_and_cache": 5,
+    "artifact_authorization_and_range": 6,
+    "cache_gc": 4,
+    "recording_resolver_and_browse": 11,
+    "camera_enhancements": 9
+  },
+  "limits": [
+    "HEVC browser support required; no video transcode",
+    "No iPhone/Chrome matrix or subjective A/V sync verification",
+    "No live worker-death/network-loss/full-disk fault injection",
+    "Cache inventory can be incomplete during worker restarts or RPC delay; never shown as definitely absent",
+    "Latest one-second snapshot validation cache tested offline; no new CPU benchmark after correction"
+  ],
+  "final_health": {
+    "core_owner": "deskb1x",
+    "core_ready": true,
+    "checkpoint_revision": 32,
+    "replicas_synced": 3,
+    "pending_disk_changes": false,
+    "all_cameras_ready": true,
+    "temporary_drains_absent": true,
+    "bed_cache_inventory_complete": true,
+    "inventory_seconds": 1.456,
+    "items": 7,
+    "transient_session_absent": true,
+    "snapshot_validation_cache_deployed_nodes": 3
+  }
+}

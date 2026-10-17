@@ -15,4 +15,15 @@ class CacheTests(unittest.TestCase):
   first=self.file('cache/cold/bed/videos/1-2.mp4',100);last=self.file('cache/cold/bed/videos/3-4.mp4',200)
   link=self.root/'cache/hot';link.parent.mkdir(exist_ok=True);link.symlink_to(self.root/'cache/cold',target_is_directory=True)
   result=cache_gc.cleanup(now=300,quota=10);self.assertFalse(first.exists());self.assertTrue(last.exists());self.assertEqual(result['bytes'],10)
+ def test_hls_cache_is_evicted_as_one_group_and_recent_viewers_are_retained(self):
+  old='playback/tapo_c222_160/'+('a'*32);fresh='playback/tapo_c222_160/'+('b'*32)
+  for base in (old,fresh):
+   for name in ('index.m3u8','init.mp4','s000000.m4s'):self.file(base+'/hls/'+('c'*32)+'/'+name,1)
+  self.file(fresh+'/.access',4000)
+  cache_gc.cleanup(now=4001);self.assertFalse((self.root/old/'hls'/('c'*32)).exists());self.assertTrue((self.root/fresh/'hls'/('c'*32)/'s000000.m4s').exists())
+ def test_hls_active_jobs_are_never_evicted_and_quota_counts_hls_files(self):
+  base='playback/tapo_c222_160/'+('a'*32);group=self.root/base/'hls'/('b'*32)
+  for name in ('index.m3u8','init.mp4','s000000.m4s'):self.file(base+'/hls/'+('b'*32)+'/'+name,100)
+  cache_gc.cleanup([self.root/base],now=5000,quota=1);self.assertTrue(group.exists())
+  result=cache_gc.cleanup(now=200,quota=1);self.assertFalse(group.exists());self.assertEqual(result['bytes'],0)
 if __name__=='__main__':unittest.main()

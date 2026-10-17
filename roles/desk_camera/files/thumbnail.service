@@ -1,0 +1,24 @@
+[Unit]
+Description=Warm distributed camera media worker (thumbnail and playback)
+After=network-online.target desk-camera.service
+Wants=network-online.target
+PartOf=desk-camera.service
+
+[Service]
+ExecStartPre=-/usr/bin/podman rm -f desk-camera-thumbnails
+ExecStart=/usr/bin/podman run --rm --name desk-camera-thumbnails --pull=never --network=host --read-only --cap-drop=ALL --security-opt=no-new-privileges --cpus=.5 --memory=512m --pids-limit=96 --log-driver=none --tmpfs=/tmp:size=32m -e PYTHONDONTWRITEBYTECODE=1 -e PYTHONPATH=/deps -v /var/lib/desk-camera/deps:/deps:ro -v /etc/desk-camera/playback.json:/input/credentials.json:ro -v /run/desk-camera:/lease:ro -v /run/desk-camera-thumbnails:/ipc:rw -v /var/lib/desk-camera/playback:/output:rw -v /usr/local/libexec/desk-camera/thumbnail_worker.py:/worker.py:ro -v /usr/local/libexec/desk-camera/warm_playback.py:/warm_playback.py:ro -v /usr/local/libexec/desk-camera/playback.py:/playback.py:ro -v /usr/local/libexec/desk-camera/playback_worker.py:/playback_worker.py:ro -v /usr/local/libexec/desk-camera/hls_worker.py:/hls_worker.py:ro -v /usr/local/libexec/desk-camera/hls_files.py:/hls_files.py:ro --entrypoint=python3 ghcr.io/home-assistant/home-assistant@sha256:17100609af8bb79bf5390f5d514b9aaeb00d184ce758f37769cd80c450851db7 /worker.py
+ExecStop=-/usr/bin/podman stop -t 3 desk-camera-thumbnails
+ExecStopPost=-/usr/bin/podman rm -f desk-camera-thumbnails
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=10
+RuntimeDirectory=desk-camera-thumbnails
+RuntimeDirectoryMode=0700
+UMask=0077
+CPUQuota=60%
+CPUWeight=1
+MemoryMax=640M
+Nice=15
+
+[Install]
+WantedBy=multi-user.target

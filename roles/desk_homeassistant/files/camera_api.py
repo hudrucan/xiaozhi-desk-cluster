@@ -45,7 +45,32 @@ def artifact(value):
  from playback import clip_path
  from protocol import pack
  c=json.loads(pathlib.Path('/etc/desk-camera/config.json').read_bytes())
- clip_path(value['workload'],value['id'])
+ path=clip_path(value['workload'],value['id'])
+ scope={'workload':value['workload'],'id':value['id']}
+ route='/artifact/'+value['workload']+'/'+value['id']
+ if set(value)=={'workload','id','node','generation','file'}:
+  from hls_files import artifact_path
+  artifact_path(path.parent,value['generation'],value['file']);scope.update(generation=value['generation'],file=value['file'])
+  route='/hls/'+value['workload']+'/'+value['id']+'/'+value['generation']+'/'+value['file']
+ elif set(value)!={'workload','id','node'}:raise ValueError()
  if value['node'] not in c['members']:raise ValueError()
- token=pack({'sender':c['node'],'recipient':value['node'],'id':secrets.token_hex(16),'at':time.time(),'action':'artifact','value':{'workload':value['workload'],'id':value['id']}},c['key'])
- return {'url':'http://'+c['members'][value['node']]+':20226/artifact/'+value['workload']+'/'+value['id'],'authorization':base64.b64encode(token).decode()}
+ token=pack({'sender':c['node'],'recipient':value['node'],'id':secrets.token_hex(16),'at':time.time(),'action':'artifact','value':scope},c['key'])
+ return {'url':'http://'+c['members'][value['node']]+':20226'+route,'authorization':base64.b64encode(token).decode()}
+
+
+def thumbnail_ticket(value):
+ import hashlib,re
+ sys.path.insert(0,'/usr/local/libexec/desk-camera')
+ from playback import clip_path
+ from protocol import pack
+ if set(value)!={'workload','node','id','generation','source','digest'}:raise ValueError()
+ clip_path(value['workload'],value['id'])
+ if value['source'] not in ('ts','cache','fetch','cancel') or not re.fullmatch('[a-f0-9]{64}',value['digest']):raise ValueError()
+ if value['source'] in ('ts','fetch','cancel') and not re.fullmatch('[a-f0-9]{32}',value['generation']):raise ValueError()
+ if value['source']=='cancel' and value['digest']!=hashlib.sha256(b'').hexdigest():raise ValueError()
+ if value['source']=='cache' and (value['generation']!='' or value['digest']!=hashlib.sha256(b'').hexdigest()):raise ValueError()
+ c=json.loads(pathlib.Path('/etc/desk-camera/config.json').read_bytes())
+ if value['node'] not in c['members']:raise ValueError()
+ scope={k:v for k,v in value.items() if k!='node'}
+ token=pack({'sender':c['node'],'recipient':value['node'],'id':secrets.token_hex(16),'at':time.time(),'action':'thumbnail','value':scope},c['key'])
+ return {'url':'http://'+c['members'][value['node']]+':20226/thumbnail/'+value['workload']+'/'+value['id'],'authorization':base64.b64encode(token).decode()}
