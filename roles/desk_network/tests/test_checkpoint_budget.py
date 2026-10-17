@@ -28,5 +28,14 @@ class CheckpointBudget(unittest.TestCase):
   with patch.object(budget.sys,'platform','linux'),patch.object(budget.subprocess,'run',side_effect=[FileNotFoundError(),MagicMock()]) as run:
    with self.assertRaises(FileNotFoundError):budget.execute(['/fixed/worker'])
   self.assertEqual(run.call_count,2)
+ def test_startup_sweep_removes_orphaned_scratch_but_keeps_other_files(self):
+  import tempfile
+  with tempfile.TemporaryDirectory() as td:
+   run=Path(td)
+   for name in ('sqlite-a.db','sqlite-a.db-journal','sqlite-b.db-wal','sqlite-b.db-shm','public.json','restore-check.db'):(run/name).write_bytes(b'x')
+   (run/'ckpt-dead').mkdir();(run/'ckpt-dead/sqlite-c.db').write_bytes(b'x')
+   budget.sweep_stale_sqlite(run)
+   self.assertEqual(sorted(p.name for p in run.iterdir()),['public.json','restore-check.db'])
+   budget.sweep_stale_sqlite(run)
 
 if __name__=='__main__':unittest.main()

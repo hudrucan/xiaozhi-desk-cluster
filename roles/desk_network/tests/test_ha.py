@@ -1,5 +1,5 @@
 from unittest.mock import MagicMock,patch
-import io,tracemalloc
+import io,threading,tracemalloc
 import re,subprocess,shutil,base64,gzip,hashlib,importlib.util,json,pathlib,sqlite3,tempfile,unittest
 spec=importlib.util.spec_from_file_location('ha',str(pathlib.Path(__file__).resolve().parents[1]/'files/ha.py'));ha=importlib.util.module_from_spec(spec);spec.loader.exec_module(ha)
 class Checks(unittest.TestCase):
@@ -270,4 +270,114 @@ context.window.deskNetworkSessionStorage.clear();assert.equal(session.xiaozhi,'k
  def test_read_only_search_does_not_trigger_checkpoint(self):
   for endpoint in ('by-status','search'):
    self.assertFalse(ha.is_mutation('POST','/network/server/devices/'+endpoint,b'{}'))
+ def test_streamed_checkpoint_blob_is_byte_identical_to_one_shot_encoding(self):
+  chunk=3*65536
+  with tempfile.TemporaryDirectory() as td:
+   path=pathlib.Path(td)/'db'
+   for size in (0,1,2,3,chunk-1,chunk,chunk+1,2*chunk+5,300001):
+    data=(b'SQLite format 3\x00'+bytes(range(256))*(size//256+1))[:size]
+    path.write_bytes(data)
+    for conf,workflows in ((b"SCAN='x'\n",None),(b'',b'[]'),(b'\xff\x00conf',b'[{"id":1}]')):
+     payload={'database':base64.b64encode(data).decode(),'configuration':base64.b64encode(conf).decode()}
+     if workflows is not None:payload['workflows']=base64.b64encode(workflows).decode()
+     expected=gzip.compress(ha.encoded(payload),compresslevel=1,mtime=0)
+     self.assertEqual(ha.checkpoint_blob(path,conf,workflows),expected,(size,workflows))
+ def test_checkpoint_streams_database_instead_of_holding_copies(self):
+  with tempfile.TemporaryDirectory() as td:
+   root=pathlib.Path(td);data,db=self.fixture(root)
+   db.execute('CREATE TABLE bulk(data BLOB)');db.execute('INSERT INTO bulk VALUES (zeroblob(12000000))');db.commit()
+   tracemalloc.start()
+   try:
+    blob=ha.checkpoint(data,root/'ram');_,full=tracemalloc.get_traced_memory();tracemalloc.reset_peak()
+    ha.checkpoint_blob(root/'data/db/app.db',b'c',None);_,encode=tracemalloc.get_traced_memory()
+   finally:tracemalloc.stop();db.close()
+   # Encoding no longer holds raw/base64/JSON copies of the 12 MB database (the previous encoder plus
+   # self-check peaked at about 73 MiB here; the self-check alone still decompresses the whole payload).
+   self.assertLess(encode,4*1024*1024)
+   self.assertLess(full,56*1024*1024)
+   self.assertTrue(ha.unpack(blob)[0].startswith(b'SQLite format 3\x00'))
+ def test_unpack_validation_order_and_errors_are_unchanged(self):
+  def pack(v):return gzip.compress(ha.encoded(v),compresslevel=1,mtime=0)
+  good={'database':base64.b64encode(b'SQLite format 3\x00x').decode(),'configuration':base64.b64encode(b'c').decode()}
+  self.assertEqual(ha.unpack(pack(good)),(b'SQLite format 3\x00x',b'c',None))
+  for bad in ({'database':good['database']},dict(good,extra='x'),dict(good,database=base64.b64encode(b'nope').decode()),dict(good,workflows=base64.b64encode(b'{}').decode())):
+   with self.assertRaises(ha.Unavailable):ha.unpack(pack(bad))
+  with self.assertRaises(Exception):ha.unpack(pack(dict(good,database='***')))
+ def test_scratch_dir_removed_after_success_and_after_worker_death(self):
+  with tempfile.TemporaryDirectory() as td:
+   root=pathlib.Path(td);data,db=self.fixture(root);run=root/'ram'
+   blob=ha.snapshot_worker('create',data=data,run=run)
+   self.assertTrue(blob);self.assertEqual(list(run.iterdir()),[])
+   def killed(command,blob=None):
+    d=pathlib.Path(command[command.index('--run')+1]);(d/'sqlite-dead.db').write_bytes(b'x'*1024)
+    raise subprocess.CalledProcessError(-9,command)
+   with patch.object(ha.checkpoint_budget,'execute',side_effect=killed):
+    with self.assertRaises(subprocess.CalledProcessError):ha.snapshot_worker('create',data=data,run=run)
+   self.assertEqual(list(run.iterdir()),[]);db.close()
+class ClusterFixture:
+ def cluster(self,local,heads=None,snapshot=None):
+  c=ha.Cluster.__new__(ha.Cluster)
+  ticks=iter([False,True])
+  c.run=pathlib.Path(self.tmp);c.node='a';c.warm=False;c.local=local;c.term=[1,'a'];c.cooldown=0.;c._rebalance_retry=0.;c._snap_backoff=0.
+  c.last_snapshot=1000.;c.sync_state='synced';c.root=pathlib.Path(self.tmp);c.snaplock=threading.Lock();c.ready=True;c.last_health=1000.;c.lease=MagicMock();c.public=lambda:{}
+  c.stop=MagicMock(is_set=lambda:next(ticks),wait=lambda t=None:None)
+  c.refresh_local=lambda:None;c.fanout=MagicMock(return_value=heads or {});c.owned=lambda:True;c.fence=lambda:None
+  c.kill_container=MagicMock();c.snapshot=MagicMock(side_effect=snapshot)
+  return c
+ def setUp(self):
+  td=tempfile.TemporaryDirectory();self.tmp=td.name;self.addCleanup(td.cleanup)
+  clock=patch.object(ha,'clock',return_value=1000.);clock.start();self.addCleanup(clock.stop)
+ PEERS={'a':{},'b':{'eligible':True,'score':30}}
+ TWO={'vip':{'xiaozhi':True,'dns':True},'homeassistant':{'state':'standby'}}
+ def released(self,c):return any(not x.kwargs for x in c.kill_container.call_args_list)
+class Rebalance(ClusterFixture,unittest.TestCase):
+ def test_ha_counts_while_starting_active_or_checkpointing_only(self):
+  for state,held in (('starting',True),('active',True),('checkpointing',True),('standby',False),(None,False)):
+   self.assertEqual(ha.ha_held({'homeassistant':{'state':state}}),held)
+  self.assertFalse(ha.ha_held({}))
+ def test_score_penalises_node_holding_two_other_owners(self):
+  c=self.cluster({'cpu':10,'vip':{'xiaozhi':True},'homeassistant':{'state':'checkpointing'}})
+  self.assertEqual(c.score(),10+20+20+ha.OVERLOAD_PENALTY)
+  c=self.cluster({'cpu':10,'vip':{'xiaozhi':True}})
+  self.assertEqual(c.score(),10+20)
+ def test_rebalance_snapshots_releases_and_cools_down(self):
+  c=self.cluster(self.TWO,self.PEERS)
+  with self.assertLogs(ha.LOG,'INFO'):c.run_loop()
+  c.snapshot.assert_called_once();self.assertTrue(self.released(c))
+  self.assertIsNone(c.term);self.assertEqual(c.cooldown,1060.)
+ def test_rebalance_keeps_lease_when_checkpoint_fails(self):
+  c=self.cluster(self.TWO,self.PEERS,snapshot=ha.Unavailable('no quorum'))
+  with self.assertLogs(ha.LOG,'WARNING'):c.run_loop()
+  self.assertFalse(self.released(c));self.assertEqual(c.term,[1,'a'])
+  self.assertEqual(c._rebalance_retry,1060.);self.assertEqual(c.cooldown,0.)
+ def test_rebalance_not_retried_before_deferral_expires(self):
+  c=self.cluster(self.TWO,self.PEERS);c._rebalance_retry=1030.
+  with patch.object(ha.Cluster,'renew'),patch.object(ha.Cluster,'native_health',return_value=True),self.assertNoLogs(ha.LOG,'WARNING'):c.run_loop()
+  c.snapshot.assert_not_called();self.assertFalse(self.released(c))
+ def test_no_rebalance_without_second_owner_or_with_loaded_peer(self):
+  for local,peers in (({'vip':{'xiaozhi':True}},self.PEERS),(self.TWO,{'a':{},'b':{'eligible':True,'score':ha.OVERLOAD_PENALTY}}),(self.TWO,{'a':{},'b':{'eligible':False,'score':1}})):
+   c=self.cluster(local,peers)
+   with patch.object(ha.Cluster,'renew'),patch.object(ha.Cluster,'native_health',return_value=True),self.assertNoLogs(ha.LOG,'WARNING'):
+    c.run_loop()
+   self.assertIn('lease',[x.args[0] for x in c.fanout.call_args_list],'loop never reached the normal renewal path')
+   c.snapshot.assert_not_called();self.assertFalse(self.released(c))
+ def test_forced_drain_still_releases_when_checkpoint_fails(self):
+  c=self.cluster({'admission':{'worker':True}},self.PEERS,snapshot=ha.Unavailable('no quorum'))
+  c.run_loop()
+  self.assertTrue(self.released(c));self.assertIsNone(c.term)
+class SnapshotBackoff(ClusterFixture,unittest.TestCase):
+ def test_worker_failure_backs_off_exponentially_to_cap_and_resets(self):
+  c=self.cluster({},snapshot=subprocess.CalledProcessError(137,'worker'))
+  waits=[]
+  for _ in range(6):
+   with self.assertLogs(ha.LOG,'WARNING'):c.try_snapshot()
+   waits.append(c.last_snapshot-(1000.-300))
+  self.assertEqual(waits,[30.,60.,120.,240.,300.,300.])
+  self.assertEqual(c.sync_state,'pending')
+  c.snapshot=MagicMock(side_effect=None);c.try_snapshot()
+  self.assertEqual(c._snap_backoff,0.)
+ def test_non_worker_failure_keeps_fixed_retry(self):
+  c=self.cluster({},snapshot=ha.Unavailable('needs two replicas'))
+  with self.assertLogs(ha.LOG,'WARNING'):c.try_snapshot()
+  self.assertEqual(c.last_snapshot,1000.-270);self.assertEqual(c._snap_backoff,0.)
 if __name__=='__main__':unittest.main()

@@ -25,8 +25,10 @@ expired permit kills the previous Core namespace before a peer can take over.
 Restarting a voter imposes the existing 17-second quarantine. New owners restore
 a verified certified generation atomically and cold-start Core. Readiness requires
 Home Assistant to finish startup, rather than merely return its login page.
-Placement uses fresh CPU, free memory and existing service roles; a healthy owner
-is not moved just to rebalance. Core needs 1800 MiB available to become a candidate.
+Placement uses fresh CPU, free memory and existing service roles (a Network
+collector costs 20, like the voice VIP); a node already holding two other roles
+gets a +100 overload penalty. A healthy Home Assistant owner is not moved just to
+rebalance; only the Network collector releases itself for balance. Core needs 1800 MiB available to become a candidate.
 The container has a 1536 MiB memory ceiling and one-CPU ceiling.
 
 ## Config durability and RPO
@@ -96,7 +98,8 @@ Maintenance/reboot waits for a ready successor with matching certified revisions
 
 - `homeassistant.yml`: staged three-node preparation, serial controller activation,
   native readiness gate, and additive validated ingress listener.
-- `roles/desk_homeassistant/files/agent.py`: placement, ownership, checkpoints,
+- `roles/desk_homeassistant/files/agent.py`: placement (score weights shared with
+  Network election, see `DESK_NETWORK.md`), ownership, checkpoints,
   private metadata/blob endpoints and root-only operation socket.
 - `lease.py`, `config_journal.py`: copied existing framework, with equality tests.
 - `runtime.py`: independently fenced container lifecycle.
@@ -144,6 +147,10 @@ isolated container bridge. Backend access is added with AdGuard's native API;
 other access entries and filtering policy are preserved. The conditional DNS
 role templates retain this prerequisite on future rebuilds. Rollouts update DNS
 serially before freezing the normal protected-service baseline.
+
+A score-only change to `agent.py` can be installed with `network-helpers.yml`, which
+restarts standby controllers only. The ready owner keeps the old score until its
+next planned handoff, because restarting it restarts Core.
 
 HTML navigation shows an automatically retrying reconnect page during cold takeover.
 Readiness and API requests still return their real unavailable status. A warming

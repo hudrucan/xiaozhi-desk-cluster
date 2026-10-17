@@ -22,6 +22,10 @@ an existing replica head with the initial seed. The first migration requires
 `/var/lib/desk-netalertx-trial/data` on node 1. Later deployments reuse the saved
 seed and each node catches up to the latest certified checkpoint.
 
+For changes limited to the Python helpers or the checkpoint slice, use the faster
+`network-helpers.yml` described in the 2026-10-17 section; use `network.yml` for
+anything else.
+
 The official ARM64 26.10.0 image is digest-pinned. Podman is packaged, daemonless
 and has no automatic image update/restart jobs. The systemd controller starts
 after networking and dashboard telemetry. Its stop hook kills the container PID
@@ -68,8 +72,11 @@ unexpired grant, persists its term only when it changes, and waits 17 seconds
 after restart before voting. Idle renewals remain in RAM. CLOCK_BOOTTIME includes
 suspend time. The active lease expires five seconds before voter grants; a
 watchdog kills the container namespace when renewal is lost. A healthy owner
-stays put. New placement uses fresh CPU plus existing UI/DNS/VPN/voice role
-costs. Maintenance withdraws an owner; a telemetry refresh alone does not.
+stays put. New placement uses fresh CPU plus the Network, Home Assistant, voice,
+DNS and VPN role costs and an overload penalty for a node already holding two
+other roles (see the 2026-10-17 section). Maintenance withdraws an owner, and an
+overloaded owner releases Network after a certified checkpoint; a telemetry refresh
+alone does not.
 
 Two replicas are required for election and mutations. Before forwarding a
 native mutation, the boundary verifies a current lease quorum. A SQLite online
@@ -105,7 +112,8 @@ to the read-only dashboard collector.
 python3 -m unittest discover -s roles/desk_network/tests -v
 ```
 
-Coverage includes lease expiry/restart quarantine, checkpoint certificates,
+Coverage includes lease expiry/restart quarantine, byte-identical streamed checkpoints, checkpoint scratch cleanup,
+startup sweep, worker-failure backoff, overload scoring and rebalance deferral, checkpoint certificates,
 WAL and workflow inclusion, corruption/expansion rejection, policy preservation, native
 mutation classification, bounded peer TLS handshakes, isolated browser storage
 and subfolder rewriting. Live rollout additionally
@@ -527,6 +535,115 @@ or service restart events. The final checkpoint revision [31, "deskb1x", 12] was
 synced on 3/3 nodes with three receipts; exactly one Network HAProxy backend was UP.
 Dashboard, Network, Xiaozhi, DNS, Monitoring and VPN HTTP checks remained successful.
 This is a bounded live Save test, not a long-term memory-soak guarantee.
+
+## Checkpoint worker OOM, tmpfs leak and role balancing, 2026-10-17
+
+On node 2 the kernel repeatedly OOM-killed checkpoint workers (292 kills in the log)
+and `/run/desk-network` (tmpfs, RAM) grew to 274 MiB with 257 orphaned `sqlite-*.db`
+files. Three causes combined:
+
+- The checkpoint slice and each worker were capped at 256 MiB. Measured peak for a
+  27.3 MiB database is about 148 MiB of data path (read 39 MiB, base64 112 MiB,
+  `json.dumps` 148 MiB) plus 20-30 MiB interpreter/import overhead, so roughly
+  170-180 MiB.
+- Cleanup relied on file age (mtime of at least 5 seconds). A worker killed by
+  SIGKILL left a partial file that never aged out of the heuristic's reach.
+- A failed checkpoint was retried after about 30 seconds, every time, so a node
+  below the memory budget produced a continuous OOM loop.
+
+Corrections (checkpoint format, quorum, signatures and lease rules are unchanged):
+
+- Each `create` worker gets a private `ckpt-<token>/` scratch directory under the run
+  directory. The parent removes it with `shutil.rmtree` in `finally`, after
+  `subprocess.run` has returned, so it also runs when the worker was OOM-killed or
+  timed out. No age heuristic remains.
+- At controller start, before any worker exists, `sweep_stale_sqlite` removes
+  `sqlite-*.db` (and journal/WAL/SHM) left by the previous version, plus orphaned
+  `ckpt-*` directories.
+- The slice and worker `MemoryMax` are 384 MiB (`desk-network-checkpoint.slice.j2`,
+  `checkpoint_budget.py`). Tighten it after reading `VmHWM` from a successful worker:
+  deskb2x's slice later showed a 359 MiB `memory.peak`, so the margin is thinner than
+  the estimate above (create and validate workers can overlap inside the slice).
+- Checkpoint creation streams the database. `checkpoint_blob` base64-encodes the
+  SQLite file in 3-byte-aligned 192 KiB chunks and deflates them with
+  `zlib.compressobj`, instead of holding raw, base64 and JSON copies. The output is
+  byte-for-byte what `gzip.compress(encoded(payload), compresslevel=1, mtime=0)`
+  produced, so digests, quorum certificates and mixed old/new replicas are
+  unaffected. The gzip header is taken from `gzip.compress` itself because its OS
+  byte differs between Python versions (3.11.2 on the nodes writes `03`, 3.14 writes
+  `ff`); `GzipFile` would have changed the digest. `unpack` drops the raw JSON and the
+  base64 text as soon as they are decoded, with the same checks in the same order.
+  On a 20 MiB database the worker's peak RSS fell from 221 to about 134 MiB
+  (macOS, Python 3.14; includes ~30 MiB interpreter), and traced allocations for a
+  11.5 MiB database fell from 72.7 to 45.9 MiB. The remaining peak is the
+  self-check, which still decompresses the whole payload.
+- A worker that fails or times out (`subprocess.SubprocessError`) backs the next
+  attempt off exponentially: 30, 60, 120, 240, then 300 seconds, reset by the next
+  success. Other failures, such as "Checkpoint needs two replicas", keep the previous
+  fixed retry. `sync_state` stays `pending` while backing off.
+
+### Role placement and rebalancing
+
+The election score previously gave Network and Home Assistant little or no weight,
+so a node already holding several roles looked idle. Node 1 ended up with the
+WireGuard VIP, Home Assistant, Network collector and Xiaozhi voice VIP.
+
+| Role held by the node | Score cost |
+| --- | ---: |
+| Xiaozhi voice VIP | 20 |
+| Home Assistant (`starting`, `active` or `checkpointing`) | 20 |
+| Network collector (`starting` or `active`) | 20 |
+| DNS VIP | 10 |
+| VPN VIP | 5 |
+| Each ASR/LLM/TTS activity | 30 |
+| Two or more *other* roles (`OVERLOAD_PENALTY`) | +100 |
+
+`ha.py` (Network election) counts voice, DNS, VPN and Home Assistant as "other"
+roles; `roles/desk_homeassistant/files/agent.py` counts voice, DNS, VPN and Network.
+The two penalties must stay equal. A lower score wins.
+
+The Network owner voluntarily gives up the lease when it holds two or more other
+roles and a peer is eligible with a score below `OVERLOAD_PENALTY`. It first takes a
+certified checkpoint; if that fails it keeps the lease, logs
+`Rebalance deferred`, and tries again after 60 seconds. Only forced drains
+(admission closed or `warm-drain`) release without a fresh checkpoint. After a
+voluntary release the node holds a 60 second cooldown so it does not reclaim the
+role immediately. A healthy owner that holds at most one other role is not moved.
+
+### Rollout
+
+Helper-only changes use `network-helpers.yml` instead of the full `network.yml`
+(about 60-90 seconds instead of 5-8 minutes; image pull, PHP opcache, TLS, NATS
+workers, dashboard and ingress are skipped):
+
+```sh
+ansible-playbook -i inventory.ini network-helpers.yml --syntax-check
+ansible-playbook -i inventory.ini network-helpers.yml --check --diff
+ansible-playbook -i inventory.ini network-helpers.yml
+```
+
+It freezes and re-checks the protected services, validates and copies `ha.py`,
+`checkpoint_budget.py`, `bootstrap.py` and `discovery.py`, templates the checkpoint
+slice (reloading systemd only if it changed), restarts `desk-network` one node at a
+time waiting for `voter_ready`, then requires one native-ready owner through
+`verify_ready.py`. Nodes whose files did not change are not restarted. It also
+installs the Home Assistant `agent.py` (score weights only) and restarts
+`desk-homeassistant` on standby nodes; the ready Home Assistant owner is skipped
+because restarting it restarts Core, and it picks up the new score at its next
+planned handoff (`homeassistant-online-sync.yml`). The playbook requires all three
+deskboxes, so `--limit` cannot be used for a canary.
+
+After rollout check `systemctl show desk-network-checkpoint.slice -p MemoryMax`
+(`402653184`) and that `/run/desk-network/` holds no `sqlite-*` file.
+
+### Observed result
+
+Reported after the first rollout: node 2 released 237 MiB of stale tmpfs data
+(70% to 10% of the tmpfs, available RAM 1.68 to 2.2 GiB) with no new OOM kills, and
+node 1 handed Network to node 2. Final placement was node 1: WireGuard VIP; node 2:
+Xiaozhi voice VIP and Network collector; node 3: DNS VIP and Home Assistant Core,
+with all three nodes synced. This is a short post-rollout observation, not a
+long-term soak; the 384 MiB limit has not been validated against a larger database.
 
 ## Hostname collection status
 

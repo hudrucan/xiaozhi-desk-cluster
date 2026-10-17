@@ -3,7 +3,7 @@
 Home Assistant PoC remains stopped by user request. This change targets the existing Network service only.
 
 - The warm supervisor now observes its direct backend child with nonblocking `waitid`, instead of traversing `/proc` every 100 ms. Lease deadline checks retain their cadence. Deactivation still kills and verifies every writer process group before publishing inactive.
-- Checkpoint create/validate workers run in transient systemd services inside `desk-network-checkpoint.slice`. The shared slice is capped at 50% of one core, 256 MiB and 24 tasks; each worker also has CPU/memory/task/runtime bounds. They bind to the controller lifetime and are explicitly stopped on caller failure. No unbounded Linux fallback is allowed.
+- Checkpoint create/validate workers run in transient systemd services inside `desk-network-checkpoint.slice`. The shared slice is capped at 50% of one core, 384 MiB (256 MiB until 2026-10-17, see `DESK_NETWORK.md`) and 24 tasks; each worker also has CPU/memory/task/runtime bounds. They bind to the controller lifetime and are explicitly stopped on caller failure. No unbounded Linux fallback is allowed.
 - The controller's lease/watchdog service is not throttled. Checkpoint validation, quorum signatures, atomic activation, periodic checkpoint cadence and SQLite format remain unchanged.
 - Stage RPC timeout is 25 seconds to accommodate validation under the reduced budget. Worker execution is bounded at 50 seconds, with caller timeout 60 seconds. Oversized or corrupted snapshots still fail closed. Native HTTP mutation replication can take longer; pending replication must remain visible on failure.
 

@@ -1,0 +1,147 @@
+---
+# Fast-path rollout for desk-network Python helpers and checkpoint slice only.
+# Use this instead of network.yml when the only changes are in:
+#   roles/desk_network/files/{ha.py,checkpoint_budget.py,...}
+#   roles/desk_homeassistant/files/agent.py   (election score only)
+#   roles/desk_network/templates/desk-network-checkpoint.slice.j2
+#
+# Completes in ~60–90 s vs ~5–8 min for the full network.yml.
+# Safety: identical copy+validate, identical serial restart + quarantine wait,
+# identical verify_ready gate as network.yml.  Skips image pull, PHP opcache,
+# TLS, NATS workers, dashboard, and ingress — none of those change here.
+- name: Deploy updated network helpers to all replicas
+  hosts: deskboxes
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  tasks:
+    - name: Validate cluster topology
+      ansible.builtin.assert:
+        that:
+          - desk_network_enabled | default(false) | bool
+          - groups['deskboxes'] | sort == ['deskb1x','deskb2x','deskb3x']
+          - ansible_play_hosts_all | length == 3
+
+    - name: Freeze protected services before touching files
+      ansible.builtin.command:
+        argv: [python3, '-c', "{{ lookup('file',playbook_dir+'/roles/desk_ui/files/ui_guard.py') }}", freeze]
+      register: network_helpers_before
+      changed_when: false
+      no_log: true
+
+    - name: Install bounded lease, snapshot and checkpoint helpers
+      ansible.builtin.copy:
+        src: 'roles/desk_network/files/{{ item }}'
+        dest: '/usr/local/libexec/desk-network/{{ item }}'
+        mode: '0755'
+        validate: /usr/bin/python3 -c "import ast,sys; ast.parse(open(sys.argv[1]).read())" %s
+      loop: [ha.py, checkpoint_budget.py, bootstrap.py, discovery.py]
+      register: network_helpers_files
+
+    - name: Install Home Assistant election agent (score weights)
+      ansible.builtin.copy:
+        src: roles/desk_homeassistant/files/agent.py
+        dest: /usr/local/libexec/desk-homeassistant/agent.py
+        mode: '0700'
+        validate: /usr/bin/python3 -c "import ast,sys; ast.parse(open(sys.argv[1]).read())" %s
+      register: network_helpers_agent
+
+    - name: Install checkpoint resource budget slice
+      ansible.builtin.template:
+        src: 'roles/desk_network/templates/desk-network-checkpoint.slice.j2'
+        dest: /etc/systemd/system/desk-network-checkpoint.slice
+        mode: '0644'
+      register: network_helpers_slice
+
+    - name: Reload systemd if slice changed
+      ansible.builtin.systemd_service:
+        daemon_reload: true
+      when: network_helpers_slice.changed
+
+    - name: Remember whether a rolling restart is needed
+      ansible.builtin.set_fact:
+        network_helpers_restart: '{{ network_helpers_files.changed or network_helpers_slice.changed }}'
+
+    - name: Verify protected services unchanged
+      ansible.builtin.command:
+        argv: [python3, '-c', "{{ lookup('file',playbook_dir+'/roles/desk_ui/files/ui_guard.py') }}", guard]
+        stdin: '{{ network_helpers_before.stdout }}'
+      changed_when: false
+
+- name: Rolling restart — one replica at a time
+  hosts: deskboxes
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  serial: 1
+  tasks:
+    - name: Restart controller only if files changed
+      ansible.builtin.systemd_service:
+        name: desk-network
+        state: restarted
+      when: hostvars[inventory_hostname].network_helpers_restart | default(false)
+
+    - name: Wait out voter restart quarantine before touching next replica
+      ansible.builtin.uri:
+        url: 'http://{{ cluster_ip }}:20213/network/desk/status'
+        use_proxy: false
+        timeout: 3
+      register: network_helpers_voter
+      until: network_helpers_voter.json.voter_ready | default(false)
+      retries: 20
+      delay: 2
+      changed_when: false
+      when: hostvars[inventory_hostname].network_helpers_restart | default(false)
+
+- name: Restart Home Assistant agent on standby nodes only
+  hosts: deskboxes
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  serial: 1
+  tasks:
+    # The ready owner is skipped: restarting it restarts HA Core. It picks up
+    # the new score on its next planned handoff (see homeassistant-online-sync.yml).
+    - name: Read Home Assistant status
+      ansible.builtin.uri:
+        url: 'http://{{ cluster_ip }}:20223/status'
+        use_proxy: false
+      register: network_helpers_ha
+      when: hostvars[inventory_hostname].network_helpers_agent.changed | default(false)
+
+    - name: Restart standby agent
+      ansible.builtin.systemd_service:
+        name: desk-homeassistant
+        state: restarted
+      when:
+        - hostvars[inventory_hostname].network_helpers_agent.changed | default(false)
+        - not (network_helpers_ha.json.ready | default(false))
+
+    - name: Wait for standby agent to rejoin synced
+      ansible.builtin.uri:
+        url: 'http://{{ cluster_ip }}:20223/status'
+        use_proxy: false
+      register: network_helpers_ha_ready
+      until: network_helpers_ha_ready.json.voter_ready and network_helpers_ha_ready.json.sync == 'synced'
+      retries: 25
+      delay: 2
+      changed_when: false
+      when:
+        - hostvars[inventory_hostname].network_helpers_agent.changed | default(false)
+        - not (network_helpers_ha.json.ready | default(false))
+
+- name: Verify cluster health after rollout
+  hosts: deskboxes
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  run_once: true
+  tasks:
+    - name: Wait for one native-ready majority owner
+      ansible.builtin.command:
+        argv: [python3, /usr/local/libexec/desk-network/verify_ready.py]
+      register: network_helpers_ready
+      retries: 50
+      delay: 3
+      until: network_helpers_ready.rc == 0
+      changed_when: false

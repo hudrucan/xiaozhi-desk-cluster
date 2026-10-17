@@ -64,7 +64,12 @@ class Agent(OnlineSync):
  def draining(self):
   return clock()-self.local_at<15 and any(v is True for v in self.local.get('admission',{}).values())
  def score(self):
-  return self.local.get('cpu',100)+sum(n for k,n in {'xiaozhi':20,'dns':10,'vpn':5}.items() if self.local.get('vip',{}).get(k))+self.local.get('network_cost',0)
+  net_active=((self.local.get('network') or {}).get('state') in ('starting','active') or self.local.get('network_cost',0)>0)
+  net_cost=20 if net_active else 0
+  vip_cost=sum(n for k,n in {'xiaozhi':20,'dns':10,'vpn':5}.items() if self.local.get('vip',{}).get(k))
+  other_owners=sum(1 for k in ('xiaozhi','dns','vpn') if self.local.get('vip',{}).get(k))+(1 if net_active else 0)
+  overload_penalty=100 if other_owners>=2 else 0  # keep equal to ha.py OVERLOAD_PENALTY
+  return self.local.get('cpu',100)+vip_cost+net_cost+overload_penalty
  def refresh(self):
   try:
    with self.opener.open('http://'+self.members[self.node]+':8010/local',timeout=.8) as r:v=json.loads(r.read(65536))
@@ -74,7 +79,7 @@ class Agent(OnlineSync):
    mem={k:int(x.split()[0]) for k,x in (l.split(':',1) for l in pathlib.Path('/proc/meminfo').read_text().splitlines())}
    v['memory_available_mib']=mem['MemAvailable']//1024
    try:
-    network=json.loads(pathlib.Path('/run/desk-network/public.json').read_bytes());v['network_cost']=10 if network['state']=='active' else 0
+    network=json.loads(pathlib.Path('/run/desk-network/public.json').read_bytes());v['network_cost']=20 if network['state']=='active' else 0
    except Exception:pass
    self.local=v;self.local_at=clock()
   except Exception:pass

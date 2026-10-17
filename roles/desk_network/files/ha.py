@@ -2,9 +2,12 @@
 """One LAN collector, majority leases, certified consistent SQLite checkpoints."""
 from contextlib import closing
 import discovery,bootstrap,checkpoint_budget
-import ast, signal, argparse, base64, concurrent.futures, gzip, hashlib, hmac, http.client, http.server, io, json, logging, os, pathlib, re, secrets, socket, sqlite3, ssl, subprocess, sys, threading, time, urllib.parse, urllib.request
+import ast, signal, argparse, base64, concurrent.futures, gzip, hashlib, hmac, http.client, http.server, io, json, logging, os, pathlib, re, secrets, shutil, socket, sqlite3, ssl, struct, subprocess, sys, threading, time, urllib.parse, urllib.request, zlib
 LOG = logging.getLogger('desk-network')
 TTL, MARGIN, LIMIT, DBLIMIT = 15., 5., 16*1024*1024, 64*1024*1024
+OVERLOAD_PENALTY=100
+def ha_held(n):return (n.get('homeassistant') or {}).get('state') in ('starting','active','checkpointing')
+def other_owners(n):return sum(1 for k in ('xiaozhi','dns','vpn') if (n.get('vip') or {}).get(k))+(1 if ha_held(n) else 0)
 def clock():return time.clock_gettime(time.CLOCK_BOOTTIME) if hasattr(time,'CLOCK_BOOTTIME') else time.monotonic()
 NAME = 'desk-netalertx'
 IMAGE = 'ghcr.io/netalertx/netalertx@sha256:f95bca7a794141296dd1d16be5bb7f39f6fdbcd20353cdb51eee696e12d317f6'
@@ -92,9 +95,9 @@ class Store:
     if p.name not in keep and time.time()-p.stat().st_mtime>TTL*3:p.unlink()
 def unpack(blob):
  with gzip.GzipFile(fileobj=io.BytesIO(blob)) as f:raw=read_bounded(f,DBLIMIT*2)
- v=json.loads(raw)
+ v=json.loads(raw);del raw # raw JSON and the base64 text are dropped as soon as decoded; only validation order is unchanged
  if not {'database','configuration'}<=set(v) or set(v)-{'database','configuration','workflows'}:raise Unavailable('Unknown checkpoint members')
- db=base64.b64decode(v['database'],validate=True);conf=base64.b64decode(v['configuration'],validate=True)
+ db=base64.b64decode(v.pop('database'),validate=True);conf=base64.b64decode(v['configuration'],validate=True)
  if len(db)>DBLIMIT or not db.startswith(b'SQLite format 3\x00') or len(conf)>1024*1024:raise Unavailable('Invalid checkpoint payload')
  workflows=base64.b64decode(v['workflows'],validate=True) if 'workflows' in v else None
  if workflows is not None:
@@ -104,10 +107,24 @@ def snapshot_worker(action,*,data=None,run=None,blob=None):
  # JSON/base64/SQLite scratch allocations must not accumulate in the lease/UI
  # threads' allocator arenas. A short-lived interpreter releases all of them.
  cmd=[sys.executable,str(pathlib.Path(__file__).resolve()),'--snapshot-worker',action]
- if action=='create':cmd += ['--data',str(data),'--run',str(run)]
- result=checkpoint_budget.execute(cmd,blob)
- if len(result.stdout)>LIMIT:raise Unavailable('Checkpoint exceeds byte limit')
- return result.stdout
+ worker_dir=None
+ if action=='create':
+  # Give each worker its own isolated scratch directory.
+  # subprocess.run() (inside execute()) is synchronous: it only returns after
+  # the worker process has fully exited — whether by normal exit, RuntimeMaxSec
+  # timeout, or OOM-SIGKILL.  The rmtree in finally therefore always runs after
+  # the worker is confirmed dead, with no surviving handles to any file.
+  # No age check or mtime heuristic is needed.
+  worker_dir=pathlib.Path(run)/('ckpt-'+secrets.token_hex(8))
+  worker_dir.mkdir(mode=0o700,parents=True,exist_ok=False)
+  cmd += ['--data',str(data),'--run',str(worker_dir)]
+ try:
+  result=checkpoint_budget.execute(cmd,blob)
+  if len(result.stdout)>LIMIT:raise Unavailable('Checkpoint exceeds byte limit')
+  return result.stdout
+ finally:
+  if worker_dir is not None:
+   shutil.rmtree(worker_dir,ignore_errors=True)
 POLICY={
  'SCAN_SUBNETS':['192.168.1.0/24 --interface=wlan0'], 'TIMEZONE':'Asia/Ho_Chi_Minh',
  'BACKEND_API_URL':'/network/server', 'LOADED_PLUGINS':['ARPSCAN','AVAHISCAN','UI','CUSTPROP','DBCLNP','INTRNT','MAINT','NEWDEV','SETPWD','SYNC','VNDRPDT','WORKFLOWS'],
@@ -166,6 +183,28 @@ def apply_policy(conf,token):
   text=re.sub(r'^'+re.escape(key)+r'\s*=.*\n?', '',text,flags=re.M)
   text+='\n'+key+'='+repr(value)+'\n'
  return text.encode()
+def checkpoint_blob(dbpath,conf,workflows):
+ # Byte-identical to gzip.compress(encoded({'configuration','database'[,'workflows']}),compresslevel=1,mtime=0)
+ # on the running interpreter, but the database is base64-encoded and deflated in chunks instead of held as raw,
+ # base64 and JSON copies. The gzip header is taken from gzip.compress itself (its OS byte differs between Python
+ # versions), the deflate stream and trailer are format-defined. 3-byte chunks keep chunked base64 equal to one-shot
+ # base64; sorted keys keep encoded()'s member order.
+ out=io.BytesIO();out.write(gzip.compress(b'',compresslevel=1,mtime=0)[:10])
+ deflate=zlib.compressobj(1,zlib.DEFLATED,-zlib.MAX_WBITS);crc=0;size=0
+ def put(part):
+  nonlocal crc,size
+  crc=zlib.crc32(part,crc);size+=len(part);out.write(deflate.compress(part))
+ put(b'{"configuration":"'+base64.b64encode(conf)+b'","database":"')
+ with open(dbpath,'rb') as f:
+  while True:
+   part=f.read(3*65536)
+   if not part:break
+   put(base64.b64encode(part))
+ put(b'"')
+ if workflows is not None:put(b',"workflows":"'+base64.b64encode(workflows)+b'"')
+ put(b'}')
+ out.write(deflate.flush());out.write(struct.pack('<LL',crc,size&0xffffffff))
+ return out.getvalue()
 def checkpoint(data,run):
  data=pathlib.Path(data);run=pathlib.Path(run);run.mkdir(parents=True,exist_ok=True)
  dbpath=run/('sqlite-'+secrets.token_hex(8)+'.db')
@@ -176,11 +215,8 @@ def checkpoint(data,run):
    src.backup(dst,pages=256,sleep=.01)
    if dst.execute('PRAGMA quick_check').fetchone()[0]!='ok':raise Unavailable('Database integrity check failed')
   if conf!=(data/'config/app.conf').read_bytes() or workflows!=(workflow_path.read_bytes() if workflow_path.exists() else None):raise Unavailable('Configuration changed during snapshot')
-  db=dbpath.read_bytes()
-  if len(db)>DBLIMIT:raise Unavailable('Database exceeds checkpoint limit')
-  payload={'database':base64.b64encode(db).decode(),'configuration':base64.b64encode(conf).decode()}
-  if workflows is not None:payload['workflows']=base64.b64encode(workflows).decode()
-  blob=gzip.compress(encoded(payload),compresslevel=1,mtime=0);unpack(blob);return blob
+  if dbpath.stat().st_size>DBLIMIT:raise Unavailable('Database exceeds checkpoint limit')
+  blob=checkpoint_blob(dbpath,conf,workflows);unpack(blob);return blob
  finally:dbpath.unlink(missing_ok=True)
 def restore(blob,data,run,token):
  db,conf,workflows=unpack(blob);data=pathlib.Path(data);check=pathlib.Path(run)/'restore-check.db';atomic(check,db)
@@ -199,7 +235,7 @@ class Cluster:
  def __init__(self,c):
   self.c=c;self.key=base64.b64decode(c['key']);self.node=c['node'];self.members=c['members'];self.root=pathlib.Path('/var/lib/desk-network');self.run=pathlib.Path('/run/desk-network');self.run.mkdir(exist_ok=True)
   self.store=Store(self.root/'state',self.key,self.members);self.lease=Lease(self.root/'state/vote.json')
-  self.term=None;self.until=0.;self.running=False;self.ready=False;self.starting=False;self.sync_state='synced';self.last_snapshot=0.;self.last_health=0.;self.last_local=0.;self.local={};self.sequence=0;self.pid=None;self.cooldown=0.;self.container_started=0.;self.boot_ready_seconds=None;self.unhealthy_since=0.
+  self.term=None;self.until=0.;self.running=False;self.ready=False;self.starting=False;self.sync_state='synced';self.last_snapshot=0.;self.last_health=0.;self.last_local=0.;self.local={};self.sequence=0;self._snap_backoff=0.;self._rebalance_retry=0.;self.pid=None;self.cooldown=0.;self.container_started=0.;self.boot_ready_seconds=None;self.unhealthy_since=0.
   self.warm=self.c.get("warm_standby") is True;self.generation=None;self.promotion_started=0.;self.promotion_seconds=None;self.warm_path=self.run/"warm"
   self.budget=bootstrap.Budget(clock);self.oplock=threading.RLock();self.snaplock=threading.Lock();self.pool=concurrent.futures.ThreadPoolExecutor(max_workers=8);self.stop=threading.Event();self.nonces={};self.authlock=threading.Lock();self.scan_lock=threading.Lock();self.scan_queued_at=0.;self.scan_cache={};self.scan_cache_at=0.
   context=ssl.create_default_context(cafile=c['certificate']);self.opener=urllib.request.build_opener(urllib.request.ProxyHandler({}),urllib.request.HTTPSHandler(context=context))
@@ -214,7 +250,11 @@ class Cluster:
   n=self.local;score=n.get('cpu')
   if not isinstance(score,(int,float)):score=100
   if self.warm and self.warm_state().get('state')=='inactive':score-=100
-  return score+sum(cost for k,cost in {'xiaozhi':20,'dns':10,'vpn':5}.items() if n.get('vip',{}).get(k))+sum(30 for k in ('asr','llm','tts') if (n.get('activity',{}).get(k) or 0)>0)
+  vip_cost=sum(cost for k,cost in {'xiaozhi':20,'dns':10,'vpn':5}.items() if n.get('vip',{}).get(k))
+  activity_cost=sum(30 for k in ('asr','llm','tts') if (n.get('activity',{}).get(k) or 0)>0)
+  ha_cost=20 if ha_held(n) else 0
+  overload_penalty=OVERLOAD_PENALTY if other_owners(n)>=2 else 0
+  return score+vip_cost+activity_cost+ha_cost+overload_penalty
  def refresh_local(self):
   try:
    with self.opener.open('http://'+self.members[self.node]+':8010/local',timeout=.6) as r:n=json.loads(r.read(32768))
@@ -397,14 +437,28 @@ class Cluster:
   return {'node':self.node,'state':'active' if self.owned() and self.ready else 'starting' if self.owned() else 'standby','protocol':'desk-network-v1','lease_term':list(self.term) if self.owned() else None,'observed_at':time.time(),'voter_ready':clock()>=self.lease.quarantine,'revision':self.store.head['revision'] if self.store.head else None,'sync':self.sync_state,'subnet':'192.168.1.0/24','scan_minutes':minutes,'scan_schedule':schedule,'boot_ready_seconds':self.boot_ready_seconds,'bootstrap_budget':'boosted' if self.budget.fd is not None else 'steady','standby_mode':'warm' if self.warm else 'cold','warm_state':self.warm_state().get('state') if self.warm else None,'preload_seconds':self.warm_state().get('preload_seconds') if self.warm else None,'promotion_seconds':self.promotion_seconds}
  def run_loop(self):
   self.kill_container(force=True);threading.Thread(target=self.fence,daemon=True).start()
+  # Clean up any sqlite-*.db files left by OOM-killed workers from the previous
+  # codebase (before per-worker scratch dirs).  No worker is running at this
+  # point, so min_age_seconds=0 is safe.
+  checkpoint_budget.sweep_stale_sqlite(self.run,min_age_seconds=0)
   while not self.stop.is_set():
    try:
     self.refresh_local();heads=self.fanout('status')
     if self.owned():
-     if any(v is True for v in self.local.get('admission',{}).values()) or (self.warm and (self.run/'warm-drain').exists()):
-      try:self.snapshot()
-      except Exception:pass
-      self.kill_container();self.term=None
+     held=other_owners(self.local)
+     other_eligible=any(n!=self.node and h.get('eligible') and h.get('score',200)<OVERLOAD_PENALTY for n,h in heads.items())
+     forced=any(v is True for v in self.local.get('admission',{}).values()) or (self.warm and (self.run/'warm-drain').exists())
+     rebalance=not forced and held>=2 and other_eligible and clock()>=self._rebalance_retry
+     if forced or rebalance:
+      # Voluntary rebalance must hand over a fresh checkpoint; only forced drains may release without one.
+      if rebalance:LOG.info('Rebalancing network: node holds %d other owners, eligible peer available',held)
+      try:self.snapshot();snapped=True
+      except Exception:snapped=False
+      if forced or snapped:
+       if rebalance:self.cooldown=clock()+60
+       self.kill_container();self.term=None
+      else:
+       self._rebalance_retry=clock()+60;LOG.warning('Rebalance deferred: checkpoint failed, keeping lease')
      else:
       stamp=clock();votes=self.fanout('lease',{'term':self.term})
       if len(votes)>=2:self.renew(stamp,self.term)
@@ -439,8 +493,17 @@ class Cluster:
    self.stop.wait(2)
   self.kill_container(force=True)
  def try_snapshot(self):
-  try:self.snapshot()
-  except Exception: self.sync_state='pending';self.last_snapshot=clock()-270;LOG.warning('Checkpoint replication pending')
+  try:self.snapshot();self._snap_backoff=0.
+  except subprocess.SubprocessError as e:
+   # Worker was OOM-killed or timed out.  Back off exponentially to avoid
+   # hammering the tmpfs slice every ~34 s while the slice is overloaded.
+   # Cap at 5 minutes; reset to 0 on the next success.
+   backoff=min(self._snap_backoff*2 or 30.,300.)
+   self._snap_backoff=backoff
+   self.sync_state='pending';self.last_snapshot=clock()-300+backoff
+   LOG.warning('Checkpoint worker failed (%s); retrying in %.0fs',type(e).__name__,backoff)
+  except Exception:
+   self.sync_state='pending';self.last_snapshot=clock()-270;LOG.warning('Checkpoint replication pending')
 def atomic_public(p,v):
  b=encoded(v);tmp=pathlib.Path(str(p)+'.tmp');tmp.write_bytes(b);os.chmod(tmp,0o644);os.replace(tmp,p)
 def read_request(handler,limit=LIMIT*2):
