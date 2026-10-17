@@ -7,7 +7,10 @@ const CONTROL_STYLE=`
 .controls .stream{margin:0;box-sizing:border-box;height:36px;min-width:36px;text-align:center;padding:6px 8px;font-size:16px;line-height:24px;border-radius:6px;background:rgba(0,0,0,.25)}
 .controls .space{flex:1;min-width:0;width:auto}
 .ptz{top:40%;right:10px}.ptz-move{width:96px;height:96px}.ptz-move ha-icon{width:32px;height:32px;display:flex;align-items:center;justify-content:center;--mdc-icon-size:24px}
-`;
+/* Anchor fullscreen PTZ above the bottom toolbar, clear of its volume button. */
+:host(:fullscreen) .ptz{top:auto;bottom:calc(56px + env(safe-area-inset-bottom,0px));right:calc(16px + env(safe-area-inset-right,0px));transform:none}
+:host(:-webkit-full-screen) .ptz{top:auto;bottom:calc(56px + env(safe-area-inset-bottom,0px));right:calc(16px + env(safe-area-inset-right,0px));transform:none}
+`.replace(/\n/g,''); // The upstream card writes style via innerText; avoid generated <br> nodes.
 let storageConnection,storageAt=0,storagePromise;
 function storageFor(hass){
   const now=performance.now();

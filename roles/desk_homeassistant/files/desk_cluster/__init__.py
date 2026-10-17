@@ -166,7 +166,7 @@ async def async_setup(hass,config):
  hass.http.register_view(ThumbnailScopeView(hass))
  hass.http.register_view(Readiness(hass))
  await hass.http.async_register_static_paths([StaticPathConfig('/desk-cluster-assets/'+name,str(pathlib.Path(__file__).parent/name),False) for name in ('panel.js','camera-card.js','thumbnail-focus.js','recording-loading.svg')])
- frontend.add_extra_js_url(hass,'/desk-cluster-assets/camera-card.js?v=1.3.0')
+ frontend.add_extra_js_url(hass,'/desk-cluster-assets/camera-card.js?v=1.3.1')
  frontend.add_extra_js_url(hass,'/desk-cluster-assets/thumbnail-focus.js?v=2.2.0')
  websocket_api.async_register_command(hass,thumbnail_scope_command)
  websocket_api.async_register_command(hass,recording_session_command)
