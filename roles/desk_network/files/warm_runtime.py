@@ -10,15 +10,40 @@ import ctypes,json,math,os,pathlib,re,signal,subprocess,sys,time,threading
 CONTROL=pathlib.Path('/run/desk-network-warm/control.json')
 STATUS=pathlib.Path('/tmp/desk-warm-status.json')
 def clock():return time.clock_gettime(time.CLOCK_BOOTTIME)
-def request(path=CONTROL,now=None):
+def load(path=CONTROL):
+ # Parse the root-owned deadline file; None for anything unreadable or malformed.
  try:
   if path.stat().st_size>1024:return None
-  v=json.loads(path.read_text());now=clock() if now is None else now
+  v=json.loads(path.read_text())
   if not isinstance(v,dict) or not re.fullmatch('[a-f0-9]{32}',v.get('generation','')):return None
   until=v.get('until')
-  if type(until) not in (int,float) or not math.isfinite(until) or not now<until<=now+11:return None
-  return v['generation']
+  if type(until) not in (int,float) or not math.isfinite(until):return None
+  return v['generation'],until
  except (OSError,ValueError,TypeError):return None
+
+def authorized(loaded,now):
+ # The deadline is always judged against the current clock, never cached.
+ if loaded is None:return None
+ generation,until=loaded
+ return generation if now<until<=now+11 else None
+
+def request(path=CONTROL,now=None):
+ loaded=load(path);now=clock() if now is None else now
+ return authorized(loaded,now)
+
+class ControlReader:
+ """request() for the poll loop: re-parse only when the file changed, or at least once per max_age.
+
+ The host publishes control.json by atomic rename, so a new write is a new inode/mtime. The age
+ bound limits any stat collision to one second; expiry is still checked on every call."""
+ def __init__(self,path=CONTROL,max_age=1.,monotonic=time.monotonic):
+  self.path,self.max_age,self.monotonic=path,max_age,monotonic;self.key=None;self.loaded=None;self.at=0.
+ def __call__(self,now=None):
+  try:st=self.path.stat();key=(st.st_ino,st.st_mtime_ns,st.st_size)
+  except OSError:self.key=None;return None
+  tick=self.monotonic()
+  if key!=self.key or tick-self.at>=self.max_age:self.loaded=load(self.path);self.key=key;self.at=tick
+  return authorized(self.loaded,clock() if now is None else now)
 
 def publish(value,path=STATUS):
  tmp=path.with_suffix('.tmp');tmp.write_text(json.dumps(value));os.chmod(tmp,0o600);os.replace(tmp,path)
@@ -104,12 +129,13 @@ def main():
  started=clock();publish({'state':'preloading','parent':os.getpid()})
  native_main=preload();seconds=round(clock()-started,3)
  groups=[];generation=None;php=cron=None;activations=0;failed=None
+ control=ControlReader()
  def status(state):
   publish({'state':state,'generation':generation,'parent':os.getpid(),'groups':groups,'preload_seconds':seconds,'activations':activations})
  status('inactive')
  try:
   while not stopped[0]:
-   desired=request()
+   desired=control()
    # A crashing native child must not be restarted repeatedly under the same
    # activation. Withdraw readiness and let the controller replace the canary.
    if groups and (not child_running(groups[0]) or php.poll() is not None or cron.poll() is not None):

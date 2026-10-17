@@ -38,6 +38,41 @@ class Warm(unittest.TestCase):
    for value in ({},{'generation':'shell','until':109},{'generation':gen,'until':109,'junk':'a'*2000}):
     p.write_text(json.dumps(value));self.assertIsNone(w.request(p,100))
    p.unlink();self.assertIsNone(w.request(p,100))
+ def test_control_reader_matches_request_for_every_deadline_case(self):
+  with tempfile.TemporaryDirectory() as td:
+   p=pathlib.Path(td)/'control';gen='a'*32;tick=[0.]
+   def fresh():return w.ControlReader(p,monotonic=lambda:tick[0])
+   for until,expected in [(109,gen),(100,None),(99,None),(112,None),(float('nan'),None),(float('inf'),None),('109',None),(True,None)]:
+    p.write_text(json.dumps({'generation':gen,'until':until}));self.assertEqual(fresh()(100),expected);self.assertEqual(fresh()(100),w.request(p,100))
+   for value in ({},{'generation':'shell','until':109},{'generation':gen,'until':109,'junk':'a'*2000}):
+    p.write_text(json.dumps(value));self.assertIsNone(fresh()(100));self.assertEqual(fresh()(100),w.request(p,100))
+   p.write_text('not json');self.assertIsNone(fresh()(100))
+   p.unlink();self.assertIsNone(fresh()(100))
+ def test_control_reader_skips_unchanged_file_but_never_caches_the_deadline(self):
+  with tempfile.TemporaryDirectory() as td:
+   p=pathlib.Path(td)/'control';gen='b'*32;tick=[0.]
+   p.write_text(json.dumps({'generation':gen,'until':109}))
+   read=w.ControlReader(p,monotonic=lambda:tick[0])
+   with patch.object(pathlib.Path,'read_text',autospec=True,side_effect=pathlib.Path.read_text) as spy:
+    self.assertEqual(read(100),gen)
+    for now in (100.1,105,108.9):tick[0]+=.1;self.assertEqual(read(now),gen)
+    self.assertEqual(spy.call_count,1)
+    # The cached deadline is judged against the supplied clock on every call.
+    self.assertIsNone(read(109));self.assertIsNone(read(120));self.assertEqual(spy.call_count,1)
+ def test_control_reader_reparses_on_change_age_and_replacement(self):
+  with tempfile.TemporaryDirectory() as td:
+   p=pathlib.Path(td)/'control';a,b='a'*32,'b'*32;tick=[0.]
+   p.write_text(json.dumps({'generation':a,'until':109}))
+   read=w.ControlReader(p,monotonic=lambda:tick[0])
+   self.assertEqual(read(100),a)
+   # Atomic replacement (the host's write path) is a new inode: same size and content length, new generation.
+   tmp=p.with_name('control.tmp');tmp.write_text(json.dumps({'generation':b,'until':109}));os.replace(tmp,p)
+   self.assertEqual(read(100),b)
+   # Even with an identical stat key the file is re-read once max_age has elapsed.
+   st=p.stat();p.write_text(json.dumps({'generation':a,'until':109}));os.utime(p,ns=(st.st_atime_ns,st.st_mtime_ns))
+   with patch.object(pathlib.Path,'stat',autospec=True,side_effect=lambda self,*a,**k:st):
+    self.assertEqual(read(100),b);tick[0]+=1.01;self.assertEqual(read(100),a)
+   p.unlink();self.assertIsNone(read(100))
  def test_pristine_rejects_live_database_or_multiple_threads(self):
   with tempfile.TemporaryDirectory() as td:
    proc=pathlib.Path(td);(proc/'self/task/1').mkdir(parents=True);(proc/'self/fd').mkdir()
