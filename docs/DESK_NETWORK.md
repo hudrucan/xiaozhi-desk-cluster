@@ -1122,3 +1122,136 @@ PIDs and policy. Network and camera controllers, dependent camera media workers,
 and subsequently the dashboard placement collectors were restarted. No checkpoint OOM counter
 increased. These are short uncontrolled idle observations after restarts, not
 a long-term memory soak or proof of voice/camera playback latency.
+
+## Controller OOM investigation, 2026-10-18
+
+The earlier corrections did not eliminate controller OOM. Kernel records confirm
+`desk-network.service` memory-cgroup kills on deskb3x at 09:53:11 and deskb1x at
+10:34:42 (+07). Both killed the long-lived Python controller, with about 253 MiB
+anonymous RSS, at its unchanged 256 MiB limit. These were not checkpoint-slice
+kills or evidence of whole-node RAM exhaustion. Both controllers automatically
+restarted. Sources and the three existing glibc allocator settings matched the
+repository on all nodes; this was not an unapplied allocator correction.
+
+Read-only inspection ended with one active network owner on deskb2x and revision
+`[66,"deskb2x",4]` synced 3/3. Across the approximately six-minute process sample,
+all three PIDs and restart counters stayed unchanged. Final controller RSS was
+35.0 / 117.6 / 47.4 MiB; historical per-process high-water marks were about
+82.6 / 159.8 / 82.2 MiB. Current cgroup OOM counters were zero after restart;
+they do not erase the historical kernel events above.
+
+The investigation confirmed an aggregate-buffer capacity defect: the UI server
+admits 32 handlers, each of which can hold a 16 MiB response. Payload buffers
+alone can therefore reach 512 MiB before text rewrites, Python, peer RPC and
+checkpoint work. A local fixture running the actual `UI.handle_ui` with mocked
+upstream replies and stalled client writes retained 64.10 MiB for eight 8 MiB
+JSON responses. After release, traced allocations returned to 0.08 MiB. This
+reproduces the concurrent memory spike; it does not identify the historical
+request or prove a retained-memory leak. No production overload test was run.
+
+A bounded live probe issued 20 sequential GETs for the native DataTables asset,
+discarding response contents. All returned 200, with 922,854 rewritten bytes.
+RSS changed from 115.26 to 115.75 MiB, without exceeding the pre-existing
+159.76 MiB high-water mark. Nonblocking py-spy sampling without locals showed
+the repeated whole-JavaScript regex substitutions as the main active work in
+this artificial request window. This does not measure ordinary idle CPU or
+establish a sustained leak.
+
+Restore remains another scratch-allocation path in the controller: both cold
+startup and warm activation call `restore()` and `unpack()` directly. Three
+isolated restores of a synthetic 13.4 MB SQLite database produced a 51.24 MiB
+Python allocation peak and about 80 MiB process high-water mark, settling back
+to about 29 MiB RSS and 0.06 MiB traced live allocations. The fixture did not
+retain the decoded database. Existing checkpoint-worker isolation does not
+cover this path. The SSE relay also has an unbounded `readline()`; no oversized
+historical SSE input was demonstrated.
+
+The recommended next correction is to stream responses that need no rewrite,
+bound the aggregate bytes/concurrency of whole-body text rewrites independently
+of lease traffic, and isolate restore scratch allocations. Keep native auth,
+response limits, mutation checkpoint acknowledgments and lease fencing intact.
+Add sanitized response-size/concurrency telemetry to attribute future spikes.
+Raising MemoryMax alone would leave the aggregate allocation problem in place.
+
+The historical processes and their heaps are gone, and current logs do not
+record the concurrent UI requests at OOM time. The exact trigger and any
+long-term retention mechanism remain unresolved. This was investigation only:
+no network source, setting, image, limit, owner or service was changed. See
+[sanitized investigation evidence](DESK_NETWORK_OOM_20261018.json) for results
+and the distinction between confirmed defects and hypotheses.
+
+### Bounded proxy and isolated restore correction, 2026-10-18
+
+The controller now relays non-rewritten read responses in 64 KiB chunks, including
+unknown-length/chunked upstream responses. It retains the 16 MiB total response
+ceiling; an oversized or truncated stream closes the connection rather than
+appending a second HTTP response. SSE uses bounded chunks instead of unbounded
+line reads and stops on owner loss. These streamed responses use close framing;
+HEAD retains upstream Content-Length without reading a body. Cookie paths,
+redirect prefixes and owner/sync headers remain in the proxy path.
+
+UI proxy admission is capped at eight requests before reading their bodies.
+Whole-body text rewrites and mutation responses share two buffer slots, with a
+two-second bounded wait and a 2 MiB input ceiling per response. The slots remain
+held through the client write and release on errors. Excess admission returns
+503 with Retry-After and closes the unread request connection. Health/status
+shortcuts and peer/lease workers do not acquire this UI budget. The new text and
+mutation response ceiling can reject unusually large custom pages/results; the
+largest audited native JavaScript asset was approximately 0.88 MiB.
+
+Mutation responses still finish reading their bounded body, attempt the existing
+checkpoint, then return the native result and current sync header. A failed
+checkpoint retains the existing pending-replication behavior. Native SSE import
+semantics, authentication, managed-settings checks and quorum rules are retained.
+Mutation buffer admission occurs before forwarding the write, so a full buffer
+budget cannot reject an edit after applying it. An SSE response releases that
+reservation before the long-lived bounded-chunk relay.
+
+Cold startup and warm activation now invoke restore in the existing bounded
+checkpoint worker slice. Compressed input and credentials go through private
+stdin, with no token in argv/environment. The original restore routine still
+validates the envelope and SQLite image before writing target files. Scratch
+directories are private and removed after worker exit; errors propagate without
+authorizing native activity. The warm activation lease check still follows
+successful restore. MemoryMax, worker resource budgets and lease timing are
+unchanged. This introduces worker startup overhead into restore; failover timing
+must be measured during rollout.
+
+In isolated fixtures, eight stalled 8 MiB JSON responses held about 0.57 MiB of
+traced scratch memory, versus the previous 64.10 MiB whole-body fixture. The
+13.4 MB synthetic restore used about 0.52 MiB of parent scratch allocations,
+versus the previous 51.24 MiB decode allocation peak in the parent. These are
+fixture allocation comparisons, not live RSS, latency or long-term OOM results.
+See [local correction validation](DESK_NETWORK_OOM_FIX_VALIDATION.json).
+The correction was subsequently rolled out on all three nodes, updating only
+`ha.py`. Both standby nodes completed bounded restore and inactive preload before
+the original owner restarted. A read-only native CTE first exercised the existing
+quorum/checkpoint path and certified revision `[66,"deskb2x",9]` synced 3/3,
+without changing app.conf. A rollback copy remains root-only on each node under
+`/var/lib/desk-network/memory-rollout-backup-20261018/ha.py`; no rescue ran.
+
+The planned transfer moved Network deskb2x → deskb1x. Sampling observed no ready
+owner over a 36.7-second span; the first new ready owner was observed 38.9 seconds
+after the restart marker, with its own promotion timer reporting 18.87 seconds.
+Each node successfully ran real restore subprocesses in the checkpoint budget.
+The final revision `[67,"deskb1x",2]` was synced 3/3 after another read-only CTE
+checked buffered response/checkpoint/ACK behavior on the new owner. The semantic
+hash of all 346 app.conf settings was unchanged across handoff.
+
+Devices, Settings, Presence and Events pages, JavaScript, native JSON and a font
+returned successfully through the new controller. The root retained its expected
+302 redirect. JSON/font responses used close-framed streaming; HEAD retained the
+font's length. Authenticated SSE delivered its initial connected frame. A separate
+background in-app browser tab rendered the Devices table and Synced badge on
+deskb1x; the temporary tab was closed after verification. Core, camera, dashboard
+and protected voice/DNS/ingress PIDs remained unchanged, as did camera owner
+generations and Core r62 ownership.
+
+Final controller RSS measured about 32.3 / 28.3 / 28.6 MiB, with high-water marks
+43.8 / 34.5 / 35.1 MiB. There were no kernel OOM events during this rollout window;
+all new controller cgroups reported zero max/oom/oom_kill events and zero automatic
+restarts, with MemoryMax still 256 MiB. The 31-second sample overlapped light read
+validation and is not an idle benchmark. Restarts also release earlier retained
+RAM, so the RSS comparison does not isolate the fix's effect. Actual settings
+Save/value changes, live overload tests, rollback and long-term OOM resolution
+remain **NOT RUN**; the read-only CTE checked the checkpoint path without a Save.

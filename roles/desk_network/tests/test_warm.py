@@ -90,15 +90,15 @@ class Warm(unittest.TestCase):
  def test_activate_restores_before_authorizing_and_refuses_running_child(self):
   c=object.__new__(ha.Cluster);c.owned=lambda:True;c.warm_state=lambda:{'state':'inactive'};c.store=MagicMock();c.store.head={'digest':'test'};c.root=pathlib.Path('/data');c.run=pathlib.Path('/run');c.c={'api_token':'fake'};c.warm_control=MagicMock()
   order=[]
-  with patch.object(ha,'restore',side_effect=lambda *args:order.append('restore')):
+  with patch.object(ha,'restore_worker',side_effect=lambda *args:order.append('restore')):
    c.warm_control.side_effect=lambda *args:order.append('authorize');c.activate_warm()
   self.assertEqual(order,['restore','authorize']);self.assertRegex(c.generation,'^[a-f0-9]{32}$')
   c.warm_state=lambda:{'state':'active'}
-  with patch.object(ha,'restore') as restore:
+  with patch.object(ha,'restore_worker') as restore:
    self.assertRaises(ha.Unavailable,c.activate_warm);restore.assert_not_called()
  def test_lease_lost_during_restore_never_authorizes(self):
   c=object.__new__(ha.Cluster);c.owned=MagicMock(side_effect=[True,False]);c.warm_state=lambda:{'state':'inactive'};c.store=MagicMock();c.store.head={'digest':'test'};c.root=pathlib.Path('/data');c.run=pathlib.Path('/run');c.c={'api_token':'fake'};c.warm_control=MagicMock()
-  with patch.object(ha,'restore'):self.assertRaises(ha.Unavailable,c.activate_warm)
+  with patch.object(ha,'restore_worker'):self.assertRaises(ha.Unavailable,c.activate_warm)
   c.warm_control.assert_not_called()
  def test_kill_preserves_only_acknowledged_inactive_runtime(self):
   c=object.__new__(ha.Cluster);c.warm=True;c.running=True;c.stop=threading.Event();c.oplock=threading.RLock();c.deactivate_warm=MagicMock(return_value=True);c.budget=MagicMock();c.ready=True;c.until=100

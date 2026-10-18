@@ -7,6 +7,8 @@ from peer_http import PeerHTTP
 import ast, signal, argparse, base64, concurrent.futures, gzip, hashlib, hmac, http.client, http.server, io, json, logging, os, pathlib, re, secrets, shutil, socket, sqlite3, ssl, struct, subprocess, sys, threading, time, urllib.parse, urllib.request, zlib
 LOG = logging.getLogger('desk-network')
 TTL, MARGIN, LIMIT, DBLIMIT = 15., 5., 16*1024*1024, 64*1024*1024
+UI_TEXT_LIMIT = 2*1024*1024
+UI_CHUNK = 65536
 OVERLOAD_PENALTY=100
 def ha_held(n):return (n.get('homeassistant') or {}).get('state') in ('starting','active','checkpointing')
 def other_owners(n):return sum(1 for k in ('xiaozhi','dns','vpn') if (n.get('vip') or {}).get(k))+(1 if ha_held(n) else 0)
@@ -131,7 +133,7 @@ def snapshot_worker(action,*,data=None,run=None,blob=None):
  # threads' allocator arenas. A short-lived interpreter releases all of them.
  cmd=[sys.executable,str(pathlib.Path(__file__).resolve()),'--snapshot-worker',action]
  worker_dir=None
- if action=='create':
+ if action in ('create','restore'):
   # Give each worker its own isolated scratch directory.
   # subprocess.run() (inside execute()) is synchronous: it only returns after
   # the worker process has fully exited — whether by normal exit, RuntimeMaxSec
@@ -148,6 +150,10 @@ def snapshot_worker(action,*,data=None,run=None,blob=None):
  finally:
   if worker_dir is not None:
    shutil.rmtree(worker_dir,ignore_errors=True)
+def restore_worker(blob,data,run,token):
+ # Keep credentials off argv/environment; the bounded worker consumes one
+ # private JSON line followed by the original compressed checkpoint bytes.
+ snapshot_worker('restore',data=data,run=run,blob=encoded({'token':token})+b'\n'+blob)
 POLICY={
  'SCAN_SUBNETS':['192.168.1.0/24 --interface=wlan0'], 'TIMEZONE':'Asia/Ho_Chi_Minh',
  'BACKEND_API_URL':'/network/server', 'LOADED_PLUGINS':['ARPSCAN','AVAHISCAN','UI','CUSTPROP','DBCLNP','INTRNT','MAINT','NEWDEV','SETPWD','SYNC','VNDRPDT','WORKFLOWS'],
@@ -396,7 +402,7 @@ class Cluster:
     return
    if self.warm:self.warm_control()
    self.retire_checkpoint_source()
-   restore(self.store.blob(self.store.head['digest']),self.root/'data',self.run,self.c['api_token'])
+   restore_worker(self.store.blob(self.store.head['digest']),self.root/'data',self.run,self.c['api_token'])
    cmd=['podman','run','-d','--replace','--name',NAME,'--network=host','--read-only','--cpus=0.5','--cpu-shares=128','--memory=512m','--pids-limit=256','--log-driver=k8s-file','--log-opt=max-size=5mb','--cap-drop=ALL','--tmpfs','/tmp:rw,noexec,nosuid,nodev,mode=1700,size=256m','-v',str(self.root/'data')+':/data:rw','-v','/usr/local/libexec/desk-network/api-loopback.py:/app/server/api_server/api_server_start.py:ro','-v','/etc/desk-network/policy.json:/data/config/app_conf_override.json:ro','-v','/usr/local/libexec/desk-network/override-policy.sh:/entrypoint.d/35-apply-conf-override.sh:ro','-v','/usr/local/libexec/desk-network/lang-cached.php:/app/front/php/templates/language/lang.php:ro','-v','/usr/local/libexec/desk-network/opcache.so:/usr/lib/php83/modules/opcache.so:ro','-v','/usr/local/libexec/desk-network/opcache.ini:/etc/php83/conf.d/10_desk_opcache.ini:ro','-e','LISTEN_ADDR='+self.members[self.node],'-e','PORT=20211','-e','GRAPHQL_PORT=20212']
    cmd+=['-v','/usr/local/libexec/desk-network/mdns.py:/app/desk_network/mdns.py:ro','-v','/usr/local/libexec/desk-network/arp.py:/app/desk_network/arp.py:ro','-v','/usr/local/libexec/desk-network/discovery.py:/app/desk_network/discovery.py:ro']
    if self.c.get('scan_distributed'):
@@ -420,7 +426,7 @@ class Cluster:
   # No PHP/backend/database handles survive this boundary. The preloaded parent
   # contains imports only; restore the latest majority-certified data first.
   self.retire_checkpoint_source()
-  restore(self.store.blob(self.store.head['digest']),self.root/'data',self.run,self.c['api_token'])
+  restore_worker(self.store.blob(self.store.head['digest']),self.root/'data',self.run,self.c['api_token'])
   if not self.owned():raise Unavailable('Lease expired during warm restore')
   self.generation=secrets.token_hex(16);self.promotion_started=clock();self.promotion_seconds=None
   self.boot_ready_seconds=None;self.container_started=clock();self.last_snapshot=clock();self.last_health=0.;self.unhealthy_since=0.
@@ -577,6 +583,7 @@ def read_request(handler,limit=LIMIT*2):
  if n<0 or n>limit:raise Unavailable('Request too large')
  return handler.rfile.read(n)
 def write_response(h,status,b,ctype='application/json',headers=None):
+ h._desk_response_started=True
  h.send_response(status);h.send_header('Content-Type',ctype);h.send_header('Content-Length',str(len(b)));h.send_header('Cache-Control','no-store')
  for k,v in (headers or {}).items():h.send_header(k,v)
  h.end_headers()
@@ -664,11 +671,37 @@ def native_route(node,path):
  # nginx directory. Its token checks and the UI mutation quorum still apply.
  if path.startswith('/server/'):return '127.0.0.1',20212,path[len('/server'):]
  return node,20211,path
+def relay_response(handler,response,ctype,headers,owned,event_stream=False):
+ # Non-rewritten bodies never accumulate in the controller. Close framing
+ # handles unknown lengths and lets a partial/oversized upstream fail closed.
+ length=response.length
+ if handler.command=='HEAD':
+  original=response.getheader('Content-Length')
+  if original is not None:
+   if not original.isascii() or not original.isdecimal():raise Unavailable('Invalid upstream length')
+   length=int(original)
+ if not event_stream and length is not None and length>LIMIT:raise Unavailable('Response exceeds byte limit')
+ handler._desk_response_started=True
+ handler.send_response(response.status);handler.send_header('Content-Type',ctype)
+ if not event_stream and length is not None:handler.send_header('Content-Length',str(length))
+ handler.send_header('Cache-Control','no-store');handler.send_header('Connection','close')
+ for k,v in headers.items():handler.send_header(k,v)
+ handler.end_headers();handler.close_connection=True
+ if handler.command=='HEAD':return
+ size=0
+ while owned():
+  part=response.read1(UI_CHUNK if event_stream else min(UI_CHUNK,LIMIT+1-size))
+  if not part:break
+  size+=len(part)
+  if not event_stream and size>LIMIT:raise Unavailable('Response exceeds byte limit')
+  handler.wfile.write(part)
+  if event_stream:handler.wfile.flush()
+ if not event_stream and length is not None and size!=length:raise Unavailable('Incomplete upstream response')
 class UI(http.server.BaseHTTPRequestHandler):
  protocol_version='HTTP/1.1'
  def log_message(self,*args):pass
  def handle_ui(self):
-  c=self.server.cluster;conn=None
+  c=self.server.cluster;conn=None;admitted=False;rewriting=False;self._desk_response_started=False
   try:
    if self.client_address[0] not in set(c.members.values())|{'127.0.0.1'}:return write_response(self,403,b'Forbidden','text/plain')
    if self.path=='/health':return write_response(self,200 if c.owned() and c.ready else 503,encoded(c.public()))
@@ -679,6 +712,11 @@ class UI(http.server.BaseHTTPRequestHandler):
     keys=encoded(list(POLICY)+['API_TOKEN']);script=pathlib.Path('/usr/local/libexec/desk-network/settings-policy.js').read_bytes()
     return write_response(self,200,b'const deskManagedKeys='+keys+b';\n'+script,'application/javascript')
    if not self.path.startswith('/network/'):return write_response(self,404,b'Not found','text/plain')
+   # Admit before reading request bodies, independently of peer/lease workers.
+   if not self.server.ui_slots.acquire(blocking=False):
+    self.close_connection=True
+    return write_response(self,503,b'Network proxy is busy','text/plain',{'Retry-After':'1','Connection':'close'})
+   admitted=True
    raw=read_request(self,2*1024*1024);mutation=is_mutation(self.command,self.path,raw)
    if mutation:
     error=managed_settings_error(self.path,raw,c.c['api_token'])
@@ -706,35 +744,54 @@ class UI(http.server.BaseHTTPRequestHandler):
      with c.scan_lock:c.scan_queued_at=0;c.scan_cache_at=0
      return write_response(self,503,encoded({'error':'Native scan queue unavailable'}))
    path=self.path[len('/network'):];headers={k:v for k,v in self.headers.items() if k.lower() not in ('host','connection','transfer-encoding','content-length','accept-encoding')};headers['Host']='192.168.1.186';headers['Accept-Encoding']='identity'
+   # Reserve mutation acknowledgment space before forwarding a native write.
+   # Capacity rejection must not become a busy response after applying an edit.
+   if mutation:
+    if not self.server.rewrite_slots.acquire(timeout=2):raise Unavailable('Mutation response capacity')
+    rewriting=True
    host,port,path=native_route(c.members[c.node],path)
    conn=http.client.HTTPConnection(host,port,timeout=20);conn.request(self.command,path,body=raw or None,headers=headers);r=conn.getresponse();ctype=r.getheader('Content-Type','application/octet-stream')
-   if 'text/event-stream' in ctype:
-    self.send_response(r.status);self.send_header('Content-Type',ctype);self.send_header('Cache-Control','no-store');self.send_header('Connection','close');self.end_headers();self.close_connection=True
-    while c.owned():
-     line=r.readline()
-     if not line:break
-     self.wfile.write(line);self.wfile.flush()
-    return
-   b=read_bounded(r,LIMIT)
-   if mutation and r.status<400:
-    try:c.snapshot()
-    except Exception:c.sync_state='pending';LOG.warning('Native edit has pending replication')
-   b=rewrite_text(b,ctype,c.node,self.path);extra={}
+   extra={}
    for k,v in r.getheaders():
     if k.lower()=='set-cookie':extra[k]=re.sub(r'(?i)path=/($|;)',r'Path=/network/\1',v)
     if k.lower()=='location':extra[k]='/network'+v if v.startswith('/') and not v.startswith('/network') else v
-   extra['X-Desk-Network-Node']=c.node;extra['X-Desk-Network-Sync']=c.sync_state
-   write_response(self,r.status,b,ctype,extra)
+   extra['X-Desk-Network-Node']=c.node
+   event_stream='text/event-stream' in ctype
+   if event_stream and rewriting:
+    self.server.rewrite_slots.release();rewriting=False
+   text=not event_stream and self.command!='HEAD' and any(t in ctype for t in ('text/html','javascript','text/css'))
+   buffered=text or (mutation and not event_stream)
+   if buffered:
+    if not rewriting:
+     if not self.server.rewrite_slots.acquire(timeout=2):raise Unavailable('Text rewrite capacity')
+     rewriting=True
+    b=read_bounded(r,UI_TEXT_LIMIT)
+   # Mutation success is acknowledged only after the existing checkpoint attempt.
+   # SSE retains its existing asynchronous native import semantics.
+   if mutation and r.status<400 and not event_stream:
+    try:c.snapshot()
+    except Exception:c.sync_state='pending';LOG.warning('Native edit has pending replication')
+   extra['X-Desk-Network-Sync']=c.sync_state
+   if buffered:write_response(self,r.status,rewrite_text(b,ctype,c.node,self.path) if text else b,ctype,extra)
+   else:relay_response(self,r,ctype,extra,c.owned,event_stream)
   except (BrokenPipeError,ConnectionResetError):pass
-  except Exception:write_response(self,503,b'Network request temporarily unavailable','text/plain',{'Retry-After':'3'})
+  except Exception:
+   self.close_connection=True
+   if not self._desk_response_started:write_response(self,503,b'Network request temporarily unavailable','text/plain',{'Retry-After':'3','Connection':'close'})
   finally:
-   if conn:conn.close()
+   try:
+    if conn:conn.close()
+   finally:
+    if rewriting:self.server.rewrite_slots.release()
+    if admitted:self.server.ui_slots.release()
  do_GET=do_HEAD=do_POST=do_PUT=do_PATCH=do_DELETE=do_OPTIONS=handle_ui
 class Server(http.server.ThreadingHTTPServer):
  daemon_threads=True
  request_queue_size=32
  def __init__(self,*args,**kwargs):
-  self.slots=threading.BoundedSemaphore(32);super().__init__(*args,**kwargs)
+  self.slots=threading.BoundedSemaphore(32)
+  self.ui_slots=threading.BoundedSemaphore(8);self.rewrite_slots=threading.BoundedSemaphore(2)
+  super().__init__(*args,**kwargs)
  def process_request(self,request,client_address):
   if not self.slots.acquire(blocking=False):self.shutdown_request(request);return
   try:super().process_request(request,client_address)
@@ -758,13 +815,20 @@ class Server(http.server.ThreadingHTTPServer):
   s,a=super().get_request();s.settimeout(25);return s,a
  def verify_request(self,r,a):return a[0] in set(self.cluster.members.values())|{'127.0.0.1'}
 def main():
- parser=argparse.ArgumentParser();parser.add_argument('--snapshot-worker',choices=('create','validate'));parser.add_argument('--data');parser.add_argument('--run');parser.add_argument('--config',default='/etc/desk-network/config.json');parser.add_argument('--stop',action='store_true');args=parser.parse_args()
+ parser=argparse.ArgumentParser();parser.add_argument('--snapshot-worker',choices=('create','validate','restore'));parser.add_argument('--data');parser.add_argument('--run');parser.add_argument('--config',default='/etc/desk-network/config.json');parser.add_argument('--stop',action='store_true');args=parser.parse_args()
  if args.snapshot_worker:
   if args.snapshot_worker=='create':
    if not args.data or not args.run:parser.error('Checkpoint paths required')
    blob=checkpoint(args.data,args.run)
    if len(blob)>LIMIT:raise Unavailable('Checkpoint exceeds byte limit')
    sys.stdout.buffer.write(blob)
+  elif args.snapshot_worker=='restore':
+   if not args.data or not args.run:parser.error('Restore paths required')
+   header=sys.stdin.buffer.readline(4097)
+   if len(header)>4096 or not header.endswith(b'\n'):raise Unavailable('Restore envelope')
+   value=json.loads(header)
+   if set(value)!={'token'} or not isinstance(value['token'],str) or not 0<len(value['token'])<=2048:raise Unavailable('Restore credentials')
+   restore(read_bounded(sys.stdin.buffer,LIMIT),args.data,args.run,value['token'])
   else:unpack(read_bounded(sys.stdin.buffer,LIMIT))
   return
  if args.stop:
