@@ -3,6 +3,7 @@ import asyncio,json,pathlib,sys,tempfile,time,types,unittest
 from unittest.mock import AsyncMock,Mock,patch
 BASE=pathlib.Path(__file__).resolve().parents[1]/'files';sys.path.insert(0,str(BASE))
 import warm_playback as warm,playback,media_rpc
+from playback_worker import MediaSessionExpired
 class WarmTests(unittest.IsolatedAsyncioTestCase):
  async def asyncSetUp(self):
   self.tmp=tempfile.TemporaryDirectory();self.root=pathlib.Path(self.tmp.name);self.patch=patch.object(warm,'ROOT',self.root);self.patch.start()
@@ -61,13 +62,20 @@ class WarmTests(unittest.IsolatedAsyncioTestCase):
   async def execute(*args):entered.set();await asyncio.Event().wait()
   self.execute.side_effect=execute;await self.m.action(self.v);await entered.wait()
   with self.assertRaises(ValueError):await self.m.action(dict(self.v,attempt='c'*32))
+ async def test_expired_handle_is_reported_after_cleanup_without_automatic_retry(self):
+  client=object();self.worker.client.return_value=client;self.worker.clients[self.v['workload']]=(0,client,self.v['generation'])
+  self.execute.side_effect=MediaSessionExpired()
+  await self.m.action(self.v);await self.m.current['task']
+  progress=json.loads((self.path/'progress.json').read_bytes())
+  self.assertEqual((progress['state'],progress['reason']),('failed','session_expired'))
+  self.assertNotIn(self.v['workload'],self.worker.clients);self.worker.close.assert_called_once_with(client);self.execute.assert_awaited_once();self.assertFalse(self.m.busy())
 class ClientReuseTests(unittest.IsolatedAsyncioTestCase):
  async def test_preloading_does_not_log_in_and_same_generation_reuses_authenticated_client(self):
   import thumbnail_worker
   sdk=types.ModuleType('pytapo');created=[]
-  def make(*args,**kwargs):
-   value=types.SimpleNamespace(close=Mock());created.append(value);return value
-  sdk.Tapo=make
+  class FakeTapo:
+   def __init__(self,*args,**kwargs):self.close=Mock();created.append(self)
+  sdk.Tapo=FakeTapo
   with patch.dict(sys.modules,{'pytapo':sdk}),patch.object(pathlib.Path,'read_bytes',return_value=json.dumps({'tapo_c222_163':{'cloud_password':'fake','ip_address':'192.0.2.1'}}).encode()):
    worker=thumbnail_worker.Worker();self.assertEqual(created,[])
    v={'workload':'tapo_c222_163','generation':'a'*32}

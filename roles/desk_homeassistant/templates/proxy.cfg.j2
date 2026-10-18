@@ -7,6 +7,10 @@ frontend desk_homeassistant_ui
     acl ha_document req.hdr(Accept) -m sub text/html
     http-request return status 200 content-type text/html file /etc/haproxy/desk-homeassistant-starting.html hdr Cache-Control no-store if ha_document { method GET } { nbsrv(desk_homeassistant_core) lt 1 }
     timeout client 60s
+{% for node in groups['deskboxes'] | sort %}
+    use_backend desk_camera_delivery_{{ node }} if { path_beg /desk-camera-media/v1/{{ node }}/ }
+{% endfor %}
+    http-request deny if { path_beg /desk-camera-media/ } !{ path_reg ^/desk-camera-media/v1/deskb[123]x/[a-f0-9]{64}/(index\.m3u8|init\.mp4|s[0-9]{6}\.m4s|clip\.mp4|touch|close)$ }
     default_backend desk_homeassistant_core
 
 backend desk_homeassistant_core
@@ -24,4 +28,16 @@ backend desk_homeassistant_core
     timeout tunnel 1h
 {% for node in groups['deskboxes'] | sort %}
     server {{ node }} {{ hostvars[node].cluster_ip }}:18123 check port 20223 inter 3s fall 2 rise 1
+{% endfor %}
+
+{% for node in groups['deskboxes'] | sort %}
+backend desk_camera_delivery_{{ node }}
+    mode http
+    retries 0
+    http-request disable-l7-retry
+    timeout connect 2s
+    timeout server 20s
+    timeout queue 2s
+    # Serving a completed cache is independent of camera placement/Core health.
+    server media {{ hostvars[node].cluster_ip }}:20226 maxconn 8
 {% endfor %}

@@ -96,7 +96,25 @@ if(!window.customCards.some(c=>c.type==='desk-camera-card'))window.customCards.p
   const random=()=>Array.from(crypto.getRandomValues(new Uint8Array(16)),n=>n.toString(16).padStart(2,'0')).join('');
   const client=random(),tag='hui-dialog-web-browser-play-media';
   let sequence=0,pending,draining=Promise.resolve();
+  function delivery(result,scope) {
+    const root=/^\/desk-camera-media\/v1\/deskb[123]x\/[a-f0-9]{64}\//;
+    const match=result.url?.match(root),d=result.delivery;
+    if(!match||!d||d.viewer!==scope||d.touch_url!==match[0]+'touch'||d.close_url!==match[0]+'close'||!['index.m3u8','clip.mp4'].some(n=>result.url===match[0]+n)||d.heartbeat_seconds!==5)return;
+    return d;
+  }
+  async function direct(action,d) {
+    const until=performance.now()+30000;
+    do {
+      const response=await fetch(action==='close'?d.close_url:d.touch_url,{method:'POST',body:'',credentials:'omit',cache:'no-store',redirect:'error',keepalive:action==='close',signal:AbortSignal.timeout(10000)});
+      if(!response.ok)throw Error('Viewer unavailable');
+      const value=await response.json();
+      if(action!=='close'||value.closed)return {ok:true,json:async()=>value};
+      await new Promise(resolve=>setTimeout(resolve,500));
+    } while(performance.now()<until);
+    throw Error('Viewer cleanup pending');
+  }
   function api(action,p,extra={}) {
+    if(p.delivery&&action!=='open')return direct(action,p.delivery);
     // Existing HA WebSocket bypasses the browser's six HTTP connections,
     // which native thumbnail downloads can otherwise monopolize.
     return p.hass.callWS({type:'desk_cluster/recording_session',value:{action,client,sequence:p.sequence,scope:p.scope,...extra}})
@@ -124,7 +142,10 @@ if(!window.customCards.some(c=>c.type==='desk-camera-card'))window.customCards.p
       await draining;if(pending!==p)return;
       const response=await api('open',p,{clip});
       if(!response.ok)throw Error('Recording unavailable');
-      const result=await response.json();if(pending!==p)return;
+      const result=await response.json();const detached=delivery(result,p.scope);
+      if(pending!==p){if(detached)direct('close',detached).catch(()=>undefined);return;}
+      if(result.delivery&&!detached)throw Error('Invalid viewer capability');
+      if(detached)p.delivery=detached;
       // Native dialog import/render can still be in flight for an instant hit.
       for(let i=0;i<60&&pending===p;i++) {
         p.dialog=findDialog();if(p.dialog?.showDialog)break;
@@ -132,9 +153,9 @@ if(!window.customCards.some(c=>c.type==='desk-camera-card'))window.customCards.p
       }
       if(pending!==p)return;
       if(!p.dialog?.showDialog)throw Error('Player unavailable');
-      // Only cluster media routes are accepted; no worker URL or credential is
-      // exposed to the player. The Core response already signs these routes.
-      if(!result.url?.startsWith('/api/desk_cluster/recording/')||!['video/mp4','application/x-mpegURL'].includes(result.mime_type))throw Error('Invalid recording');
+      // Detached delivery is a narrowly scoped opaque capability, never an SDK
+      // handle or camera credential. Legacy routes keep their Core signature.
+      if((!detached&&!result.url?.startsWith('/api/desk_cluster/recording/'))||!['video/mp4','application/x-mpegURL'].includes(result.mime_type))throw Error('Invalid recording');
       p.dialog.showDialog({sourceUrl:result.url,sourceType:result.mime_type,title:p.title,can_play:true});
     } catch(error) {
       if(pending!==p)return;
@@ -158,8 +179,10 @@ if(!window.customCards.some(c=>c.type==='desk-camera-card'))window.customCards.p
     window.dispatchEvent(new CustomEvent('desk-recording-viewer',{detail:{entry:p.entry,active:true}}));
     p.timer=setInterval(()=>{
       if(pending!==p)return;
-      if(!p.panel.isConnected){release(p);return;}
       p.dialog=p.dialog||findDialog();
+      // HA may rebuild its panel while reconnecting to Core. A mounted native
+      // player on the same route retains its independent viewer lease.
+      if(!p.panel.isConnected&&!(p.delivery&&p.dialog?.isConnected&&location.pathname===p.path)){release(p);return;}
       api('touch',p).catch(()=>undefined);
     },5000);
     // Use the native media-picked flow to load its standard dialog module.

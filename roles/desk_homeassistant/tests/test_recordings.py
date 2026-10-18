@@ -5,7 +5,7 @@ from urllib.parse import urlparse,parse_qsl,urlencode
 BASE=pathlib.Path(__file__).resolve().parents[1]/'files';UI=BASE/'desk_cluster'
 def module(name,path):
  spec=importlib.util.spec_from_file_location(name,path);value=importlib.util.module_from_spec(spec);spec.loader.exec_module(value);return value
-model=module('recording_model',UI/'recording_model.py');storage=module('camera_storage',UI/'camera_storage.py')
+remote=module('recording_remote',UI/'recording_remote.py');model=module('recording_model',UI/'recording_model.py');storage=module('camera_storage',UI/'camera_storage.py')
 sys.path.insert(0,str(BASE.parents[1]/'desk_camera/files'));import playback
 class Unresolvable(Exception):pass
 class Native:
@@ -18,14 +18,23 @@ class Native:
  def _create_background_task(self,coro,entry):return asyncio.create_task(coro)
 def parse(value):return dict(parse_qsl(urlparse(value).query))
 def ident(value):return 'tapo_control/?'+urlencode(value)
-ns={'LOADING_IMAGE':'data:image/svg+xml;base64,PHN2Zy8+', 'asyncio':asyncio,'re':re,'copy':copy,'datetime':datetime,'time':time,'urlparse':urlparse,'parse_qsl':parse_qsl,'persistent_notification':Mock(),'async_sign_path':lambda h,p,d:p,'Unresolvable':Unresolvable,'PlayMedia':lambda url,mime:(url,mime),'TapoMediaSource':Native,'parse_identifier':parse,'build_identifier':ident,'bridge':AsyncMock(),'HOSTS':storage.HOSTS,'storage_state':storage.storage_state,'PART_SECONDS':model.PART_SECONDS,'MESSAGES':model.MESSAGES,'cached_state':model.cached_state,'clip_id':model.clip_id,'label':model.label,'parts':model.parts,'DOMAIN':'tapo_control'}
+ns={'LOADING_IMAGE':'data:image/svg+xml;base64,PHN2Zy8+', 'asyncio':asyncio,'re':re,'copy':copy,'datetime':datetime,'time':time,'urlparse':urlparse,'parse_qsl':parse_qsl,'persistent_notification':Mock(),'async_sign_path':lambda h,p,d:p,'Unresolvable':Unresolvable,'PlayMedia':lambda url,mime:(url,mime),'TapoMediaSource':Native,'parse_identifier':parse,'build_identifier':ident,'bridge':AsyncMock(),'HOSTS':storage.HOSTS,'storage_state':storage.storage_state,'PART_SECONDS':model.PART_SECONDS,'MESSAGES':model.MESSAGES,'cached_state':model.cached_state,'clip_id':model.clip_id,'label':model.label,'parts':model.parts,'DOMAIN':'tapo_control','OwnerAPI':remote.OwnerAPI}
 tree=ast.parse((UI/'camera_recordings.py').read_text());exec(compile(ast.Module(body=[n for n in tree.body if isinstance(n,ast.ClassDef)],type_ignores=[]),str(UI/'camera_recordings.py'),'exec'),ns);Adapter=ns['WorkerRecordings']
 class Recordings(unittest.IsolatedAsyncioTestCase):
+ async def test_owner_mode_browse_and_playback_never_allocate_on_core_or_fall_back(self):
+  a=self.make();a.owner.workloads=frozenset(['tapo_c222_160']);a.owner.browse=AsyncMock(return_value=copy.deepcopy(a.raw))
+  await a.async_browse_media(self.item);self.assertEqual(a.calls,0);self.controller.getUserID.assert_not_called()
+  ns['bridge']=AsyncMock(return_value={'state':'ready','node':'deskb1x','id':'a'*32})
+  await a.async_resolve_media(types.SimpleNamespace(identifier=self.child.identifier))
+  self.controller.getUserID.assert_not_called();self.assertIsNone(ns['bridge'].call_args.kwargs['value']['session'])
+  a.index_cache.clear();a.owner.browse.side_effect=ValueError('owner unavailable')
+  with self.assertRaises(Unresolvable):await a.async_browse_media(self.item)
+  self.assertEqual(a.calls,0)
  def make(self):
   self.entry=types.SimpleNamespace(entry_id='camera',domain='tapo_control',data={'ip_address':'192.168.1.160'})
-  self.controller=types.SimpleNamespace(getUserID=Mock(return_value=123),playerID='native-player')
+  self.controller=types.SimpleNamespace(getUserID=Mock(return_value=123),userID=123,playerID='native-player')
   self.device={'camData':{'sdCardData':[{'status':'normal'}]},'controller':self.controller}
-  self.hass=types.SimpleNamespace(config_entries=types.SimpleNamespace(async_get_entry=lambda _:self.entry),data={'tapo_control':{'camera':self.device}},async_add_executor_job=AsyncMock(side_effect=lambda fn:fn()))
+  self.hass=types.SimpleNamespace(config_entries=types.SimpleNamespace(async_get_entry=lambda _:self.entry),data={'tapo_control':{'camera':self.device}},async_add_executor_job=AsyncMock(side_effect=lambda fn,*args:fn(*args)))
   self.a=Adapter(self.hass);self.a.inventory=AsyncMock(return_value={'items':[],'complete':True})
   self.query={'entry':'camera','date':'2026-10-16','title':'Day'};self.item=types.SimpleNamespace(identifier=ident(self.query))
   q=dict(self.query,startDate=1792112400,endDate=1792112460,title='00:00-00:01');self.child=self.a.generateView(ident(q),'00:00-00:01',True,False);self.a.raw=self.a.generateView(self.item.identifier,'Day',False,True,children=[self.child]);return self.a
@@ -93,10 +102,51 @@ class Recordings(unittest.IsolatedAsyncioTestCase):
   value=await a.prepared(job['workload'],job)
   self.assertEqual(value[1],'application/x-mpegURL');self.assertIn('/'+'e'*32+'/index.m3u8',value[0]);self.assertFalse(job['task'].done())
   done.set();await job['task']
- async def test_native_handle_is_reused_and_resource_rejection_is_specific(self):
+ async def test_fresh_core_handle_is_bound_and_resource_rejection_is_specific(self):
   a=self.make();ns['bridge']=AsyncMock(return_value={'state':'rejected','reason':'memory_low'})
   with self.assertRaisesRegex(Unresolvable,'free memory'):await a.async_resolve_media(types.SimpleNamespace(identifier=self.child.identifier))
   self.assertEqual(ns['bridge'].call_args.kwargs['value']['session'],{'user_id':123,'player_id':'native-player'})
+  self.controller.getUserID.assert_called_once_with(True)
+ async def test_stale_browse_handle_refreshes_after_thumbnail_drain_under_entry_lock(self):
+  a=self.make();drained=False
+  async def pause(entry):
+   nonlocal drained
+   self.assertEqual(entry,'camera');await asyncio.sleep(0);drained=True
+  a._thumbnails=types.SimpleNamespace(pause=AsyncMock(side_effect=pause))
+  def allocate(force=False):
+   self.assertTrue(drained);self.assertTrue(a.locks['camera'].locked());self.assertTrue(force)
+   self.controller.userID=456;return 456
+  self.controller.getUserID.side_effect=allocate
+  ns['bridge']=AsyncMock(return_value={'state':'rejected','reason':'memory_low'})
+  with self.assertRaises(Unresolvable):await a.async_resolve_media(types.SimpleNamespace(identifier=self.child.identifier))
+  self.controller.getUserID.assert_called_once_with(True)
+  ns['bridge'].assert_awaited_once()
+  self.assertEqual(ns['bridge'].call_args.kwargs['value']['session'],{'user_id':456,'player_id':'native-player'})
+ async def test_failed_core_allocation_never_submits_or_retries_worker_preparation(self):
+  a=self.make();self.controller.getUserID.side_effect=ValueError('Camera busy');ns['bridge']=AsyncMock()
+  with self.assertRaisesRegex(Unresolvable,'session is busy'):await a.async_resolve_media(types.SimpleNamespace(identifier=self.child.identifier))
+  self.controller.getUserID.assert_called_once_with(True);ns['bridge'].assert_not_awaited();self.assertFalse(a.jobs)
+ async def test_expiry_invalidates_only_matching_core_handle_and_index_without_device_io(self):
+  a=self.make();await a.async_browse_media(self.item)
+  a.index_cache['tapo_control/?entry=other']=(0,'other-camera')
+  await a.invalidate_media_session('camera',{'user_id':123,'player_id':'native-player'})
+  self.assertIs(self.controller.userID,False);self.controller.getUserID.assert_not_called()
+  self.assertNotIn(self.item.identifier,a.index_cache);self.assertIn('tapo_control/?entry=other',a.index_cache)
+ async def test_delayed_expiry_cannot_discard_newer_core_handle(self):
+  a=self.make();lock=a.locks.setdefault('camera',asyncio.Lock())
+  async with lock:
+   task=asyncio.create_task(a.invalidate_media_session('camera',{'user_id':123,'player_id':'native-player'}))
+   await asyncio.sleep(0);self.assertFalse(task.done());self.controller.userID=456
+  await task;self.assertEqual(self.controller.userID,456);self.controller.getUserID.assert_not_called()
+ async def test_worker_expiry_notification_clears_matching_handle_without_retry(self):
+  a=self.make();ns['bridge']=AsyncMock(return_value={'state':'failed','reason':'session_expired'});ns['persistent_notification']=Mock()
+  job={'workload':'tapo_c222_160','node':'deskb1x','id':'a'*32,'duration':1,'_entry':'camera','_session':{'user_id':123,'player_id':'native-player'}}
+  with patch.object(asyncio,'sleep',new=AsyncMock()):await a.wait(job,'notice')
+  self.assertIs(self.controller.userID,False);self.controller.getUserID.assert_not_called();ns['bridge'].assert_awaited_once()
+  self.assertEqual(ns['persistent_notification'].async_create.call_args.args[1],model.MESSAGES['session_expired'])
+ async def test_expired_preparation_returns_specific_error_instead_of_dead_url(self):
+  a=self.make();job={'workload':'tapo_c222_160','node':'deskb1x','id':'a'*32,'task':asyncio.create_task(asyncio.sleep(0))};ns['bridge']=AsyncMock(return_value={'state':'failed','reason':'session_expired'})
+  with self.assertRaisesRegex(Unresolvable,'session expired'):await a.prepared(job['workload'],job)
  async def test_thumbnail_check_is_explicit_serialized_and_cached(self):
   a=self.make();ns['__package__']='desk_probe_test';probe_module=types.ModuleType('desk_probe_test.thumbnail_probe');probe_module.check=AsyncMock(return_value={'status':'ready','bytes':1234,'width':640,'height':360});ns['bridge']=AsyncMock(return_value={'items':[],'complete':True})
   with patch.dict(sys.modules,{'desk_probe_test.thumbnail_probe':probe_module}):

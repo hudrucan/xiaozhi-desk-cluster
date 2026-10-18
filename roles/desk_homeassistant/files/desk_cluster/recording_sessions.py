@@ -18,12 +18,16 @@ class Sessions:
  def bind(self,scope,key,job):
   # An attempt is an ephemeral worker identity, distinct from the cached clip ID.
   if re.fullmatch('[a-f0-9]{32}',job.get('attempt','')):
-   self.jobs[key]={k:job[k] for k in ('workload','node','id','attempt')}
+   current={k:job[k] for k in ('workload','node','id','attempt')}
+   old=self.jobs.get(key,{})
+   if old.get('external') and all(old.get(k)==v for k,v in current.items()):current['external']=True
+   self.jobs[key]=current
   if not self.live(scope,key):self.orphan(key)
  def orphan(self,key):
   if any(self.live(scope,key) for scope in self.records):return
   job=self.jobs.pop(key,None)
   if not job:return
+  if job.get('external'):return  # The controller owns each detached viewer ref.
   task=asyncio.create_task(self.cancel(key,job));self.drains[key]=task
   task.add_done_callback(lambda t:self.drains.pop(key,None) if self.drains.get(key) is t else None)
  async def cancel(self,key,job):
@@ -35,18 +39,21 @@ class Sessions:
      if result.get('state')=='cancelled':break
      await asyncio.sleep(.5)
   except Exception:pass  # Independent 30s worker viewer deadline remains.
-  finally:
-   task=self.source.jobs.get(key,{}).get('task')
-   current=self.source.jobs.get(key,{})
-   if current.get('attempt')==job['attempt'] and task and not task.done():task.cancel();await asyncio.gather(task,return_exceptions=True)
-   self.source.inventories.pop(key[0],None)
-   if hasattr(self.source,'_thumbnails') and not any(self.live(s) and r['key'][0]==key[0] for s,r in self.records.items()):
-    for entry in list(self.source._thumbnails.suspended):
-     try:
-      if self.source.camera_entry({'entry':entry})[1]==key[0]:self.source._thumbnails.resume(entry)
-     except Exception:pass
-   from homeassistant.components import persistent_notification
-   persistent_notification.async_dismiss(self.hass,'desk_camera_playback_'+job['id'])
+  finally:await self.cleanup(key,job)
+ async def cleanup(self,key,job):
+  # This waiter only polls Core-side progress. Once the controller owns viewer
+  # refs, stop that polling/notice without sending any worker cancellation.
+  task=self.source.jobs.get(key,{}).get('task')
+  current=self.source.jobs.get(key,{})
+  if current.get('attempt')==job.get('attempt') and task and not task.done():task.cancel();await asyncio.gather(task,return_exceptions=True)
+  self.source.inventories.pop(key[0],None)
+  if hasattr(self.source,'_thumbnails') and not any(self.live(s) and r['key'][0]==key[0] for s,r in self.records.items()):
+   for entry in list(self.source._thumbnails.suspended):
+    try:
+     if self.source.camera_entry({'entry':entry})[1]==key[0]:self.source._thumbnails.resume(entry)
+    except Exception:pass
+  from homeassistant.components import persistent_notification
+  persistent_notification.async_dismiss(self.hass,'desk_camera_playback_'+job['id'])
  async def drain(self,workload):
   tasks=[t for key,t in list(self.drains.items()) if key[0]==workload]
   if tasks:await asyncio.gather(*(asyncio.shield(t) for t in tasks))
@@ -83,6 +90,21 @@ class Sessions:
     query={'entry':clip['entry'],'date':clip['date'],'startDate':start,'endDate':end,'desk_viewer':scope}
     result=await self.source.async_resolve_media(types.SimpleNamespace(identifier='tapo_control/?'+urlencode(query)))
     self.check(scope,key)
+    owner=getattr(self.source,'owner',None)
+    if owner and owner.enabled(workload):
+     from .recording_model import clip_id
+     from urllib.parse import urlsplit
+     serving=urlsplit(result.url).path.split('/')
+     if len(serving)<7 or serving[1:4]!=['api','desk_cluster','recording'] or serving[4]!=workload:raise ValueError('Recording route')
+     node,ident=serving[5:7]
+     if ident!=clip_id(workload,clip['date'],start,end):raise ValueError('Recording clip')
+     job=self.jobs.get(key,{})
+     grant=await bridge('camera_delivery',value={'workload':workload,'node':node,'id':ident,'attempt':job.get('attempt'),'viewer':scope,'deadline':time.time()+25})
+     self.check(scope,key)
+     self.jobs.setdefault(key,dict(workload=workload,node=node,id=ident))['external']=True
+     await self.cleanup(key,dict(job,workload=workload,node=node,id=ident))
+     self.check(scope,key)
+     return {'url':grant['url'],'mime_type':grant['mime_type'],'delivery':{k:grant[k] for k in ('touch_url','close_url','viewer','heartbeat_seconds','expires_in_seconds')}}
     return {'url':result.url,'mime_type':result.mime_type}
    except BaseException:
     self.records.pop(scope,None);self.orphan(key);raise
@@ -105,6 +127,7 @@ class Sessions:
    if not self.live(scope):self.records.pop(scope,None);self.orphan(r['key'])
   self.clients={k:v for k,v in self.clients.items() if time.monotonic()-v['at']<3600 or v['scope'] in self.records}
   for key,job in list(self.jobs.items()):
+   if job.get('external'):continue
    if any(self.live(scope,key) for scope in self.records):
     try:
      status=await bridge('camera_touch',value=job)

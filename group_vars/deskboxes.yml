@@ -49,6 +49,12 @@ desk_monitoring_load_aware_enabled: true
 # One LAN-only discovery owner; replicated checkpoints on all three nodes.
 desk_network_enabled: true
 
+# Owner-only recording sessions after the Guess canary; dedicated cutover only.
+# The live-only Makeup camera stays outside recording authority.
+desk_camera_recording_owner_workloads:
+  - tapo_c222_160
+  - tapo_c222_163
+
 # Owner selects a lightweight scan worker through node-specific Core NATS subjects.
 desk_network_scan_enabled: true
 # All replicas retain imports while standby; only the leased owner runs native jobs.

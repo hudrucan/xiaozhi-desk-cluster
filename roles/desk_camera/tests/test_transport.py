@@ -1,5 +1,6 @@
 """Offline RPC correlation, bounded cleanup, batching and rolling compatibility."""
 import asyncio,importlib.util,pathlib,sys,time,types,unittest
+from unittest.mock import patch,AsyncMock
 ROOT=pathlib.Path(__file__).parent
 if not (ROOT/'transport.py').exists():ROOT=ROOT.parent/'files'
 CORE=ROOT.parent.parent/'desk_homeassistant/files'
@@ -64,6 +65,17 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
   self.rpc.pending={str(i):(NODES[1],a.prefix,asyncio.get_running_loop().create_future()) for i in range(32)}
   with self.assertRaises(ValueError):await self.rpc.call(a,NODES[1],'lease',{})
   self.assertEqual(len(self.bus.messages),0)
+ async def test_local_recording_uses_async_ipc_and_metadata_capacity_reserves_lease_slots(self):
+  ipc=AsyncMock(return_value={'state':'queued'})
+  with patch.dict(sys.modules,{'media_rpc':types.SimpleNamespace(request=ipc)}):
+   value=await self.rpc.call(self.agents[0],NODES[0],'recording_v1',{'request_id':'a'*32})
+  self.assertEqual(value,{'state':'queued'});self.assertEqual(ipc.call_args.args[0]['sender'],NODES[0]);self.assertFalse(self.rpc.metadata_pending)
+  calls=[asyncio.create_task(self.rpc.call(self.agents[0],NODES[1],'recording_v1',{})) for _ in range(4)]
+  await asyncio.sleep(0)
+  with self.assertRaises(ValueError):await self.rpc.call(self.agents[0],NODES[1],'recording_v1',{})
+  self.bus.auto=True;self.assertEqual(await self.rpc.call(self.agents[0],NODES[1],'lease',{}),{'action':'lease'})
+  for task in calls:task.cancel()
+  await asyncio.gather(*calls,return_exceptions=True);self.assertFalse(self.rpc.metadata_pending);self.assertFalse(self.rpc.pending)
 class StatusTransport:
  def __init__(self,agents):self.agents=agents;self.calls=[];self.old=set();self.bad=set()
  async def call(self,a,node,action,value):

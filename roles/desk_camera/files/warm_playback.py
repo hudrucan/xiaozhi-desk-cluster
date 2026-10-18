@@ -5,7 +5,7 @@ owner. The process preloads SDK code; camera login remains owner/job-bound.
 """
 import asyncio,contextlib,json,os,pathlib,re,time
 from playback import validate,identity,session_handle
-from playback_worker import execute
+from playback_worker import execute,failure
 ROOT=pathlib.Path('/output')
 class Media:
  def __init__(self,worker,permitted):
@@ -36,7 +36,11 @@ class Media:
  def start(self,v):
   if set(v)!={'action','id','attempt','workload','generation','clip','session'}:raise ValueError('Media request')
   if not all(isinstance(v[k],str) and re.fullmatch('[a-f0-9]{32}',v[k]) for k in ('id','attempt','generation')):raise ValueError('Media identity')
-  job=validate(v['workload'],v['clip']);session=session_handle(v['session'])
+  from recording_owner import owner_mode
+  job=validate(v['workload'],v['clip']);session=v['session']
+  if owner_mode(v['workload']):
+   if session is not None:raise ValueError('Core handle in owner mode')
+  else:session=session_handle(session)
   if identity(job)!=v['id'] or v['attempt'] in self.tombstones:raise ValueError('Stale media request')
   if self.busy():
    c=self.current
@@ -60,7 +64,7 @@ class Media:
     return
    await asyncio.sleep(.25)
  async def run(self,c,job,session,path,options):
-  watch=asyncio.create_task(self.watch(c));stage='thumbnail_cleanup'
+  watch=asyncio.create_task(self.watch(c));stage='thumbnail_cleanup';tapo=None
   def save(value):
    nonlocal stage
    stage=value.get('stage',stage);value=dict(value,runtime='warm',warm_elapsed_seconds=round(time.monotonic()-c['started'],3))
@@ -69,20 +73,24 @@ class Media:
    # Playback preempts the node's thumbnail request, including its actual SDK
    # cleanup. No shared camera client may be mutated before that acknowledgement.
    if self.worker.current:await self.worker.cancel(self.worker.current[0])
-   save({'state':'preparing','stage':'camera_connection'})
-   tapo=await self.worker.client(c)
-   if not self.permitted(c['workload'],c['generation']):raise ValueError('Owner changed')
-   await asyncio.wait_for(execute(tapo,job,session,path,options,save,self.worker.control,lambda:self.permitted(c['workload'],c['generation'])),max(190,job['end']-job['start']+120))
+   if hasattr(self.worker,'recordings'):await self.worker.recordings.pause()
+   async with contextlib.AsyncExitStack() as stack:
+    if hasattr(self.worker,'admission'):await stack.enter_async_context(self.worker.admission)
+    save({'state':'preparing','stage':'camera_connection'})
+    tapo=await self.worker.client(c)
+    if not self.permitted(c['workload'],c['generation']):raise ValueError('Owner changed')
+    await asyncio.wait_for(execute(tapo,job,session,path,options,save,self.worker.control,lambda:self.permitted(c['workload'],c['generation'])),max(190,job['end']-job['start']+120))
    self.completed+=1;self.last={'state':'ready','seconds':round(time.monotonic()-c['started'],3),'workload':c['workload']}
   except asyncio.CancelledError:
    self.cancelled+=1;save({'state':'failed','stage':stage,'stop_reason':c.get('stop_reason','shutdown'),'error':'Playback closed or ownership changed.'});self.last={'state':'cancelled','reason':c.get('stop_reason','shutdown'),'workload':c['workload']}
    raise
   except Exception as e:
-   self.failed+=1;save({'state':'failed','stage':stage,'error_type':type(e).__name__,'error':'Recording preparation failed; retry when the worker is ready.'});self.last={'state':'failed','stage':stage,'error_type':type(e).__name__,'workload':c['workload']}
+   self.failed+=1;save(dict(state='failed',stage=stage,error_type=type(e).__name__,**failure(e,tapo)));self.last={'state':'failed','stage':stage,'error_type':type(e).__name__,'workload':c['workload']}
    saved=self.worker.clients.pop(c['workload'],None)
    if saved:self.worker.close(saved[1])
   finally:
    watch.cancel();await asyncio.gather(watch,return_exceptions=True)
+   if hasattr(self.worker,'recordings'):self.worker.recordings.resume()
    (path/'clip.mp4').unlink(missing_ok=True)
  async def stop(self):
   if self.busy():

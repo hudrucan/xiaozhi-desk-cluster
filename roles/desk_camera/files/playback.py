@@ -69,6 +69,10 @@ class Playback:
    try:
     v=json.loads((p.parent/'progress.json').read_bytes())
     value.update({k:v[k] for k in ('state','progress','total','error','format','generation') if k in v})
+    if v.get('reason')=='session_expired':
+     # Core may invalidate/reallocate only after the exact attempt has drained.
+     if self.active():value.update(state='preparing');value.pop('error',None)
+     else:value['reason']='session_expired'
    except Exception:pass
    if value.get('format')=='hls' and value['state'] in ('playable','ready'):value['state']='preparing' if self.active() else 'failed'
    if not self.active() and value['state'] in ('missing','preparing','playable','ready'):value.update(state='failed',error='Worker changed or preparation stopped; retry this clip.')
@@ -118,7 +122,10 @@ class Playback:
    return status
   if not self.agent.owned() or not self.agent.ready() or not self.agent.eligible():raise PlaybackError('worker_not_ready')
   if self.agent.local.get('memory_available_mib',0)<1200:raise PlaybackError('memory_low')
-  session=session_handle(session)
+  from recording_owner import owner_mode
+  if owner_mode(self.agent.c['workload']):
+   if session is not None:raise PlaybackError('session_missing')
+  else:session=session_handle(session)
   if shutil.disk_usage(ROOT if ROOT.exists() else ROOT.parent).free<512*1024*1024:raise PlaybackError('disk_low')
   self.current=ident;self.attempt=secrets.token_hex(16);self.stop_requested=False;self.viewer_until=time.monotonic()+30 if managed else None
   self.task=asyncio.create_task(self.run(job,ident,self.agent.generation,session));return dict(id=ident,node=self.agent.node,state='preparing',**({'attempt':self.attempt} if managed else {}))

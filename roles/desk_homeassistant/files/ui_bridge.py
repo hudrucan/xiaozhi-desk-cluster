@@ -69,9 +69,9 @@ class OnlineSync:
    elif v=={'action':'cameras'}:
     from camera_api import status
     result=await asyncio.to_thread(status)
-   elif v.get('action') in ('camera_prepare','camera_status','camera_inventory','camera_cancel','camera_touch') and set(v)=={'action','value'}:
+   elif v.get('action') in ('camera_prepare','camera_status','camera_inventory','camera_cancel','camera_touch','camera_recording','camera_delivery') and set(v)=={'action','value'}:
     from camera_api import playback
-    result=await playback({'camera_prepare':'prepare','camera_status':'status','camera_inventory':'inventory','camera_cancel':'cancel','camera_touch':'touch'}[v['action']],v['value'])
+    result=await playback({'camera_prepare':'prepare','camera_status':'status','camera_inventory':'inventory','camera_cancel':'cancel','camera_touch':'touch','camera_recording':'recording','camera_delivery':'delivery'}[v['action']],v['value'])
    elif v.get('action')=='camera_artifact' and set(v)=={'action','value'}:
     from camera_api import artifact
     result=artifact(v['value'])

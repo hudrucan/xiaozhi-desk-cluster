@@ -2,12 +2,32 @@ import asyncio,contextlib,hashlib,importlib.util,io,json,pathlib,sys,tempfile,ty
 from unittest.mock import AsyncMock,Mock,patch
 from PIL import Image
 BASE=pathlib.Path(__file__).resolve().parents[1]/'files';sys.path.insert(0,str(BASE));import thumbnail_worker as worker,thumbnail_fetch as fetch
+from playback_worker import CoreMediaSession,MediaSessionExpired
 b=io.BytesIO();Image.new('RGB',(32,18)).save(b,format='JPEG');JPEG=b.getvalue()
 sdk=types.ModuleType('pytapo.media_stream.snapshot');snapshot=Mock();sdk.getRecordingSnapshots=snapshot
 sys.modules.setdefault('pytapo',types.ModuleType('pytapo'));sys.modules.setdefault('pytapo.media_stream',types.ModuleType('pytapo.media_stream'));sys.modules['pytapo.media_stream.snapshot']=sdk
 class RuntimeTests(unittest.IsolatedAsyncioTestCase):
+ async def test_completed_read_retry_keeps_identity_during_playback_but_new_read_is_busy(self):
+  from test_recording_contract import query
+  request=query();key=('deskb3x',request['workload'],request['generation'],request['request_id'])
+  self.w.recordings.jobs[key]={};self.w.recordings.handle=Mock(return_value={'state':'done'});self.w.media.busy=Mock(return_value=True)
+  async def invoke(value):
+   reader=types.SimpleNamespace(readline=AsyncMock(return_value=json.dumps({'action':'recording_v1','id':value['request_id'],'sender':'deskb3x','request':value}).encode()+b'\n'))
+   writer=types.SimpleNamespace(write=Mock(),drain=AsyncMock(),close=Mock(),wait_closed=AsyncMock())
+   await self.w.handle(reader,writer);return json.loads(writer.write.call_args.args[0])['value']
+  self.assertEqual(await invoke(request),{'state':'done'});self.w.recordings.handle.assert_called_once()
+  self.assertEqual((await invoke(query(ident='c')))['reason'],'camera_busy');self.w.recordings.handle.assert_called_once()
+ async def test_metadata_cancel_and_deadline_also_fence_sdk_retries_before_drain(self):
+  from test_recording_contract import query
+  from recording_contract import ContractError
+  request=query();job={'request':request,'state':'running','until':0};self.w.recordings.jobs['test']=job
+  with patch.object(worker,'owner_mode',return_value=True):
+   with self.assertRaises(ContractError) as err:self.w.remaining(request['workload'],request['generation'])
+   self.assertEqual(err.exception.code,'deadline_exceeded');job.update(state='cancelling',reason='cancelled')
+   with self.assertRaises(ContractError) as err:self.w.remaining(request['workload'],request['generation'])
+   self.assertEqual(err.exception.code,'cancelled')
  async def asyncSetUp(self):
-  self.w=worker.Worker();self.client=types.SimpleNamespace(executeFunction=Mock(return_value={'playback':{'search_detection_list':[{'start_time':1792112401}]}}));self.w.client=AsyncMock(return_value=self.client);self.closed=False
+  self.w=worker.Worker();self.client=CoreMediaSession();self.client.executeFunction=Mock(return_value={'playback':{'search_detection_list':[{'start_time':1792112401}]}});self.w.client=AsyncMock(return_value=self.client);self.closed=False
   self.job={'id':'a'*32,'workload':'tapo_c222_160','generation':'b'*32,'clip':{'date':'20261016','start':1792112400,'end':1792112460},'session':{'user_id':12,'player_id':'native'}}
   self.permission=patch.object(worker,'permitted',return_value=True);self.permission.start();self.addCleanup(self.permission.stop)
   async def pictures(*args,**kwargs):
@@ -40,7 +60,22 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
   with patch.object(worker,'permitted',return_value=False):
    with self.assertRaises(ValueError):await self.w.produce(self.job)
   self.w.client.assert_not_called()
+ async def test_expired_snapshot_is_not_retried_as_preview_and_ipc_reason_is_safe(self):
+  async def expired(*args,**kwargs):
+   self.client.getUserID(True)
+   yield JPEG
+  snapshot.side_effect=expired;self.w.preview=AsyncMock()
+  reader=types.SimpleNamespace(readline=AsyncMock(return_value=json.dumps(dict(self.job,action='fetch')).encode()+b'\n'))
+  writer=types.SimpleNamespace(write=Mock(),drain=AsyncMock(),close=Mock(),wait_closed=AsyncMock())
+  await self.w.handle(reader,writer)
+  reply=writer.write.call_args.args[0]
+  self.assertEqual(json.loads(reply),{'ok':False,'reason':'session_expired'});self.w.preview.assert_not_awaited();self.assertIsNone(self.w.current)
 class FetchTests(unittest.TestCase):
+ def test_ipc_expiry_reason_is_bounded_and_preserved(self):
+  with patch.object(fetch.socket,'socket') as sock:
+   sock.return_value.__enter__.return_value.makefile.return_value=io.BytesIO(b'{"ok":false,"reason":"session_expired"}\n')
+   with self.assertRaises(fetch.PlaybackError) as err:fetch.rpc({'action':'fetch'})
+  self.assertEqual(err.exception.code,'session_expired')
  def setUp(self):
   self.a=types.SimpleNamespace(node='deskb2x',generation='b'*32,c={'workload':'tapo_c222_160'},owned=lambda:True,ready=lambda:True,playback=types.SimpleNamespace(active=lambda:False));self.f=fetch.Fetcher();self.body=json.dumps({'clip':{'date':'20261016','start':1792112400,'end':1792112460},'session':{'user_id':12,'player_id':'native'}}).encode();self.scope={'workload':'tapo_c222_160','id':'a'*32,'source':'fetch','generation':'b'*32,'digest':hashlib.sha256(self.body).hexdigest()}
  def test_bound_request_forwards_only_to_root_worker(self):

@@ -1,0 +1,141 @@
+{
+  "date": "2026-10-18",
+  "scope": "Phase 0: preserve Core media handle authority in workers; allocator remains on Core",
+  "result": "PASS",
+  "core": {
+    "owner": "deskb3x",
+    "checkpoint_revision": 51,
+    "certified_copies": 3,
+    "pending_disk_changes": false,
+    "clean_checkpoint_restart": "PASS",
+    "component_in_checkpoint": true,
+    "active_source_matches": "PASS",
+    "desk_cluster_startup_errors": 0,
+    "vip_http_status": 200,
+    "standby_note": "deskb1x retained the same quorum_or_checkpoint_unavailable last-error marker as before rollout; its certified copy is synced and voter ready.",
+    "initial_rollout_revision": 50
+  },
+  "workers": {
+    "deskb1x": {
+      "warm_ready": true,
+      "voter_ready": true,
+      "nats_connected": true,
+      "mounted_source_matches": "PASS",
+      "synthetic_refresh_and_allocation_guard": "PASS"
+    },
+    "deskb2x": {
+      "warm_ready": true,
+      "voter_ready": true,
+      "nats_connected": true,
+      "mounted_source_matches": "PASS",
+      "synthetic_refresh_and_allocation_guard": "PASS"
+    },
+    "deskb3x": {
+      "warm_ready": true,
+      "voter_ready": true,
+      "nats_connected": true,
+      "mounted_source_matches": "PASS",
+      "synthetic_refresh_and_allocation_guard": "PASS"
+    }
+  },
+  "camera_owners": {
+    "tapo_c222_161": "deskb1x",
+    "tapo_c222_163": "deskb1x",
+    "tapo_c222_160": "deskb2x"
+  },
+  "checks": {
+    "unique_ready_owner_per_camera": "PASS",
+    "ansible_rollout": "PASS: failed=0, unreachable=0 on all three nodes",
+    "protected_service_pid_config_dns_guard": "PASS",
+    "network_dashboard_monitoring_camera_relay_proxy_agent_states_and_pids": "PASS",
+    "native_tapo_vendor_source_unchanged": "PASS",
+    "offline_regressions_before_rollout": "PASS: 112 tests",
+    "extracted_installed_sdk_expiry_branches_before_rollout": "PASS: 2 offline probes",
+    "third_party_app_coexistence": "NOT RUN",
+    "core_failover": "NOT RUN",
+    "uninterrupted_browser_playback": "NOT ESTABLISHED",
+    "cpu_or_ram_improvement": "NOT MEASURED",
+    "browser_recording_playback": "PASS: two successive uncached Guess .163 clips on r51 without folder reopen/retry",
+    "last_view_cancel_and_cleanup": "PASS",
+    "next_clip_after_cancel": "PASS",
+    "thumbnail_recovery": "PASS: 13 Ready, 0 Loading/Paused/Unavailable in final browser sample",
+    "core_follow_up_regressions": "PASS: 48 HA tests (20 recordings, 19 thumbnails, 9 viewer lifecycle)",
+    "camera_physical_controls": "NOT RUN"
+  },
+  "unchanged": [
+    "lease deadlines and fencing",
+    "placement policy",
+    "SDK version",
+    "camera settings",
+    "native Core media allocator"
+  ],
+  "source_sha256": {
+    "roles/desk_camera/files/playback_worker.py": "76928a8fcdb495ba158b2bf777700c2e57519a91214d7cbc21dadeabbc05d678",
+    "roles/desk_camera/files/thumbnail_worker.py": "8c14c614fc7bf1ff9e728cc78a65a07468f433b30181c8f7aac2124678820a88",
+    "roles/desk_camera/files/warm_playback.py": "73b757e08f3a091430eda4e43527293cdfe43df6b30e7ca2fa19e76e3e936fd6",
+    "roles/desk_camera/files/playback.py": "85afca6745d636c2f6c3c067e54f9a298a8004a6bb10f3231a7fa2ccb5a83a42",
+    "roles/desk_camera/files/thumbnail_fetch.py": "5a71597ccbecff93cfe587a49c166dfeccda937ba34b48c9d4a7025f8fdbf9a4",
+    "roles/desk_camera/files/controller.py": "edcd8e4db1cfe1ec53973d869000160e8b055364f662dc67f8ed8362dd564255",
+    "roles/desk_homeassistant/files/desk_cluster/recording_model.py": "c01e28d132453e61ca498f90e36dfceb361d9ea511ea8f9fb7e26f2f064d42a0",
+    "roles/desk_homeassistant/files/desk_cluster/camera_recordings.py": "125f37a6ca6b84863c3a120383d7d1a1e9bdb48575a66d204c14dde2d271e540",
+    "roles/desk_homeassistant/files/desk_cluster/recording_thumbnails.py": "71159d2064dcacfdc408b9e9c7e7c7ff13a0d6b9862a1ef7e2aafa5ee9066cbe"
+  },
+  "follow_up": {
+    "initial_revision": 50,
+    "observed_problem": "Two recording_index failures with session_expired when reusing Core cached handles; an explicit reopen/retry recovered the first clip but the next clip failed again after cancellation.",
+    "fix": "For a new uncached playback only, Core calls getUserID(True) after thumbnail drain and under the existing entry lock. Cached/running playback does not allocate; workers remain unable to allocate or refresh.",
+    "revision": 51,
+    "worker_restart_required": false,
+    "background_polling_added": false,
+    "additional_core_tests": 2
+  },
+  "live_canary": {
+    "camera": "Guess (.163)",
+    "worker": "deskb1x",
+    "first": {
+      "nominal_clip_seconds": 109,
+      "first_browser_sample_seconds_after_click": 13.093,
+      "browser_current_time": 5.073741,
+      "browser_playlist_duration": 12.032,
+      "video_size": [
+        2560,
+        1440
+      ],
+      "ready_state": 4,
+      "video_error": null,
+      "worker_playable_age_seconds": 8.595,
+      "cancel": "controller_cancel",
+      "cancelled_worker_age_seconds": 22.577,
+      "cleanup_acknowledged": true
+    },
+    "second": {
+      "nominal_clip_seconds": 26,
+      "first_browser_sample_seconds_after_click": 11.826,
+      "browser_current_time": 3.925294,
+      "browser_playlist_duration": 12.016666666666667,
+      "worker_completed_seconds": 18.311,
+      "final_browser_current_time": 28.032,
+      "final_browser_duration": 28.032,
+      "final_browser_ended": true,
+      "video_size": [
+        2560,
+        1440
+      ],
+      "ready_state": 4,
+      "video_error": null
+    },
+    "thumbnail_final": {
+      "ready": 13,
+      "loading": 0,
+      "paused": 0,
+      "unavailable": 0
+    },
+    "new_media_failure_count_on_r51": 0,
+    "all_workers_idle_afterwards": true,
+    "limits": [
+      "Observed sample times are upper bounds on startup, not exact time to first frame.",
+      "Two clips on Guess only; Bed recording playback was not exercised in this follow-up.",
+      "No Core failover, app coexistence, physical actuation, power-cut or CPU-saving claim."
+    ]
+  }
+}

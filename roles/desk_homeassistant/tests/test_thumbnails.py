@@ -4,7 +4,8 @@ from PIL import Image
 aiohttp=types.SimpleNamespace(ClientTimeout=lambda **kwargs:kwargs)
 BASE=pathlib.Path(__file__).resolve().parents[1]/'files/desk_cluster'
 spec=importlib.util.spec_from_file_location('thumbnail_cache',BASE/'thumbnail_cache.py');cache=importlib.util.module_from_spec(spec);spec.loader.exec_module(cache)
-ns={'asyncio':asyncio,'datetime':datetime,'hashlib':hashlib,'io':io,'json':json,'re':re,'secrets':secrets,'time':time,'Cache':cache.Cache,'aiohttp':aiohttp,'EVENT_HOMEASSISTANT_STOP':'stop','PLACEHOLDER':b'placeholder','PAUSED':b'paused'}
+spec=importlib.util.spec_from_file_location('thumbnail_recording_model',BASE/'recording_model.py');model=importlib.util.module_from_spec(spec);spec.loader.exec_module(model)
+ns={'asyncio':asyncio,'datetime':datetime,'hashlib':hashlib,'io':io,'json':json,'re':re,'secrets':secrets,'time':time,'Cache':cache.Cache,'aiohttp':aiohttp,'EVENT_HOMEASSISTANT_STOP':'stop','PLACEHOLDER':b'placeholder','PAUSED':b'paused','MediaSessionExpired':model.MediaSessionExpired}
 tree=ast.parse((BASE/'recording_thumbnails.py').read_text());exec(compile(ast.Module(body=[n for n in tree.body if isinstance(n,(ast.FunctionDef,ast.ClassDef)) and n.name not in ('ThumbnailView','ThumbnailScopeView')],type_ignores=[]),'recording_thumbnails','exec'),ns);Thumbnails=ns['Thumbnails']
 buffer=io.BytesIO();Image.new('RGB',(32,18)).save(buffer,format='JPEG');JPEG=buffer.getvalue()
 class CacheTests(unittest.TestCase):
@@ -62,6 +63,25 @@ class ThumbnailTests(unittest.IsolatedAsyncioTestCase):
   self.m.remote.side_effect=remote;a=asyncio.create_task(self.get());await opened.wait();await self.m.pause('entry');self.assertTrue(cleaned.is_set());self.assertEqual((await a)[1],'paused');self.assertFalse(self.source.locks['entry'].locked())
  async def test_busy_does_not_allocate_or_call_worker(self):
   self.source.active.return_value=True;self.assertEqual((await self.get())[1],'paused');self.controller.getUserID.assert_not_called();self.m.remote.assert_not_called()
+ async def test_expired_handle_invalidates_after_lock_release_without_negative_cache(self):
+  async def invalidate(entry,session):
+   self.assertEqual((entry,session),('entry',{'user_id':12,'player_id':'native-player'}));self.assertFalse(self.source.locks['entry'].locked())
+  self.source.invalidate_media_session=AsyncMock(side_effect=invalidate);self.m.remote.side_effect=model.MediaSessionExpired()
+  self.assertEqual((await self.get())[1],'placeholder');self.source.invalidate_media_session.assert_awaited_once()
+  self.assertFalse(self.m.cache.data);self.assertEqual(self.m.last['reason'],'session_expired');self.m.remote.assert_awaited_once()
+ async def test_remote_expiry_is_typed_only_after_explicit_cancel_cleanup(self):
+  calls=[];cleaned=[]
+  class Reply:
+   status=409;headers={'X-Desk-Media-Error':'session_expired'}
+   async def __aenter__(self):return self
+   async def __aexit__(self,*args):pass
+   async def read(self):cleaned.append(True);return b''
+  class Client:
+   def post(self,*args,**kwargs):calls.append(kwargs);return Reply()
+  self.bridge.return_value={'url':'http://worker/thumbnail','authorization':'test-token'}
+  with patch.dict(ns,{'async_get_clientsession':lambda _:Client()}):
+   with self.assertRaises(model.MediaSessionExpired):await Thumbnails.remote(self.m,'tapo_c222_160',{'owner':'deskb2x','generation':'a'*32},{'date':'20261016','start':self.start,'end':self.end},{'user_id':12,'player_id':'native-player'})
+  self.assertEqual(len(calls),2);self.assertEqual(calls[1]['data'],b'');self.assertTrue(cleaned)
  async def test_paused_preview_does_not_poison_cache_and_cached_jpeg_still_wins(self):
   self.source.active.return_value=True
   self.assertEqual((await self.get())[1],'paused');self.assertFalse(self.m.cache.data)

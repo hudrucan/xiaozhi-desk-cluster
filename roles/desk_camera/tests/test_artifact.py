@@ -1,4 +1,4 @@
-import base64,http.server,json,pathlib,secrets,sys,tempfile,threading,time,types,unittest,urllib.request,urllib.error
+import base64,hashlib,http.server,json,pathlib,secrets,sys,tempfile,threading,time,types,unittest,urllib.request,urllib.error
 from unittest.mock import patch
 BASE=pathlib.Path(__file__).resolve().parents[2];sys.path.insert(0,str(BASE/'desk_camera/files'));sys.path.insert(0,str(BASE/'desk_homeassistant/files'));sys.modules.setdefault('nats',types.ModuleType('nats'))
 import controller,playback
@@ -25,6 +25,14 @@ class ArtifactTests(unittest.TestCase):
   request=urllib.request.Request(self.url,headers={'X-Desk-Artifact':self.token(),'Range':'bytes=100-199'})
   with urllib.request.urlopen(request) as response:
    self.assertEqual(response.status,206);self.assertEqual(response.headers['Content-Range'],'bytes 100-199/2048');self.assertEqual(len(response.read()),100)
+ def test_thumbnail_session_expiry_is_typed_only_after_authentication(self):
+  from unittest.mock import Mock
+  self.server.thumbnail_fetcher=types.SimpleNamespace(request=Mock(side_effect=playback.PlaybackError('session_expired')))
+  data=b'{}';scope={'workload':self.workload,'id':self.ident,'source':'fetch','generation':'b'*32,'digest':hashlib.sha256(data).hexdigest()}
+  url=self.url.replace('/artifact/','/thumbnail/')
+  for token,status in (('',404),(self.token(action='thumbnail',value=scope),409)):
+   with self.assertRaises(urllib.error.HTTPError) as err:urllib.request.urlopen(urllib.request.Request(url,data=data,headers={'X-Desk-Artifact':token}))
+   self.assertEqual(err.exception.code,status);self.assertEqual(err.exception.headers.get('X-Desk-Media-Error'),'session_expired' if status==409 else None);err.exception.close()
  def test_only_exact_running_core_peer_can_read_signed_artifact(self):
   self.server.test_peer='10.88.0.18'
   result=types.SimpleNamespace(stdout=b'{"running":true,"networks":{"podman":{"IPAddress":"10.88.0.18"}}}')

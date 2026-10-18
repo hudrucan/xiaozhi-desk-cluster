@@ -9,6 +9,7 @@ from custom_components.tapo_control.media_source import TapoMediaSource,parse_id
 from . import bridge
 from .camera_storage import HOSTS,storage_state
 from .recording_model import PART_SECONDS,MESSAGES,cached_state,clip_id,label,parts
+from .recording_remote import OwnerAPI,install_guard
 DOMAIN='tapo_control'
 LOADING_IMAGE='data:image/svg+xml;base64,'+base64.b64encode(pathlib.Path(__file__).with_name('recording-loading.svg').read_bytes()).decode()
 async def async_get_media_source(hass):return WorkerRecordings(hass)
@@ -17,12 +18,23 @@ class WorkerRecordings(TapoMediaSource):
  def __init__(self,hass):
   super().__init__(hass,None);self.domain=DOMAIN;self.jobs={};self.index_cache={};self.inventories={};self.locks={};self.thumbnail_reports={}
   hass.data.setdefault('desk_cluster',{})['recording_source']=self
+  self.owner=OwnerAPI(hass,bridge)
  def camera_entry(self,query):
   entry=self.hass.config_entries.async_get_entry(query.get('entry',''))
   workload=HOSTS.get(entry.data.get('ip_address')) if entry and entry.domain==DOMAIN else None
   if not workload or query.get('childID'):raise Unresolvable('Camera recording entry is unavailable.')
   return entry,workload,self.hass.data.get(DOMAIN,{}).get(entry.entry_id,{})
  def active(self,workload):return any(j.get('workload')==workload and j.get('task') and not j['task'].done() for j in self.jobs.values())
+ async def invalidate_media_session(self,entry_id,session):
+  if not entry_id or not session:return
+  async with self.locks.setdefault(entry_id,asyncio.Lock()):
+   device=self.hass.data.get(DOMAIN,{}).get(entry_id,{})
+   controller=device.get('controller')
+   # A delayed old failure must not discard a newer handle allocated by Core.
+   if controller and controller.userID==session['user_id'] and controller.playerID==session['player_id']:
+    controller.userID=False
+    for key in list(self.index_cache):
+     if parse_identifier(key).get('entry')==entry_id:self.index_cache.pop(key,None)
  async def inventory(self,workload):
   saved=self.inventories.get(workload)
   if saved and time.monotonic()-saved[0]<3:return saved[1]
@@ -55,8 +67,9 @@ class WorkerRecordings(TapoMediaSource):
   else:
    lock=self.locks.setdefault(entry.entry_id,asyncio.Lock())
    async with lock:
-    try:value=await super().async_browse_media(item)
-    except Unresolvable as err:
+    try:
+     value=await self.owner.browse(self,query,entry,workload,device) if self.owner.enabled(workload) else await super().async_browse_media(item)
+    except (Unresolvable,ValueError,TimeoutError) as err:
      if not cached:raise Unresolvable('The camera recording session is busy or temporarily unavailable. Retry shortly.') from err
      value=copy.deepcopy(cached[1]);value.title+=' · Last known list'
     else:
@@ -64,6 +77,7 @@ class WorkerRecordings(TapoMediaSource):
      self.index_cache[key]=(time.monotonic(),copy.deepcopy(value))
   return self.decorate(value,workload,inv)
  async def thumbnail_check(self,query,entry,workload,device):
+  if self.owner.enabled(workload):raise Unresolvable('This camera uses owner-side previews.')
   # Explicit diagnostic folder only. Normal browsing never starts a JPEG job.
   try:date=datetime.datetime.strptime(query['date'],'%Y-%m-%d').strftime('%Y%m%d')
   except (KeyError,ValueError):raise Unresolvable('Select a valid recording date.') from None
@@ -151,9 +165,11 @@ class WorkerRecordings(TapoMediaSource):
   lock=self.locks.setdefault(entry.entry_id,asyncio.Lock())
   async with lock:
    session=None
-   if not cached:
+   if not cached and not self.owner.enabled(workload):
     try:
-     controller=device['controller'];uid=await self.hass.async_add_executor_job(controller.getUserID)
+     # A handle cached during browsing may expire after thumbnail/media cleanup.
+     # Allocate on Core only, after thumbnail drain and under this entry lock.
+     controller=device['controller'];uid=await self.hass.async_add_executor_job(controller.getUserID,True)
      session={'user_id':uid,'player_id':controller.playerID}
     except Exception:raise Unresolvable('The camera recording session is busy. Retry shortly.') from None
    if manager:manager.check(viewer,key)
@@ -164,7 +180,7 @@ class WorkerRecordings(TapoMediaSource):
     if manager:manager.bind(viewer,key,dict(result,workload=workload))
     return self.play(workload,result)
    self.jobs={k:j for k,j in self.jobs.items() if j.get('task') and not j['task'].done()}
-   job=dict(result,workload=workload,duration=clip['end']-clip['start']);self.jobs[key]=job
+   job=dict(result,workload=workload,duration=clip['end']-clip['start'],_entry=entry.entry_id,_session=session);self.jobs[key]=job
    if manager:manager.bind(viewer,key,job)
    notice='desk_camera_playback_'+result['id']
    persistent_notification.async_create(self.hass,'Preparing the clip on '+result['node']+'. HA is waiting for preparation before opening the player. This can take close to the part duration.',title='Preparing camera recording',notification_id=notice)
@@ -178,7 +194,7 @@ class WorkerRecordings(TapoMediaSource):
   else:await asyncio.shield(job['task'])
   try:status=await bridge('camera_status',value={k:job[k] for k in ('workload','node','id')})
   except Exception:raise Unresolvable('Unable to check the prepared clip. Reopen its folder and retry.') from None
-  if status.get('state') not in ('ready','playable'):raise Unresolvable('The worker could not prepare this clip. Reopen its folder and retry.')
+  if status.get('state') not in ('ready','playable'):raise Unresolvable(MESSAGES.get(status.get('reason'),'The worker could not prepare this clip. Reopen its folder and retry.'))
   return self.play(workload,dict(job,**status))
  def play(self,workload,result):
   path='/api/desk_cluster/recording/'+workload+'/'+result['node']+'/'+result['id']
@@ -187,6 +203,7 @@ class WorkerRecordings(TapoMediaSource):
    return PlayMedia(async_sign_path(self.hass,path,datetime.timedelta(hours=2)),'application/x-mpegURL')
   return PlayMedia(async_sign_path(self.hass,path,datetime.timedelta(hours=2)),'video/mp4')
  async def wait(self,job,notice):
+  message='The worker could not finish. Reopen the folder and select the clip to retry.'
   try:
    deadline=time.monotonic()+max(210,job['duration']+150)
    while time.monotonic()<deadline:
@@ -196,16 +213,20 @@ class WorkerRecordings(TapoMediaSource):
     if status['state']=='ready':
      self.inventories.pop(job['workload'],None)
      persistent_notification.async_create(self.hass,'The clip is ready on '+job['node']+'. Reopen its date or parts folder in Tapo: Recordings to see ✓ Downloaded.',title='Camera recording ready',notification_id=notice);return
-    if status['state'] in ('failed','missing'):raise ValueError()
+    if status['state'] in ('failed','missing'):
+     if status.get('reason')=='session_expired':
+      await self.invalidate_media_session(job.get('_entry'),job.get('_session'));message=MESSAGES['session_expired']
+     raise ValueError()
    raise TimeoutError()
   except asyncio.CancelledError:raise
-  except Exception:persistent_notification.async_create(self.hass,'The worker could not finish. Reopen the folder and select the clip to retry.',title='Camera recording interrupted',notification_id=notice)
+  except Exception:persistent_notification.async_create(self.hass,message,title='Camera recording interrupted',notification_id=notice)
   finally:
    if 'available' in job:job['available'].set()
 
 def install(hass):
  """Adapt only the pinned native media factory; vendor files remain unchanged."""
  from custom_components.tapo_control import media_source as native
+ install_guard(hass)
  original=native.async_get_media_source;native.async_get_media_source=async_get_media_source
  from homeassistant.const import EVENT_HOMEASSISTANT_STOP
  hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP,lambda _:setattr(native,'async_get_media_source',original))

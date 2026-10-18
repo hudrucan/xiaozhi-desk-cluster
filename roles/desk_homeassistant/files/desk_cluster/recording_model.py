@@ -7,7 +7,9 @@ MESSAGES={
  'worker_not_ready':'The camera worker is changing or not ready. Retry when Cluster shows Ready.',
  'memory_low':'The worker does not have enough free memory to prepare this clip. Retry later.',
  'disk_low':'The worker does not have enough free cache space to prepare this clip.',
- 'session_missing':'The cached clip expired or its recording session is unavailable. Reopen the date folder and retry.'}
+ 'session_missing':'The cached clip expired or its recording session is unavailable. Reopen the date folder and retry.',
+ 'session_expired':'The camera recording session expired. Reopen its date folder and retry.'}
+class MediaSessionExpired(ValueError):pass
 def clip_id(workload,date,start,end):
  value={'workload':workload,'date':date.replace('-',''),'start':int(start),'end':int(end)}
  return hashlib.sha256(json.dumps(value,sort_keys=True,separators=(',',':')).encode()).hexdigest()[:32]

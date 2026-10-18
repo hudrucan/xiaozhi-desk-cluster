@@ -13,7 +13,19 @@
     path: '{{ item }}'
     state: directory
     mode: '0700'
-  loop: [/etc/desk-camera, /var/lib/desk-camera, /var/lib/desk-camera/deps, /var/lib/desk-camera/playback, /var/lib/desk-camera/cache/hot, /var/lib/desk-camera/cache/cold, /usr/local/libexec/desk-camera/components]
+  loop: [/etc/desk-camera, /etc/desk-camera/recording-policy, /var/lib/desk-camera, /var/lib/desk-camera/deps, /var/lib/desk-camera/playback, /var/lib/desk-camera/cache/hot, /var/lib/desk-camera/cache/cold, /usr/local/libexec/desk-camera/components]
+- name: Seed inactive worker authority only; cutover uses camera-recording-owner.yml
+  ansible.builtin.copy:
+    content: '{"version":1,"workloads":[]}'
+    dest: /etc/desk-camera/recording-policy/owner.json
+    force: false
+    mode: '0600'
+- name: Seed desired Core guard on a new node without changing active authority
+  ansible.builtin.copy:
+    content: '{{ {"version":1,"workloads":desk_camera_recording_owner_workloads | default([])} | to_json }}'
+    dest: /etc/desk-camera/recording-core-policy.json
+    force: false
+    mode: '0600'
 - ansible.builtin.copy:
     src: '{{ playbook_dir }}/secret/camera/{{ inventory_hostname }}.json'
     dest: /etc/desk-camera/config.json
@@ -43,7 +55,7 @@
     src: '{{ item }}'
     dest: '/usr/local/libexec/desk-camera/{{ item }}'
     mode: '0600'
-  loop: [controller.py, transport.py, runtime.py, install_nats.py, health.py, playback.py, playback_worker.py, hls_worker.py, hls_files.py, thumbnail_decode.py, thumbnail_fetch.py, thumbnail_worker.py, warm_playback.py, media_rpc.py, cache_gc.py]
+  loop: [controller.py, transport.py, runtime.py, install_nats.py, health.py, playback.py, playback_worker.py, hls_worker.py, hls_files.py, thumbnail_decode.py, thumbnail_fetch.py, thumbnail_worker.py, warm_playback.py, media_rpc.py, cache_gc.py, recording_contract.py, recording_jobs.py, recording_owner.py, media_delivery.py]
   register: camera_helpers
 - ansible.builtin.unarchive:
     src: components.tgz

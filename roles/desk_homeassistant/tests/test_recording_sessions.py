@@ -78,4 +78,41 @@ class ViewerTests(unittest.IsolatedAsyncioTestCase):
    self.source.jobs[self.key]['attempt']=job['attempt']
    await self.m.cancel(self.key,job)
    self.assertTrue(waiter.cancelled());self.assertNotIn(self.key[0],self.source.inventories)
+ async def test_core_stop_and_sweep_leave_detached_job_to_browser_deadline(self):
+  await self.m.action('u',self.view())
+  job={'workload':self.key[0],'node':'deskb3x','id':'e'*32,'attempt':'f'*32}
+  self.m.bind('b'*32,self.key,job);self.m.jobs[self.key]['external']=True
+  await self.m.sweep();ns['bridge'].assert_not_awaited()
+  self.m.cancel=AsyncMock();await self.m.stop(None)
+  self.m.cancel.assert_not_awaited();self.assertFalse(self.m.jobs)
+ async def test_second_core_viewer_binding_keeps_existing_detached_authority(self):
+  await self.m.action('u',self.view())
+  job={'workload':self.key[0],'node':'deskb3x','id':'e'*32,'attempt':'f'*32}
+  self.m.bind('b'*32,self.key,job);self.m.jobs[self.key]['external']=True
+  await self.m.action('u',self.view('c','d'));self.m.bind('d'*32,self.key,job)
+  self.assertTrue(self.m.jobs[self.key]['external'])
+  self.m.bind('d'*32,self.key,dict(job,attempt='0'*32))
+  self.assertNotIn('external',self.m.jobs[self.key])
+ async def test_authenticated_open_mints_exact_detached_viewer_and_core_stop_does_not_cancel(self):
+  model=types.ModuleType('delivery_test.recording_model')
+  exec(compile((PATH.parent/'recording_model.py').read_text(),'recording_model.py','exec'),model.__dict__)
+  ident=model.clip_id(*self.key);scope='b'*32;job=dict(workload=self.key[0],node='deskb3x',id=ident,attempt='f'*32)
+  waiter=asyncio.create_task(asyncio.Event().wait());self.tasks.append(waiter)
+  self.source.jobs[self.key]=dict(job,task=waiter)
+  self.source.owner=types.SimpleNamespace(enabled=lambda workload:True)
+  async def resolve(item):
+   self.m.bind(scope,self.key,job)
+   return types.SimpleNamespace(url='/api/desk_cluster/recording/'+self.key[0]+'/deskb3x/'+ident+'/index.m3u8?authSig=legacy',mime_type='application/x-mpegURL')
+  self.source.async_resolve_media=resolve
+  base='/desk-camera-media/v1/deskb3x/'+'a'*64+'/'
+  ns['bridge']=AsyncMock(return_value=dict(url=base+'index.m3u8',mime_type='application/x-mpegURL',touch_url=base+'touch',close_url=base+'close',viewer=scope,heartbeat_seconds=5,expires_in_seconds=7200))
+  components=types.ModuleType('homeassistant.components');components.persistent_notification=Mock()
+  with patch.dict(ns,{'__package__':'delivery_test'}),patch.dict(sys.modules,{'delivery_test.recording_model':model,'homeassistant.components':components}):
+   result=await self.m.action('u',self.view())
+  self.assertTrue(waiter.cancelled());components.persistent_notification.async_dismiss.assert_called_once_with(self.source.hass,'desk_camera_playback_'+ident)
+  self.assertEqual(result['url'],base+'index.m3u8');self.assertEqual(result['delivery']['viewer'],scope)
+  request=ns['bridge'].await_args
+  self.assertEqual(request.args,('camera_delivery',));self.assertEqual({k:v for k,v in request.kwargs['value'].items() if k!='deadline'},dict(job,viewer=scope))
+  self.assertTrue(time.time()<request.kwargs['value']['deadline']<time.time()+26)
+  self.m.cancel=AsyncMock();await self.m.stop(None);self.m.cancel.assert_not_awaited()
 if __name__=='__main__':unittest.main()

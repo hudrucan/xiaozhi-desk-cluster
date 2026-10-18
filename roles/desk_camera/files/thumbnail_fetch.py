@@ -1,6 +1,6 @@
 """Signed HTTP to a root-only warm camera worker. No camera I/O in controller."""
 import hashlib,json,pathlib,re,socket,threading,time
-from playback import session_handle
+from playback import session_handle,PlaybackError
 SOCKET='/run/desk-camera-thumbnails/worker.sock'
 MAX_IMAGE=2*1024*1024
 
@@ -11,7 +11,9 @@ def rpc(value,timeout=45):
    raw=f.readline(4097)
    if len(raw)>4096:raise ValueError('Worker header')
    header=json.loads(raw)
-   if header.get('ok') is not True:raise ValueError('Thumbnail worker unavailable')
+   if header.get('ok') is not True:
+    if header.get('reason')=='session_expired':raise PlaybackError('session_expired')
+    raise ValueError('Thumbnail worker unavailable')
    size=header.get('bytes',0)
    if type(size) is not int or not 0<=size<=MAX_IMAGE:raise ValueError('Worker size')
    data=f.read(size)
@@ -38,7 +40,11 @@ class Fetcher:
   try:
    value=json.loads(data)
    if set(value)!={'clip','session'}:raise ValueError('Fetch body')
-   clip=value['clip'];session=session_handle(value['session'])
+   from recording_owner import owner_mode
+   clip=value['clip'];session=value['session']
+   if owner_mode(scope['workload']):
+    if session is not None:raise ValueError('Core handle in owner mode')
+   else:session=session_handle(session)
    if set(clip)!={'date','start','end'} or not re.fullmatch('[0-9]{8}',clip['date']) or type(clip['start']) is not int or type(clip['end']) is not int or not 1500000000<=clip['start']<clip['end']<=2200000000 or clip['end']-clip['start']>86400:raise ValueError('Clip range')
    import datetime
    day=datetime.datetime.strptime(clip['date'],'%Y%m%d').replace(tzinfo=datetime.timezone.utc).timestamp()

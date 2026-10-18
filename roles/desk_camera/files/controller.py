@@ -51,7 +51,7 @@ class Controller:
   self.c=c;self.node=c['node'];self.members=c['members'];self.root,self.run_dir=paths(c);self.root.mkdir(parents=True,exist_ok=True,mode=0o700);self.run_dir.mkdir(parents=True,exist_ok=True,mode=0o700);self.lease=Lease(self.root/'vote.json')
   self.prefix=PREFIX if c['workload']=='tapo_c222_160' else PREFIX+'.'+c['workload'];self.telemetry=telemetry or Telemetry();self.health=CameraHealth();self.owner_seen=None;self.owner_changed_at=None;self.previous_owner=None
   self.until=0;self.term=None;self.generation=None;self.transport=None;self.fleet=None;self.stop=asyncio.Event();self.nonces={};self.heads={};self.local=None;self.local_at=0;self.started_at=0;self.cooldown=0
-  self.files=files or StatusFiles();self.playback=Playback(self)
+  self.files=files or StatusFiles();self.playback=Playback(self);self.recording_tasks=set()
   self.opener=urllib.request.build_opener(urllib.request.ProxyHandler({}))
  def owned(self):return self.term is not None and clock()<self.until
  def eligible(self):
@@ -93,6 +93,9 @@ class Controller:
   except Exception:pass
  def permit(self):atomic(self.run_dir/'permit.json',encoded({'until':self.until,'generation':self.generation if self.owned() else None}))
  def rpc(self,action,value,sender):
+  if action=='delivery_issue':
+   if value.get('workload')!=self.c['workload']:raise ValueError('Delivery workload')
+   return self.delivery.issue(sender,value)
   if action=='playback_inventory':return self.playback.inventory()
   if action=='playback_cached':return self.playback.cached(value)
   if action=='playback_prepare':
@@ -100,7 +103,10 @@ class Controller:
     if self.fleet and any(a is not self and a.playback.active() for a in self.fleet.agents):raise PlaybackError('node_busy')
     return self.playback.prepare(value['clip'],value.get('session'),value.get('managed',False))
    except PlaybackError as err:return {'state':'rejected','reason':err.code}
-  if action in ('playback_cancel','playback_touch'):return self.playback.viewer_action(value['id'],value['attempt'],action=='playback_cancel')
+  if action in ('playback_cancel','playback_touch'):
+   delivery=getattr(self,'delivery',None)
+   detached=delivery.core_action(self,value['id'],value['attempt'],action=='playback_cancel') if delivery else None
+   return detached if detached is not None else self.playback.viewer_action(value['id'],value['attempt'],action=='playback_cancel')
   if action=='playback_status':return self.playback.status(value['id'])
   if action=='status':return self.status()
   if action=='fleet_status' and self.prefix==PREFIX and self.fleet:return self.fleet.local()
@@ -115,17 +121,34 @@ class Controller:
    if v['recipient']!=self.node or not msg.reply.startswith(self.prefix+'.reply.'+v['sender']+'.'):return
    self.nonces={k:t for k,t in self.nonces.items() if clock()-t<20}
    if v['id'] in self.nonces or len(self.nonces)>1024:return
-   self.nonces[v['id']]=clock();result=self.rpc(v['action'],v.get('value',{}),v['sender']);ok=True
+   self.nonces[v['id']]=clock()
+   if v['action']=='recording_v1':
+    if len(self.recording_tasks)>=4:raise ValueError('Recording RPC capacity')
+    from recording_contract import request
+    request_value=request(v['value'],time.time())
+    if request_value['workload']!=self.c['workload']:raise ValueError('Recording workload')
+    task=asyncio.create_task(self.recording_reply(msg,v,request_value));self.recording_tasks.add(task);task.add_done_callback(self.recording_tasks.discard)
+    return
+   result=self.rpc(v['action'],v.get('value',{}),v['sender']);ok=True
   except Exception:result={};ok=False
   if v:
    try:await msg.respond(pack({'sender':self.node,'recipient':v['sender'],'id':v['id'],'at':time.time(),'ok':ok,'value':result},self.c['key']))
    except Exception:pass
+ async def recording_reply(self,msg,envelope,value):
+  try:
+   from media_rpc import request
+   result=await request({'action':'recording_v1','id':value['request_id'],'sender':envelope['sender'],'request':value},timeout=1)
+   ok=True
+  except Exception:result={};ok=False
+  try:await msg.respond(pack({'sender':self.node,'recipient':envelope['sender'],'id':envelope['id'],'at':time.time(),'ok':ok,'value':result},self.c['key']))
+  except Exception:pass
  async def call(self,node,action,value):return await self.transport.call(self,node,action,value)
  async def fanout(self,action,value=None):
   if action=='status' and self.fleet:return await self.fleet.heads(self)
   replies=await asyncio.gather(*(self.call(n,action,value or {}) for n in self.members),return_exceptions=True)
   return {n:r for n,r in zip(self.members,replies) if not isinstance(r,BaseException)}
  async def reconcile(self):
+  if getattr(self,'delivery',None):self.delivery.maintain(self)
   await asyncio.to_thread(self.refresh);heads=await self.fanout('status');self.heads=heads
   if self.owned():
    if clock()-self.started_at>30 and not self.ready():self.cooldown=clock()+90
@@ -166,6 +189,13 @@ async def local_client(reader,writer,agents):
    else:
     if len(owners)!=1:raise ValueError('No ready camera owner')
     result=await agent.call(owners[0],'playback_prepare',{'clip':value['clip'],'session':value.get('session'),'managed':value.get('managed',False)})
+  elif action=='recording':
+   from recording_contract import request
+   req=request(value['request'],time.time())
+   if req['workload']!=value['workload'] or value['node'] not in agent.members:raise ValueError('Recording binding')
+   result=await agent.call(value['node'],'recording_v1',req)
+  elif action=='delivery' and value['node'] in agent.members:
+   result=await agent.call(value['node'],'delivery_issue',{k:value[k] for k in ('workload','id','attempt','viewer','deadline')})
   elif action=='inventory':
    replies=await agent.fanout('playback_inventory');items=[item for v in replies.values() for item in v.get('items',[])]
    result={'items':items[:240],'complete':len(items)<=240 and len(replies)==len(agent.members) and all(not v.get('truncated') for v in replies.values())}
@@ -195,6 +225,9 @@ def thumbnail_request(handler):
   else:result=handler.server.thumbnail_decoder.decode(handler.server.agents,scope,data);kind='keyframe'
   handler.send_response(200);handler.send_header('Content-Type','image/jpeg' if kind!='cancelled' else 'application/octet-stream');handler.send_header('X-Thumbnail-Source',kind);handler.send_header('Content-Length',str(len(result)));handler.send_header('Connection','close');handler.end_headers();handler.wfile.write(result)
  except (BrokenPipeError,ConnectionResetError):pass
+ except PlaybackError as err:
+  if err.code!='session_expired':return handler.send_error(404,'Thumbnail unavailable')
+  handler.send_response(409);handler.send_header('X-Desk-Media-Error','session_expired');handler.send_header('Content-Length','0');handler.send_header('Cache-Control','no-store');handler.end_headers()
  except Exception:handler.send_error(404,'Thumbnail unavailable')
 
 class CoreArtifactPeer:
@@ -216,9 +249,16 @@ class CoreArtifactPeer:
    return peer in self.peers
 
 class Handler(http.server.BaseHTTPRequestHandler):
- def do_POST(self):return thumbnail_request(self)
+ def do_POST(self):
+  if self.path.startswith('/desk-camera-media/'):
+   from media_delivery import serve
+   return serve(self,post=True)
+  return thumbnail_request(self)
  def log_message(self,*a):pass
  def do_GET(self):
+  if self.path.startswith('/desk-camera-media/'):
+   from media_delivery import serve
+   return serve(self)
   if self.path.startswith(('/artifact/','/hls/')):
    return self.artifact()
   agents=self.server.agents;a=agents[0];status=200;body=b'{}'
@@ -289,11 +329,14 @@ if __name__=='__main__':
  async def main():
   config=json.loads(pathlib.Path('/etc/desk-camera/config.json').read_bytes());telemetry=Telemetry();files=StatusFiles()
   agents=[Controller(dict(config,**camera),telemetry,files) for camera in config.get('cameras',[{}])]
+  from media_delivery import Delivery
+  delivery=Delivery(agents)
   transport=SharedRPC(agents);fleet=FleetStatus(agents,transport)
-  for a in agents:a.transport=transport;a.fleet=fleet
+  for a in agents:a.transport=transport;a.fleet=fleet;a.delivery=delivery
   from thumbnail_decode import Decoder
   from thumbnail_fetch import Fetcher
   server=http.server.ThreadingHTTPServer((agents[0].members[agents[0].node],20226),Handler);server.agents=agents;server.fleet=fleet;server.core_artifact_peer=CoreArtifactPeer();server.thumbnail_decoder=Decoder();server.thumbnail_fetcher=Fetcher();server.timeout=2
+  server.delivery=delivery;server.delivery_slots=threading.BoundedSemaphore(8);server.loop=asyncio.get_running_loop()
   threading.Thread(target=server.serve_forever,daemon=True).start()
   local_path=RUN/'bridge.sock';local_path.unlink(missing_ok=True)
   local_server=await asyncio.start_unix_server(lambda reader,writer:local_client(reader,writer,agents),path=str(local_path));os.chmod(local_path,0o600)
@@ -301,6 +344,7 @@ if __name__=='__main__':
    while True:
     await asyncio.sleep(300)
     active=[clip_path(a.c['workload'],a.playback.current).parent for a in agents if a.playback.active() and a.playback.current]
+    active.extend(delivery.active_paths())
     try:await asyncio.to_thread(clean_cache,active)
     except Exception:logging.warning('Recording cache cleanup deferred')
   cache_task=asyncio.create_task(collect_cache())

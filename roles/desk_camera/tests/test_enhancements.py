@@ -31,6 +31,13 @@ class PlaybackTests(unittest.TestCase):
   a=types.SimpleNamespace(c={'workload':'tapo_c222_160'},node='deskb1x');p=playback.Playback(a);p.current='a'*32;p.task=Mock();p.task.done.return_value=False
   with tempfile.TemporaryDirectory() as tmp,patch.object(playback,'ROOT',pathlib.Path(tmp)):
    self.assertEqual(p.status(p.current)['state'],'preparing')
+ def test_expired_session_reason_is_visible_only_after_attempt_cleanup(self):
+  a=types.SimpleNamespace(c={'workload':'tapo_c222_160'},node='deskb1x');p=playback.Playback(a);p.current='a'*32;p.task=Mock();p.task.done.return_value=False
+  with tempfile.TemporaryDirectory() as tmp,patch.object(playback,'ROOT',pathlib.Path(tmp)):
+   path=playback.clip_path(a.c['workload'],p.current).parent;path.mkdir(parents=True)
+   (path/'progress.json').write_text(json.dumps({'state':'failed','reason':'session_expired','error':'safe message'}))
+   state=p.status(p.current);self.assertEqual(state['state'],'preparing');self.assertNotIn('reason',state)
+   p.task.done.return_value=True;state=p.status(p.current);self.assertEqual((state['state'],state['reason']),('failed','session_expired'))
  def test_inventory_requires_complete_artifact_and_never_returns_session_handle(self):
   with tempfile.TemporaryDirectory() as tmp,patch.object(playback,'ROOT',pathlib.Path(tmp)):
    a=types.SimpleNamespace(c={'workload':'tapo_c222_161'},node='deskb2x');p=playback.Playback(a);job=playback.validate(a.c['workload'],{'date':'20261016','start':1792112400,'end':1792112460});ident=playback.identity(job);path=playback.clip_path(a.c['workload'],ident);path.parent.mkdir(parents=True);(path.parent/'request.json').write_text(json.dumps(job))

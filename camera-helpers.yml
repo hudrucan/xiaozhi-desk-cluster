@@ -17,13 +17,14 @@
       register: camera_helpers_guard
       changed_when: false
       no_log: true
-    - name: Install only the cached camera controller with a rollback copy
+    - name: Install the cached camera controller and delivery helper with rollback copies
       ansible.builtin.copy:
-        src: roles/desk_camera/files/controller.py
-        dest: /usr/local/libexec/desk-camera/controller.py
+        src: 'roles/desk_camera/files/{{ item }}'
+        dest: '/usr/local/libexec/desk-camera/{{ item }}'
         mode: '0600'
         backup: true
         validate: /usr/bin/python3 -c "import ast,sys; ast.parse(open(sys.argv[1]).read())" %s
+      loop: [controller.py, media_delivery.py]
       register: camera_helpers_source
     - name: Restart only a changed controller
       ansible.builtin.systemd_service:

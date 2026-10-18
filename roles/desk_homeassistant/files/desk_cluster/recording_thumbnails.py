@@ -6,6 +6,7 @@ from homeassistant.components.http import HomeAssistantView
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.const import EVENT_HOMEASSISTANT_STOP
 from .thumbnail_cache import Cache
+from .recording_model import MediaSessionExpired
 PLACEHOLDER=b'<svg xmlns="http://www.w3.org/2000/svg" width="320" height="180" viewBox="0 0 320 180"><rect width="320" height="180" fill="#333"/><path d="M120 68h60v44h-60zM180 80l20-10v40l-20-10z" fill="#888"/></svg>'
 # Intentional media arbitration is transient, never a failed/cached thumbnail.
 PAUSED=PLACEHOLDER.replace(b'<svg ',b'<svg data-desk-thumbnail-paused="true" ')
@@ -85,7 +86,7 @@ class Thumbnails:
   for task in tasks:
    if not task.cancelling():task.cancel();self.counts['cancelled']+=1
   if tasks:await asyncio.gather(*tasks,return_exceptions=True)
- def stats(self):return dict(self.counts,cache=self.cache.stats(),inflight=len(self.tasks),active_tabs=sum(v['folder'] is not None for v in self.clients.values()),last=self.last,execution='camera owner worker; Core only allocates native handle, routes and caches')
+ def stats(self):return dict(self.counts,cache=self.cache.stats(),inflight=len(self.tasks),active_tabs=sum(v['folder'] is not None for v in self.clients.values()),last=self.last,execution='camera owner worker; Core routes and caches; legacy cameras retain Core handles')
  async def get(self,entry,date,start,end,consumer):
   start,end=validate(entry,date,start,end);key=entry,date,start,end;self.counts['requests']+=1
   # The focus POST starts before native image rendering, but network ordering
@@ -112,7 +113,7 @@ class Thumbnails:
    if not task.cancelled():raise
    return (PAUSED,'paused') if time.monotonic()<self.suspended.get(entry,0) else (PLACEHOLDER,'placeholder')
  async def produce(self,key):
-  entry,date,start,end=key;started=time.monotonic();data=PLACEHOLDER;kind='placeholder';stage='admission'
+  entry,date,start,end=key;started=time.monotonic();data=PLACEHOLDER;kind='placeholder';stage='admission';session=None
   try:
    async with asyncio.timeout(40):
     async with self.source.locks.setdefault(entry,asyncio.Lock()):
@@ -124,12 +125,16 @@ class Thumbnails:
      if camera is None:return PAUSED,'paused'
      node=camera['owner']
      async with self.node_locks.setdefault(node,asyncio.Lock()),self.semaphore:
-      stage='handle';controller=device['controller'];uid=await self.hass.async_add_executor_job(controller.getUserID)
-      session={'user_id':uid,'player_id':controller.playerID}
+      if not (getattr(self.source,'owner',None) and self.source.owner.enabled(workload)):
+       stage='handle';controller=device['controller'];uid=await self.hass.async_add_executor_job(controller.getUserID)
+       session={'user_id':uid,'player_id':controller.playerID}
       stage='worker';data,kind=await self.remote(workload,camera,{'date':date,'start':start,'end':end},session)
       self.counts['event_jpegs' if kind=='event' else 'preview_frames']+=1
    self.cache.put(key,data,kind);self.last={'kind':kind,'bytes':len(data),'seconds':round(time.monotonic()-started,3),'node':node}
   except asyncio.CancelledError:raise
+  except MediaSessionExpired:
+   await self.source.invalidate_media_session(entry,session)
+   self.last={'kind':'placeholder','stage':stage,'reason':'session_expired','seconds':round(time.monotonic()-started,3)};self.counts['placeholders']+=1
   except Exception as error:
    self.last={'kind':'placeholder','stage':stage,'error_type':type(error).__name__,'seconds':round(time.monotonic()-started,3)};self.counts['placeholders']+=1;self.cache.put(key,data,kind)
   return data,kind
@@ -139,6 +144,7 @@ class Thumbnails:
   try:
    self.counts['worker_requests']+=1
    async with client.post(ticket['url'],data=data,headers={'X-Desk-Artifact':ticket['authorization']},allow_redirects=False,timeout=aiohttp.ClientTimeout(total=36,sock_connect=3,sock_read=35)) as r:
+    if r.status==409 and r.headers.get('X-Desk-Media-Error')=='session_expired':raise MediaSessionExpired()
     kind=r.headers.get('X-Thumbnail-Source')
     if r.status!=200 or kind not in ('event','keyframe') or not 4<int(r.headers.get('Content-Length',0))<=2*1024*1024:raise ValueError('Worker image unavailable')
     image=jpeg(await r.content.readexactly(int(r.headers['Content-Length'])));complete=True;return image,kind

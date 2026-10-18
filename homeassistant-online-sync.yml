@@ -31,7 +31,7 @@
         src: 'roles/desk_homeassistant/files/{{ item }}'
         dest: '/usr/local/libexec/desk-homeassistant/{{ item }}'
         mode: '0700'
-      loop: [agent.py, snapshot.py, runtime.py, ui_bridge.py, component_config.py]
+      loop: [agent.py, snapshot.py, runtime.py, ui_bridge.py, component_config.py, recording_bootstrap.py]
     - name: Stage the native themed Cluster panel
       ansible.builtin.copy:
         src: roles/desk_homeassistant/files/desk_cluster/

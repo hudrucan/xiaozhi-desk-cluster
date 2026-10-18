@@ -44,10 +44,14 @@ def run():
   '--log-driver=k8s-file','--log-opt=max-size=2mb','--tmpfs=/tmp:rw,nosuid,nodev,size=128m','-e','TZ=Asia/Ho_Chi_Minh',
   '-v','/var/lib/desk-homeassistant/current:/config:rw','-v','/var/lib/desk-homeassistant/ui:/run/desk-cluster:ro',c['image']]
  if pathlib.Path('/etc/desk-camera/core-migration.json').is_file():
-  cmd[-1:-1]=['-e','PYTHONPATH=/opt/desk-camera-deps',
+  cmd[-1:-1]=['-e','PYTHONPATH=/opt/desk-camera-bootstrap:/opt/desk-camera-deps',
+   '-e','DESK_CAMERA_RECORDING_GUARD=1',
+   '-v','/usr/local/libexec/desk-homeassistant/recording_bootstrap.py:/opt/desk-camera-bootstrap/sitecustomize.py:ro',
    '-v','/var/lib/desk-camera/deps:/opt/desk-camera-deps:ro',
    '-v','/var/lib/desk-camera/cache/cold:/media/tapo_control:rw',
    '-v','/var/lib/desk-camera/cache/hot:/config/www/tapo_control:rw']
+  if pathlib.Path('/etc/desk-camera/recording-policy').is_dir():
+   cmd[-1:-1]=['-v','/etc/desk-camera/recording-policy:/opt/desk-camera-authority:ro']
  proc=subprocess.Popen(cmd,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
  stopping=[False]
  signal.signal(signal.SIGTERM,lambda *_:stopping.__setitem__(0,True));signal.signal(signal.SIGINT,lambda *_:stopping.__setitem__(0,True))

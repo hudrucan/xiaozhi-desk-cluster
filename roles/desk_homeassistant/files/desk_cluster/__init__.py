@@ -29,8 +29,10 @@ class Readiness(HomeAssistantView):
  requires_auth=False
  def __init__(self,hass):self._desk_hass=hass
  async def get(self,request):
-  ready=self._desk_hass.is_running
-  return web.json_response({'ready':ready},status=200 if ready else 503)
+  from .recording_remote import guard_status
+  authority=guard_status(self._desk_hass)
+  ready=self._desk_hass.is_running and authority['guarded'] and (not authority['workloads'] or authority['before_native_setup'])
+  return web.json_response({'ready':ready,'recording_authority':authority},status=200 if ready else 503)
 
 async def sync_config(hass,state,ticket):
  manager=backup.async_get_manager(hass);created=None;imported=False;terminal=False
@@ -166,7 +168,7 @@ async def async_setup(hass,config):
  hass.http.register_view(ThumbnailScopeView(hass))
  hass.http.register_view(Readiness(hass))
  await hass.http.async_register_static_paths([StaticPathConfig('/desk-cluster-assets/'+name,str(pathlib.Path(__file__).parent/name),False) for name in ('panel.js','camera-card.js','thumbnail-focus.js','recording-loading.svg')])
- frontend.add_extra_js_url(hass,'/desk-cluster-assets/camera-card.js?v=1.3.1')
+ frontend.add_extra_js_url(hass,'/desk-cluster-assets/camera-card.js?v=1.4.0')
  frontend.add_extra_js_url(hass,'/desk-cluster-assets/thumbnail-focus.js?v=2.2.0')
  websocket_api.async_register_command(hass,thumbnail_scope_command)
  websocket_api.async_register_command(hass,recording_session_command)

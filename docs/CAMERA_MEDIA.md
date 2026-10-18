@@ -4,6 +4,68 @@ Scope: three Tapo C222 cameras at `.160` (Bed Cam), `.161` (Makeup) and `.163` (
 single-active in the existing Home Assistant deployment. This is distributed live
 media, not a universal distributed integration runtime.
 
+For the remaining Core dependencies and a staged owner-side recording/session
+service proposal, see [Tapo distribution research](TAPO_DISTRIBUTION_RESEARCH.md).
+
+### Core media-handle guard — phase 0
+
+The phase-0 patch subclasses the pinned SDK only in media workers. Workers
+use the validated handle supplied by Core and reject explicit or implicit user-ID
+allocation/refresh, including direct `executeFunction('getUserID')` calls. A denied
+refresh stays latched until a subsequent request binds a Core-provided handle.
+Native SDK classes on Core and vendor source files remain unchanged.
+
+Expired playback reports `session_expired` only after the worker attempt drains.
+Thumbnail IPC preserves the same typed reason; signed HTTP requests receive a
+bounded 409 response after cleanup, while unauthenticated requests retain 404.
+Core invalidates only a matching old handle and that entry's index cache under
+its existing lock. It does not immediately allocate or replay an operation. A
+later user request allocates through the normal Core path; a delayed failure
+cannot discard a different newer handle. Handles remain in RAM, outside inventory
+and persistent requests. Thumbnail session expiry does not poison negative cache.
+
+Each new uncached playback request obtains a fresh handle from Core after
+thumbnail cleanup, under the existing entry lock. Cached playback and joining an
+existing job do not allocate. A live r50 canary exposed why this is necessary:
+reusing Core's cached browsing handle failed with `session_expired` twice,
+including when opening another clip after cancellation. An explicit folder
+reopen/retry recovered playback, but should not be required for every clip.
+Refreshing at the already serialized playback admission point avoids that stale
+handle without permitting worker allocation or adding background polling.
+
+Deployed to all three nodes on **2026-10-18**. Initial offline regressions passed (112 tests),
+including cleanup, admission, signed HTTP and stale-handle behavior. Both expiry
+branches from the installed pytapo 3.4.26 methods were separately checked offline
+and stopped before user-ID allocation. The rollout staged the three changed Core
+component files, then used a clean checkpoint/restart on deskb3x to certify r50
+with the component included. It next rolled the six changed worker/controller
+files one node at a time. All warm workers, voters and NATS connections recovered;
+each camera had exactly one ready owner. Mounted worker and active Core source
+hashes matched this checkout. Synthetic handle checks inside all three worker
+containers rejected forced refresh and direct allocation without camera I/O.
+
+The fresh-Core-handle follow-up passed 48 HA tests, including two new admission
+regressions, and was certified through another clean checkpoint as r51. Only the
+changed owned Core adapter needed updating; worker processes were preserved.
+
+Core r51 is synced 3/3, ready on deskb3x with no pending disk changes. Protected
+service PIDs/configuration and the additional network/dashboard/monitoring service
+checks were unchanged. Native vendor source hashes were preserved. Two successive
+uncached Guess `.163` clips played on r51 without folder reopen/retry. The first
+was cancelled during HLS production; the worker acknowledged cleanup. The second
+completed normally in 18.311 seconds of worker time; the browser reached its
+28.032-second playlist end at 2560x1440, readyState 4, without a video error.
+Thirteen visible previews returned Ready with zero Unavailable rows. All workers
+were idle afterward, with no additional media failures during the r51 canaries.
+This validates one camera's normal playback and cancellation, not Core failover
+or third-party app coexistence; those remain **NOT RUN**. Evidence and limits are
+in `CAMERA_MEDIA_SESSION_VALIDATION.json`.
+
+Future deployment must update worker/controller sources and the owned Core
+component together through the configuration-preserving lifecycle;
+`camera-helpers.yml` alone only ships the controller and is insufficient. Lease
+deadlines, placement policy, SDK version and device settings are unchanged.
+
 ## Paths and services
 
 - UI: `http://192.168.1.186:8123/desk-cameras/cameras`; upstream WebRTC Camera card.
@@ -839,3 +901,70 @@ core and 47.23–108.66 MiB resident memory. The completed playback run peaked a
 117.55 MiB; node 3 later peaked at 149.86 MiB across additional thumbnails/jobs.
 These are measured process/cgroup values, not reserved per-node memory. Details
 and limits are recorded in `CAMERA_WARM_PLAYBACK_VALIDATION.json`.
+
+### Owner-only recording service — phase 1, 2026-10-18
+
+Bed `.160` and Guess `.163` now read their microSD dates/index and allocate media
+sessions in the existing warm camera-owner worker. Core renders the native media
+browser from typed metadata and routes playback/thumbnail requests with no camera
+handle. Makeup `.161` remains live-only. Ordinary native control polling remains
+on Core; this is not the final distributed control adapter.
+
+The new read-ticket API uses the existing signed NATS subjects and root-local IPC.
+SDK work stays outside lease callbacks; metadata shares admission with thumbnails
+and playback, with real executor-drain acknowledgement on cancel. Pages contain
+at most 128 entries, snapshots last 30 seconds, timestamps stay in camera epoch
+seconds, and SD/owner/session errors cannot masquerade as empty recordings. A
+selected camera has no native allocator fallback. Core's SDK guard is installed
+at Python startup before native integration setup and required by readiness.
+
+The rollout installs compatible inactive workers, certifies the Core guard across
+all recovery nodes, then atomically enables worker authority. The dedicated
+`camera-recording-owner.yml` preserves this order and refuses forward authority
+removal. See [the contract and rollback order](CAMERA_RECORDING_CONTRACT.md).
+
+Live canaries read Guess's 301 clips and Bed's 380 clips for the closed day
+2026-10-17, each over three pages. Same-node IPC and remote NATS yielded identical
+Guess clip hashes. Guess playback at 2560×1440, cancellation, a following completed
+10-second clip and Bed's completed 24-second clip passed. A controlled Guess owner
+transfer fenced the old result at the 1.375-second sample, published a new valid
+generation at 18.210 seconds, rejected old-generation work and isolated a late
+cancel. Core and other camera owners stayed unchanged. A relay can become ready
+before its new generation is public; Core treats that interval as unavailable.
+
+A separate planned idle Core handoff from deskb3x to deskb2x reached guarded
+readiness after 143.181 seconds, with certified recovery 3/3 and unchanged camera
+owners. The metadata list still had the same raw bounds hash afterward. This is
+recovery validation, not uninterrupted video or a power-cut/network-partition
+proof. Core-independent HTTP delivery and viewer reattachment remain phase 2.
+
+Twelve-second samples during the idle-media handoff measured the warm container
+at 48.38–62.11 MiB current cgroup memory and 0.000% of one CPU core at the sample's
+resolution. Controller samples were 6.412–8.136% of one core. These short samples
+include Core startup activity on the cluster and are not a before/after CPU
+benchmark. Source hashes, individual timings and remaining tests are recorded in
+`CAMERA_RECORDING_OWNER_VALIDATION.json`. No firmware, native vendor source,
+lease/quorum timing or unrelated service restart was part of this phase.
+
+### Independent browser delivery — phase 2, 2026-10-18
+
+Bed and Guess browser sessions now receive an opaque, scoped viewer capability
+after authenticated HA admission. Media and five-second viewer heartbeat/close
+requests use the existing 8123 ingress to the exact serving camera controller,
+independently of Core readiness. Controller-owned refs expire after twenty seconds
+without heartbeat; explicit last close waits for real SDK cleanup. Core shutdown
+and a newly discovered Core waiter cannot cancel another detached viewer. Native
+control polling/commands remain on Core.
+
+A live Guess 1440p viewer continued through Core handoff deskb3x → deskb2x
+(158.607 seconds to ready), with unchanged SDK attempt/camera owners. It kept
+playing and loading new data while no Core was ready. Closing it drained the
+worker; a following 26-second clip completed and the browser played to its HLS
+end. Final Core is deskb2x, r60 synced 3/3, no pending disk changes, all workers
+idle. No additional service/listener or whole-node CPU saving is claimed.
+
+Full-page reload does not restore the in-memory capability, and camera owner loss
+still fences a running download. See [delivery lifecycle, rollout and limits](CAMERA_MEDIA_DELIVERY.md)
+and `CAMERA_MEDIA_DELIVERY_VALIDATION.json`, including the preliminary cancelled
+preparation and tests not run live. The next boundary is owner-side control
+observations/polling and then commands through a thin HA adapter.
