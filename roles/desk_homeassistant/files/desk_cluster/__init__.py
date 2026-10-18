@@ -31,8 +31,16 @@ class Readiness(HomeAssistantView):
  async def get(self,request):
   from .recording_remote import guard_status
   authority=guard_status(self._desk_hass)
-  ready=self._desk_hass.is_running and authority['guarded'] and (not authority['workloads'] or authority['before_native_setup'])
-  return web.json_response({'ready':ready,'recording_authority':authority},status=200 if ready else 503)
+  observations=dict(version=1,workloads=[],guarded=True,before_native_setup=False,owner_reads=0,failed_reads=0)
+  if pathlib.Path(self._desk_hass.config.path('.storage/desk_camera_observation_authority')).is_file():
+   from .observation_remote import status as observation_status
+   observations=observation_status(self._desk_hass)
+  commands=dict(version=1,workloads=[],guarded=True,before_native_setup=False)
+  if pathlib.Path(self._desk_hass.config.path('.storage/desk_camera_command_authority')).is_file():
+   from .command_remote import status as command_status
+   commands=command_status(self._desk_hass)
+  ready=(not commands['workloads'] or commands['guarded'] and commands['before_native_setup']) and (not observations['workloads'] or observations['guarded'] and observations['before_native_setup']) and self._desk_hass.is_running and authority['guarded'] and (not authority['workloads'] or authority['before_native_setup'])
+  return web.json_response({'ready':ready,'recording_authority':authority,'observation_authority':observations,'command_authority':commands},status=200 if ready else 503)
 
 async def sync_config(hass,state,ticket):
  manager=backup.async_get_manager(hass);created=None;imported=False;terminal=False

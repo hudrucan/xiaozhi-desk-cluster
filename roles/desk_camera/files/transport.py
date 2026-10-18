@@ -28,13 +28,13 @@ class SharedRPC:
    elif v.get('ok') is True and isinstance(v.get('value'),dict):future.set_result(v['value'])
   except Exception:return
  async def call(self,agent,node,action,value):
-  if action=='recording_v1':
+  if action in ('recording_v1','observation_v1','command_v1'):
    if len(self.metadata_pending)>=4:raise ValueError('Recording RPC capacity reached')
    slot=object();self.metadata_pending.add(slot)
    try:
     if node==self.node:
      from media_rpc import request
-     return await request({'action':action,'id':value['request_id'],'sender':self.node,'request':value},timeout=1)
+     return await request({'action':action,'id':value.get('request_id',secrets.token_hex(16)),'sender':self.node,'request':value},timeout=1)
     return await self.remote(agent,node,action,value)
    finally:self.metadata_pending.discard(slot)
   if node==self.node:return agent.rpc(action,value,node)

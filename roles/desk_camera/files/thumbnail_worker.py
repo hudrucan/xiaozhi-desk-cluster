@@ -26,6 +26,10 @@ def image(data):
 class Worker:
  def __init__(self):
   from warm_playback import Media
+  from observation_worker import Observations
+  from command_worker import Commands
+  self.observations=Observations()
+  self.commands=Commands(self.observations)
   self.media=Media(self,permitted);self.current=None;self.clients={};self.tombstones={};self.completed=0;self.cancelled=0;self.failed=0;self.last=None
   self.admission=asyncio.Lock();self.reader=Reader(self)
   self.recordings=RecordingJobs(self.reader.execute,permitted,owner_authorized=lambda w,g:owner_mode(w),admission=self.admission)
@@ -145,7 +149,11 @@ class Worker:
    if len(raw)>4096:raise ValueError('Request size')
    v=json.loads(raw);ident=v.get('id','')
    if not re.fullmatch('[a-f0-9]{32}',ident):raise ValueError('Job identity')
-   if v.get('action')=='recording_v1':
+   if v.get('action')=='observation_v1':out={'ok':True,'value':self.observations.handle(v['request'])}
+   elif v.get('action')=='command_v1':
+    if ident!=v['request']['request_id']:raise ValueError('Command ticket binding')
+    out={'ok':True,'value':await self.commands.handle(v['sender'],v['request'])}
+   elif v.get('action')=='recording_v1':
     request=v['request']
     if ident!=request['request_id']:raise ValueError('Ticket binding')
     known=(v['sender'],request['workload'],request['generation'],ident) in self.recordings.jobs
@@ -154,7 +162,7 @@ class Worker:
     out={'ok':True,'value':result}
    elif v.get('action','').startswith('playback_'):out={'ok':True,'value':await self.media.action(v)}
    elif v.get('action')=='cancel':await self.cancel(ident);out={'ok':True}
-   elif v.get('action')=='status':out={'ok':True,'value':{'completed':self.completed,'cancelled':self.cancelled,'failed':self.failed,'last':self.last,'busy':self.current is not None,'media':self.media.status(),'recordings':{'states':{state:sum(j['state']==state for j in self.recordings.jobs.values()) for state in ('queued','running','cancelling','done','failed','cancelled')},'owner_allocations':{w:getattr(saved[1],'_owner_allocations',0) for w,saved in self.clients.items()}}}}
+   elif v.get('action')=='status':out={'ok':True,'value':{'completed':self.completed,'cancelled':self.cancelled,'failed':self.failed,'last':self.last,'busy':self.current is not None,'observations':self.observations.status(),'commands':self.commands.status(),'media':self.media.status(),'recordings':{'states':{state:sum(j['state']==state for j in self.recordings.jobs.values()) for state in ('queued','running','cancelling','done','failed','cancelled')},'owner_allocations':{w:getattr(saved[1],'_owner_allocations',0) for w,saved in self.clients.items()}}}}
    elif v.get('action')=='fetch':
     if self.current is not None or self.media.busy() or ident in self.tombstones:raise ValueError('Busy or cancelled')
     task=asyncio.create_task(self.produce(v));self.current=(ident,task);watch=asyncio.create_task(self.watch(v,task))
@@ -180,11 +188,12 @@ class Worker:
    from pytapo.media_stream.downloader import Downloader
    import hls_worker
   await asyncio.to_thread(preload)
+  self.observations.start()
   path=RUN/'worker.sock';path.unlink(missing_ok=True)
   server=await asyncio.start_unix_server(self.handle,path=str(path),limit=8192);path.chmod(0o600)
   try:
    async with server:await server.serve_forever()
   finally:
-   await self.media.stop();await self.recordings.close()
+   await self.commands.stop();await self.observations.stop();await self.media.stop();await self.recordings.close()
    for saved in self.clients.values():self.close(saved[1])
 if __name__=='__main__':asyncio.run(Worker().run())

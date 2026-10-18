@@ -5,3 +5,9 @@ desk_camera_core_image: ghcr.io/home-assistant/home-assistant@sha256:17100609af8
 
 # Progressive microSD playback on every configured camera with storage.
 desk_camera_progressive: true
+
+# Opt-in owner-side status polling; cutover is camera-observations.yml.
+desk_camera_observation_workloads: []
+
+# Selected native PTZ/preset/privacy methods; only camera-commands.yml activates writes.
+desk_camera_command_workloads: []

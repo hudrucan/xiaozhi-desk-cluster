@@ -10,6 +10,10 @@
   vars:
     recording_selected: "{{ desk_camera_recording_owner_workloads | default(['tapo_c222_163']) }}"
   tasks:
+    - ansible.builtin.file:
+        path: /var/lib/desk-camera/commands
+        state: directory
+        mode: '0700'
     - ansible.builtin.assert:
         that:
           - ansible_play_hosts_all | sort == ['deskb1x','deskb2x','deskb3x']
@@ -83,7 +87,7 @@
         mode: '0600'
         backup: true
         validate: /usr/bin/python3 -c "import ast,sys; ast.parse(open(sys.argv[1]).read())" %s
-      loop: [controller.py, transport.py, playback.py, playback_worker.py, thumbnail_fetch.py, thumbnail_worker.py, warm_playback.py, media_rpc.py, recording_contract.py, recording_jobs.py, recording_owner.py, media_delivery.py]
+      loop: [controller.py, transport.py, playback.py, playback_worker.py, thumbnail_fetch.py, thumbnail_worker.py, warm_playback.py, media_rpc.py, recording_contract.py, recording_jobs.py, recording_owner.py, media_delivery.py, observation_contract.py, observation_worker.py, command_contract.py, command_worker.py]
       register: recording_sources
     - name: Mount owner modules and the live policy directory in the warm runtime
       ansible.builtin.copy:
@@ -149,7 +153,7 @@
         mode: '0644'
         backup: true
         validate: /usr/bin/python3 -c "import ast,sys; ast.parse(open(sys.argv[1]).read())" %s
-      loop: [__init__.py, camera_recordings.py, recording_remote.py, recording_model.py, recording_thumbnails.py]
+      loop: [__init__.py, camera_recordings.py, recording_remote.py, observation_remote.py, command_remote.py, recording_model.py, recording_thumbnails.py]
     - ansible.builtin.group_by:
         key: "recording_{{ 'core' if recording_before.json.ready else 'standby' }}"
 

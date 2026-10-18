@@ -7,7 +7,7 @@ async def request(value,timeout=5):
   try:
    writer.write(json.dumps(value,separators=(',',':')).encode()+b'\n');await writer.drain()
    raw=await reader.readline()
-   if len(raw)>(33000 if value.get('action')=='recording_v1' else 4096):raise ValueError('Media worker response size')
+   if len(raw)>(33000 if value.get('action') in ('recording_v1','observation_v1') else 4096):raise ValueError('Media worker response size')
    response=json.loads(raw)
    if response.get('ok') is not True:raise ValueError('Warm media worker unavailable')
    return response.get('value',{})

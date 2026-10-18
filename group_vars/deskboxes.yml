@@ -55,6 +55,16 @@ desk_camera_recording_owner_workloads:
   - tapo_c222_160
   - tapo_c222_163
 
+# Owner-side status polling; native entities stay in Core.
+desk_camera_observation_workloads:
+  - tapo_c222_160
+  - tapo_c222_161
+  - tapo_c222_163
+
+# Guess command canary; owner writes are activated by camera-commands.yml.
+desk_camera_command_workloads:
+  - tapo_c222_163
+
 # Owner selects a lightweight scan worker through node-specific Core NATS subjects.
 desk_network_scan_enabled: true
 # All replicas retain imports while standby; only the leased owner runs native jobs.

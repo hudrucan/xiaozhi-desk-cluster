@@ -5,7 +5,7 @@ def configure(root):
  source=pathlib.Path(__file__).parent/'desk_cluster';target=pathlib.Path(root)/'custom_components/desk_cluster'
  target.mkdir(parents=True,exist_ok=True,mode=0o700)
  if target.is_symlink():raise ValueError('Cluster component must be a real directory')
- for name in ('__init__.py','manifest.json','panel.js','reminder.py','camera-card.js','camera_recordings.py','recording_view.py','camera_storage.py','recording_model.py','recording_remote.py','hls_manifest.py','thumbnail_probe.py','thumbnail_cache.py','recording_thumbnails.py','thumbnail-focus.js','recording_sessions.py','recording-loading.svg'):
+ for name in ('__init__.py','manifest.json','panel.js','reminder.py','camera-card.js','camera_recordings.py','recording_view.py','camera_storage.py','recording_model.py','recording_remote.py','observation_remote.py','command_remote.py','hls_manifest.py','thumbnail_probe.py','thumbnail_cache.py','recording_thumbnails.py','thumbnail-focus.js','recording_sessions.py','recording-loading.svg'):
   p=target/name
   if p.is_symlink():raise ValueError('Cluster component file is a symlink')
   shutil.copyfile(source/name,p);p.chmod(0o600)
@@ -19,6 +19,12 @@ def configure(root):
   destination=pathlib.Path(root)/'.storage/desk_camera_recording_authority'
   if destination.is_symlink():raise ValueError('Invalid Core recording policy target')
   shutil.copyfile(policy,destination);destination.chmod(0o600)
+ for source_name,destination_name in (('/usr/local/libexec/desk-camera/observation_contract.py','custom_components/desk_cluster/observation_contract.py'),('/etc/desk-camera/observation-core-policy.json','.storage/desk_camera_observation_authority'),('/usr/local/libexec/desk-camera/command_contract.py','custom_components/desk_cluster/command_contract.py'),('/etc/desk-camera/command-core-policy.json','.storage/desk_camera_command_authority')):
+  source_path=pathlib.Path(source_name)
+  if source_path.is_file():
+   destination=pathlib.Path(root)/destination_name
+   if destination.is_symlink():raise ValueError('Invalid observation target')
+   shutil.copyfile(source_path,destination);destination.chmod(0o600)
  # Retire only the duplicate media platform installed by the previous owned UI.
  (target/'media_source.py').unlink(missing_ok=True)
  camera=pathlib.Path('/usr/local/libexec/desk-homeassistant/camera_config.py')

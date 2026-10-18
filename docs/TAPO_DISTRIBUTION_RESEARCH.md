@@ -7,9 +7,19 @@ on 2026-10-18 is recorded separately in `CAMERA_MEDIA_SESSION_VALIDATION.json`.
 
 Deployment update, 2026-10-18: owner-only recording metadata/session authority and
 [Core-independent browser delivery](CAMERA_MEDIA_DELIVERY.md) are now deployed
-for Bed/Guess. A live 1440p viewer survived planned Core handoff; final recovery
-is r60 synced 3/3. The original audit and staged roadmap below are historical.
-Native control polling/commands still run in Core; plugs remain research only.
+for Bed/Guess. A live 1440p viewer survived planned Core handoff. Phase 3A also
+moves all three cameras' periodic `getMost()` status batches to their owners;
+native entity IDs and mapping are preserved. Recovery is now r62 synced 3/3.
+See [owner-side observations and remaining Core dependencies](CAMERA_OBSERVATIONS.md).
+SDK startup/authentication, ancillary reads and other native commands remain
+in Core; plugs remain research only. The original audit and staged roadmap below
+are historical.
+
+Phase 3B's [PTZ-arrow/preset/privacy command pilot](CAMERA_COMMANDS.md) is now
+deployed for Guess only, with native privacy routing and same-ticket recovery
+checked live. Bed/Makeup commands keep their native Core path. The actual pinned
+SDK also passed fixture tests with HTTP/socket I/O mocked. See the pilot's
+validation evidence for the distinction between ACK/readback and physical motion.
 
 ## Conclusion
 

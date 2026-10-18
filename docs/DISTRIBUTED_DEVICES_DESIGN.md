@@ -172,6 +172,14 @@ Hardware/model compatibility, failover timing and command outcome behavior are
 
 ## Primary references
 
+The Tapo pilot has advanced beyond this plug research: phase 3A now runs the
+three cameras' periodic native status batches on their leased owners, while
+keeping native entities and command clients in Core. Owner polling survives Core
+handoff; Core still publishes entities and runs automations. SDK startup and
+ancillary reads also remain in Core. See [the implemented boundary](CAMERA_OBSERVATIONS.md).
+The next command phase needs a narrow operation contract, deduplication and
+ambiguous-timeout reconciliation before any command ownership moves.
+
 - [Existing Core lifecycle](HOME_ASSISTANT.md) and [camera worker boundary](CAMERA_MEDIA.md).
 - [python-miio documentation](https://python-miio.readthedocs.io/en/latest/).
 - [Xiaomi Home official integration architecture](https://github.com/XiaoMi/ha_xiaomi_home).

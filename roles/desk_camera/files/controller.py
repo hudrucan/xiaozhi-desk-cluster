@@ -122,10 +122,17 @@ class Controller:
    self.nonces={k:t for k,t in self.nonces.items() if clock()-t<20}
    if v['id'] in self.nonces or len(self.nonces)>1024:return
    self.nonces[v['id']]=clock()
-   if v['action']=='recording_v1':
+   if v['action'] in ('recording_v1','observation_v1','command_v1'):
     if len(self.recording_tasks)>=4:raise ValueError('Recording RPC capacity')
-    from recording_contract import request
-    request_value=request(v['value'],time.time())
+    if v['action']=='observation_v1':
+     from observation_contract import request
+     request_value=request(v['value'])
+    elif v['action']=='command_v1':
+     from command_contract import request
+     request_value=request(v['value'],time.time())
+    else:
+     from recording_contract import request
+     request_value=request(v['value'],time.time())
     if request_value['workload']!=self.c['workload']:raise ValueError('Recording workload')
     task=asyncio.create_task(self.recording_reply(msg,v,request_value));self.recording_tasks.add(task);task.add_done_callback(self.recording_tasks.discard)
     return
@@ -137,7 +144,7 @@ class Controller:
  async def recording_reply(self,msg,envelope,value):
   try:
    from media_rpc import request
-   result=await request({'action':'recording_v1','id':value['request_id'],'sender':envelope['sender'],'request':value},timeout=1)
+   result=await request({'action':envelope['action'],'id':value.get('request_id',envelope['id']),'sender':envelope['sender'],'request':value},timeout=1)
    ok=True
   except Exception:result={};ok=False
   try:await msg.respond(pack({'sender':self.node,'recipient':envelope['sender'],'id':envelope['id'],'at':time.time(),'ok':ok,'value':result},self.c['key']))
@@ -189,6 +196,22 @@ async def local_client(reader,writer,agents):
    else:
     if len(owners)!=1:raise ValueError('No ready camera owner')
     result=await agent.call(owners[0],'playback_prepare',{'clip':value['clip'],'session':value.get('session'),'managed':value.get('managed',False)})
+  elif action=='observation':
+   from observation_contract import request,snapshot
+   heads=await agent.fanout('status');owners=[(n,h) for n,h in heads.items() if h.get('owned') and h.get('ready')]
+   if len(owners)!=1:raise ValueError('No unique status owner')
+   node,head=owners[0]
+   req=request(dict(version=1,workload=value['workload'],generation=head['generation'],after=value.get('after')))
+   result=await agent.call(node,'observation_v1',req)
+   if result.get('state')=='ready':snapshot(result,req,time.time())
+   elif any(result.get(k)!=req[k] for k in ('version','workload','generation')):raise ValueError('Observation binding')
+  elif action=='command':
+   from command_contract import request,validate_response
+   req=request(value['request'],time.time())
+   if req['workload']!=value['workload'] or value['node'] not in agent.members:raise ValueError('Command route binding')
+   # The issuer pins node and generation once. Never rediscover/rebind a write
+   # after timeout or route an uncertain old command to the successor owner.
+   result=validate_response(await agent.call(value['node'],'command_v1',req),req)
   elif action=='recording':
    from recording_contract import request
    req=request(value['request'],time.time())

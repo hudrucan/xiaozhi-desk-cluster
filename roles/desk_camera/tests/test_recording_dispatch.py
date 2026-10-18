@@ -22,4 +22,29 @@ class DispatchTests(unittest.IsolatedAsyncioTestCase):
    await asyncio.wait_for(a.received(read),.2);await entered.wait();self.assertFalse(read.respond.called)
    await asyncio.wait_for(a.received(lease),.2);lease.respond.assert_awaited_once();a.rpc.assert_called_once_with('lease',{},'deskb3x')
    finish.set();await asyncio.gather(*a.recording_tasks);read.respond.assert_awaited_once()
+class ObservationDispatchTests(unittest.IsolatedAsyncioTestCase):
+ async def test_status_snapshot_ipc_does_not_block_lease_subscription(self):
+  a=ns['Controller']();a.node='deskb1x';a.prefix='desk.ha.media.tapo_c222_163';a.c={'key':'offline','workload':'tapo_c222_163'};a.nonces={};a.recording_tasks=set();a.rpc=Mock(return_value={'grant':True})
+  entered=asyncio.Event();finish=asyncio.Event()
+  async def request(*args,**kwargs):entered.set();await finish.wait();return {'state':'pending'}
+  def message(action,ident,value):
+   return types.SimpleNamespace(data=pack({'sender':'deskb3x','recipient':a.node,'id':ident*32,'at':time.time(),'action':action,'value':value},'offline'),reply=a.prefix+'.reply.deskb3x.'+ident*32,respond=AsyncMock())
+  value={'version':1,'workload':'tapo_c222_163','generation':'a'*32,'after':None}
+  with patch.dict(sys.modules,{'media_rpc':types.SimpleNamespace(request=request)}):
+   snapshot=message('observation_v1','e',value);await a.received(snapshot);await entered.wait()
+   grant=message('lease','f',{});await asyncio.wait_for(a.received(grant),.1)
+   self.assertEqual(grant.respond.await_count,1);self.assertEqual(snapshot.respond.await_count,0)
+   finish.set();await asyncio.gather(*a.recording_tasks)
+ async def test_command_receipt_ipc_does_not_block_lease_subscription(self):
+  a=ns['Controller']();a.node='deskb1x';a.prefix='desk.ha.media.tapo_c222_163';a.c={'key':'offline','workload':'tapo_c222_163'};a.nonces={};a.recording_tasks=set();a.rpc=Mock(return_value={'grant':True})
+  entered=asyncio.Event();finish=asyncio.Event()
+  async def request(*args,**kwargs):entered.set();await finish.wait();return {'state':'queued'}
+  def message(action,ident,value):
+   return types.SimpleNamespace(data=pack({'sender':'deskb3x','recipient':a.node,'id':ident*32,'at':time.time(),'action':action,'value':value},'offline'),reply=a.prefix+'.reply.deskb3x.'+ident*32,respond=AsyncMock())
+  value=dict(version=1,workload='tapo_c222_163',generation='a'*32,request_id='b'*32,operation='submit',command='ptz_move',arguments=dict(x=15,y=0),deadline=time.time()+15)
+  with patch.dict(sys.modules,{'media_rpc':types.SimpleNamespace(request=request)}):
+   command=message('command_v1','e',value);await a.received(command);await entered.wait()
+   grant=message('lease','f',{});await asyncio.wait_for(a.received(grant),.1)
+   self.assertEqual(grant.respond.await_count,1);self.assertEqual(command.respond.await_count,0)
+   finish.set();await asyncio.gather(*a.recording_tasks)
 if __name__=='__main__':unittest.main()

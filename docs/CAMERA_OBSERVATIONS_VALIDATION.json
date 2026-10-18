@@ -1,0 +1,349 @@
+{
+  "date": "2026-10-18",
+  "baseline_commit": "035b6e9",
+  "phase": "3A owner-side periodic status observations",
+  "selected_workloads": [
+    "tapo_c222_160",
+    "tapo_c222_161",
+    "tapo_c222_163"
+  ],
+  "pinned": {
+    "pytapo": "3.4.26",
+    "pytapo_init_sha256": "185bbeccb4b87623fc053d44a9f6f78418e604a1f50721f142dffda469d2614f",
+    "tapo_control": "7.2.8",
+    "tapo_control_commit": "057d7a8d0b47cbde283b77c19ca27bf4274b7594"
+  },
+  "source_verification": {
+    "host_nodes_verified": [
+      "deskb1x",
+      "deskb2x",
+      "deskb3x"
+    ],
+    "sdk_and_policies_verified_all_nodes": true,
+    "active_core_owned_modules_match": true,
+    "vendor_sources_unchanged": {
+      "__init__.py": "c8c3816ab3517c6c0dd31789db60916ef0e4d2c3e38b0262df485c24420d523f",
+      "utils.py": "e81ce053408d9477940a0ce4c2b885a50eb270a030fd3d1fc7875423f6add543",
+      "media_source.py": "006a679978b7525fb44f31e47019220a1694d4c66835266c9d9c8074b532bac4"
+    },
+    "deployed_owned_source_sha256": {
+      "/usr/local/libexec/desk-camera/controller.py": "f9da23b55150cd719a75abe087b825adcf722eba4bde54693a0429056fa7c19f",
+      "/usr/local/libexec/desk-camera/transport.py": "e2607e506fb8ea41936b6b3c16ae1f2b0066a7f25a9fd0290a7b9eaef457674b",
+      "/usr/local/libexec/desk-camera/media_rpc.py": "994c0dd92e08403ae9b35e891dddfa54262ba2a28d35512538135e7a57afd141",
+      "/usr/local/libexec/desk-camera/thumbnail_worker.py": "44f3052ef258472cf9d6942e21623f915d58e89a0cadec3565cbfb2f56ce2cbc",
+      "/usr/local/libexec/desk-camera/observation_contract.py": "4991343027546ae0c87f64467cfbc329234e9e2d53c9e8bdaad5adbc57f5c8ea",
+      "/usr/local/libexec/desk-camera/observation_worker.py": "74d12f59ad4d292d86f6eb170aa62329c3a22f47d82f8e58420b88e70c123999",
+      "/usr/local/libexec/desk-homeassistant/ui_bridge.py": "2da5a3a8cbad220966669c5122a4fd465829d355e87cf1f3d58b46a76a757048",
+      "/usr/local/libexec/desk-homeassistant/component_config.py": "7c5c4eddaa50915f3ab6dd87635c451b92bf1410b88d43f5bb4e36601cf9deba",
+      "/usr/local/libexec/desk-homeassistant/recording_bootstrap.py": "562db6fc02bd1d3535ed49f844f5d393591d5d9a4e8b1d2d91bb0995b0534bf7",
+      "/usr/local/libexec/desk-homeassistant/desk_cluster/__init__.py": "5cd0fc99b389f3988cf147f22d6f9dae16f7f319999e7c5c15a343f5f65f7868",
+      "/usr/local/libexec/desk-homeassistant/desk_cluster/observation_remote.py": "1fc912233285b2d4841229b9ac7c82f09154c88a60b705b74b6e7ed34e29fcc4",
+      "/etc/systemd/system/desk-camera-thumbnails.service": "ded5b610d1df7f078d6a464be80191fd007a584b456def78538dccf32f25288f"
+    }
+  },
+  "offline": {
+    "result": "PASS",
+    "new_tests": 24,
+    "camera_test_modules": 20,
+    "notes": [
+      "Camera modules run in isolated processes because legacy tests install global lease/protocol stubs.",
+      "Migration/core tests used Ansible Python with YAML/crypto; image tests used bundled PIL runtime.",
+      "HA recording/bootstrap/remote/session/thumbnail and Core recovery/sync/drain regressions passed.",
+      "Python AST, Ansible syntax and changed YAML parsing passed."
+    ]
+  },
+  "entity_registry": {
+    "result": "PASS",
+    "bindings": 327,
+    "enabled": 228,
+    "before_after_sha256": "67fbe3c3ab438c4ea8cbb7301bb389f278d2eff93715b6adf69384e1ebbd74c9"
+  },
+  "planned_core_handoff": {
+    "result": "PASS",
+    "from_node": "deskb2x",
+    "from_revision": 60,
+    "to_node": "deskb3x",
+    "to_revision": 61,
+    "observation_evidence": [
+      {
+        "sampled_no_ready_core_seconds": 133.477,
+        "status_only_watcher": true,
+        "read_counts": {
+          "tapo_c222_161": [
+            5,
+            10
+          ]
+        }
+      },
+      {
+        "sampled_no_ready_core_seconds": 115.345,
+        "status_only_watcher": true,
+        "read_counts": {
+          "tapo_c222_160": [
+            6,
+            10
+          ],
+          "tapo_c222_163": [
+            7,
+            11
+          ]
+        }
+      }
+    ],
+    "limitations": "Sampled planned recovery; not a power-cut or network-partition test. Entity publication and automations still depend on Core."
+  },
+  "media_coexistence": {
+    "result": "PASS",
+    "workload": "tapo_c222_163",
+    "seconds": 12.615,
+    "distinct_status_snapshots_during_media": 3,
+    "playable_seen": true,
+    "cancel_drained": true,
+    "limits": "Worker preparation/playable and cancellation test; browser continuity proof belongs to phase 2."
+  },
+  "owner_transfer": {
+    "result": "PASS",
+    "before": {
+      "tapo_c222_160": [
+        "deskb1x",
+        "95e434095c72876df96206655be00120"
+      ],
+      "tapo_c222_161": [
+        "deskb2x",
+        "8424970ca9c2c5335697f5a537087204"
+      ],
+      "tapo_c222_163": [
+        "deskb3x",
+        "351a8c64044eb3810066598f2eaef4e3"
+      ]
+    },
+    "core_before": [
+      [
+        "deskb3x",
+        61
+      ]
+    ],
+    "new_owner": "deskb2x",
+    "new_generation": "00c390b3f001b65057a5dc309d77f844",
+    "ready_seconds": 17.44,
+    "snapshot_ready_seconds": 18.522,
+    "old_generation_rejected": true,
+    "new_snapshot_ready": true,
+    "other_owners_unchanged": true,
+    "core_unchanged": true,
+    "methods": 82,
+    "drain_removed": true,
+    "initial_attempt": "The first planned node1-to-node3 transfer completed, but the harness aborted on a transient unavailable root RPC before validating the new snapshot. Drain cleanup completed. A repeat node3-to-node2 transfer retried through the transition and produced the complete PASS evidence below.",
+    "limits": "Snapshots are temporarily unavailable during handoff; no seamless failover claim."
+  },
+  "final": {
+    "core_owner": "deskb3x",
+    "checkpoint_revision": 61,
+    "synced_nodes": 3,
+    "pending_disk_changes": false,
+    "readiness": {
+      "ready": true,
+      "recording_authority": {
+        "version": 1,
+        "workloads": [
+          "tapo_c222_160",
+          "tapo_c222_163"
+        ],
+        "guarded": true,
+        "before_native_setup": true,
+        "blocked_core_calls": 2
+      },
+      "observation_authority": {
+        "version": 1,
+        "workloads": [
+          "tapo_c222_160",
+          "tapo_c222_161",
+          "tapo_c222_163"
+        ],
+        "guarded": true,
+        "before_native_setup": true,
+        "owner_reads": 33,
+        "failed_reads": 3
+      }
+    },
+    "local_drains_absent": true,
+    "camera_owners": {
+      "tapo_c222_160": "deskb1x",
+      "tapo_c222_161": "deskb2x",
+      "tapo_c222_163": "deskb2x"
+    },
+    "worker_observations": {
+      "deskb1x": {
+        "tapo_c222_160": {
+          "owned": true,
+          "reads": 27,
+          "failures": 0,
+          "age_seconds": 8.62
+        },
+        "tapo_c222_161": {
+          "owned": false,
+          "reads": 0,
+          "failures": 0,
+          "age_seconds": null
+        },
+        "tapo_c222_163": {
+          "owned": false,
+          "reads": 20,
+          "failures": 0,
+          "age_seconds": null
+        }
+      },
+      "deskb2x": {
+        "tapo_c222_160": {
+          "owned": false,
+          "reads": 0,
+          "failures": 0,
+          "age_seconds": null
+        },
+        "tapo_c222_161": {
+          "owned": true,
+          "reads": 26,
+          "failures": 0,
+          "age_seconds": 29.907
+        },
+        "tapo_c222_163": {
+          "owned": true,
+          "reads": 2,
+          "failures": 0,
+          "age_seconds": 19.84
+        }
+      },
+      "deskb3x": {
+        "tapo_c222_160": {
+          "owned": false,
+          "reads": 0,
+          "failures": 0,
+          "age_seconds": null
+        },
+        "tapo_c222_161": {
+          "owned": false,
+          "reads": 0,
+          "failures": 0,
+          "age_seconds": null
+        },
+        "tapo_c222_163": {
+          "owned": false,
+          "reads": 9,
+          "failures": 0,
+          "age_seconds": null
+        }
+      }
+    },
+    "all_media_idle": true,
+    "notes": "Core failed_reads=3 is cumulative and includes the two planned owner transfers; owner readers currently report zero consecutive camera failures."
+  },
+  "resources": {
+    "final_samples": {
+      "deskb1x": {
+        "available_mib": 1893,
+        "seconds": 31.52,
+        "node_busy_percent": 23.06,
+        "units": {
+          "desk-camera": {
+            "one_core_percent": 5.99,
+            "memory_mib": 21.12
+          },
+          "desk-camera-thumbnails": {
+            "one_core_percent": 0.33,
+            "memory_mib": 9.6
+          },
+          "desk-homeassistant": {
+            "one_core_percent": 2.47,
+            "memory_mib": 28.84
+          },
+          "desk-network": {
+            "one_core_percent": 3.47,
+            "memory_mib": 212.74
+          },
+          "container:desk-camera-thumbnails": {
+            "one_core_percent": 0.58,
+            "memory_mib": 50.27
+          }
+        }
+      },
+      "deskb2x": {
+        "available_mib": 2080,
+        "seconds": 31.71,
+        "node_busy_percent": 23.8,
+        "units": {
+          "desk-camera": {
+            "one_core_percent": 6.67,
+            "memory_mib": 20.66
+          },
+          "desk-camera-thumbnails": {
+            "one_core_percent": 0.34,
+            "memory_mib": 9.78
+          },
+          "desk-homeassistant": {
+            "one_core_percent": 2.54,
+            "memory_mib": 23.8
+          },
+          "desk-network": {
+            "one_core_percent": 3.31,
+            "memory_mib": 84.55
+          },
+          "container:desk-camera-thumbnails": {
+            "one_core_percent": 1.83,
+            "memory_mib": 48.31
+          }
+        }
+      },
+      "deskb3x": {
+        "available_mib": 1698,
+        "seconds": 31.53,
+        "node_busy_percent": 22.32,
+        "units": {
+          "desk-camera": {
+            "one_core_percent": 6.21,
+            "memory_mib": 20.6
+          },
+          "desk-camera-thumbnails": {
+            "one_core_percent": 0.38,
+            "memory_mib": 9.58
+          },
+          "desk-homeassistant-core": {
+            "one_core_percent": 0.59,
+            "memory_mib": 17.24
+          },
+          "desk-homeassistant": {
+            "one_core_percent": 3.74,
+            "memory_mib": 31.7
+          },
+          "desk-network": {
+            "one_core_percent": 3.42,
+            "memory_mib": 242.17
+          },
+          "container:desk-homeassistant-core": {
+            "one_core_percent": 3.76,
+            "memory_mib": 279.79
+          },
+          "container:desk-camera-thumbnails": {
+            "one_core_percent": 0.28,
+            "memory_mib": 47.53
+          }
+        }
+      }
+    },
+    "before_node_busy_percent": {
+      "deskb1x": 20.89,
+      "deskb2x": 19.93,
+      "deskb3x": 18.14
+    },
+    "interpretation": "Short windows with different Core/camera placement and background load. Final whole-node busy is 22.32\u201323.80%; these measurements do not establish a CPU saving or a causal regression. Warm containers use 47.53\u201350.27 MiB; Core container 279.79 MiB. Outer systemd units exclude container cgroups. No resource or lease/quorum limits changed."
+  },
+  "not_run": [
+    "Physical PTZ/privacy/preset/reboot actions; their native command method path remains unchanged.",
+    "Abrupt host power loss or network partition.",
+    "Long-duration CPU/RAM soak or controlled performance benchmark."
+  ],
+  "remaining_core_dependencies": [
+    "SDK construction/authentication and startup capability probes",
+    "Ancillary native reads and all command methods",
+    "Entity state publication, automations and UI"
+  ]
+}

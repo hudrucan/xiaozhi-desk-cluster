@@ -1,0 +1,1018 @@
+{
+  "date": "2026-10-18",
+  "phase": "3B command pilot",
+  "status": "DEPLOYED / GUESS CANARY PASS / PHYSICAL MOTION NOT RUN",
+  "baseline_commit": "035b6e9",
+  "dependency": "Owner-side observations from phase 3A; see CAMERA_OBSERVATIONS_VALIDATION.json.",
+  "scope": {
+    "workloads_supported": [
+      "tapo_c222_160",
+      "tapo_c222_161",
+      "tapo_c222_163"
+    ],
+    "default_canary": "tapo_c222_163",
+    "native_methods": [
+      "moveMotor",
+      "setPreset",
+      "setPrivacyMode"
+    ],
+    "typed_operations": [
+      "ptz_move",
+      "preset_goto",
+      "privacy_set"
+    ],
+    "other_native_commands": "Unchanged Core path",
+    "activated_workloads": [
+      "tapo_c222_163"
+    ]
+  },
+  "tests": {
+    "new_checks": 38,
+    "checks_by_new_module": {
+      "roles/desk_camera/tests/test_commands.py": 16,
+      "roles/desk_camera/tests/test_command_sdk.py": 7,
+      "roles/desk_homeassistant/tests/test_command_remote.py": 8,
+      "roles/desk_camera/tests/test_command_rollout.py": 2
+    },
+    "added_to_existing_modules": {
+      "test_recording_bootstrap": 3,
+      "test_recording_dispatch": 1,
+      "test_observation_remote": 1
+    },
+    "targeted_after_final_changes": {
+      "command_journal_and_jobs": 16,
+      "native_command_adapter": 8,
+      "combined_bootstrap": 8,
+      "thumbnail_worker_regression": 14,
+      "observation_adapter": 9,
+      "deferred_dispatch": 3,
+      "rollout_isolation_guard_cli": 2
+    },
+    "regression_modules_passed": 30,
+    "regression_modules": [
+      "roles/desk_camera/tests/test_artifact.py",
+      "roles/desk_camera/tests/test_cache.py",
+      "roles/desk_camera/tests/test_commands.py",
+      "roles/desk_camera/tests/test_enhancements.py",
+      "roles/desk_camera/tests/test_hls.py",
+      "roles/desk_camera/tests/test_hls_pipeline.py",
+      "roles/desk_camera/tests/test_media.py",
+      "roles/desk_camera/tests/test_media_delivery.py",
+      "roles/desk_camera/tests/test_media_session.py",
+      "roles/desk_camera/tests/test_migration.py",
+      "roles/desk_camera/tests/test_observations.py",
+      "roles/desk_camera/tests/test_proxy.py",
+      "roles/desk_camera/tests/test_recording_contract.py",
+      "roles/desk_camera/tests/test_recording_dispatch.py",
+      "roles/desk_camera/tests/test_recording_jobs.py",
+      "roles/desk_camera/tests/test_recording_owner.py",
+      "roles/desk_camera/tests/test_thumbnail_decode.py",
+      "roles/desk_camera/tests/test_thumbnail_worker.py",
+      "roles/desk_camera/tests/test_transport.py",
+      "roles/desk_camera/tests/test_viewer_worker.py",
+      "roles/desk_camera/tests/test_warm_playback.py",
+      "roles/desk_homeassistant/tests/test_command_remote.py",
+      "roles/desk_homeassistant/tests/test_observation_remote.py",
+      "roles/desk_homeassistant/tests/test_recording_bootstrap.py",
+      "roles/desk_homeassistant/tests/test_recording_remote.py",
+      "roles/desk_homeassistant/tests/test_recording_sessions.py",
+      "roles/desk_homeassistant/tests/test_core.py",
+      "roles/desk_homeassistant/tests/test_online_sync.py",
+      "roles/desk_homeassistant/tests/test_node_drain.py",
+      "roles/desk_homeassistant/tests/test_camera_storage.py"
+    ],
+    "sdk": {
+      "checks": 7,
+      "result": "PASS",
+      "runtime": "Installed pinned SDK in existing camera container; test sources and synthetic credentials in a temporary directory only.",
+      "real_code": "SDK performRequest/executeFunction, selected command methods, legacy transport send and retry helpers; runtime SHA-256 pins checked.",
+      "mocked": "Tapo constructor/authentication state and all HTTP/session responses; socket.connect raises if called.",
+      "scenarios": [
+        "Device ACK, one bounded HTTP write",
+        "Lost ACK, connection reset, retryable response and implicit cruise fallback never send a second write",
+        "Privacy target readback matches or remains unknown without retry",
+        "Unknown preset rejected before dispatch; known preset ACK",
+        "Owner loss during send remains uncertain",
+        "No lease or journal failure stops before device bytes",
+        "Changed SDK hash refuses before any device write"
+      ],
+      "physical_camera_io": "NONE"
+    },
+    "syntax": "Ansible syntax, embedded Python AST, localhost checksum-template assertion and diff whitespace checks PASS",
+    "runner_notes": "Initial regression launch needed loopback permission and a corrected test-module search path; all 30 modules subsequently passed. SDK tests required the existing container dependencies; no package install or deployed source change was performed. The deployment guard CLI regression was found during worker rollout, corrected from verify/argv to guard/stdin, and covered by two fixture checks. Initial live probe helpers also needed newline escaping, pending-snapshot polling and tuple/list comparison corrections; these did not modify deployed application sources."
+  },
+  "safety_properties": [
+    "Queued/running/final durable receipts with file and directory fsync",
+    "Warm event loop and receipt reads do not wait synchronously on journal fsync",
+    "Immutable ticket identity; conflicts rejected; no automatic replay after process restart",
+    "Original owner/generation pinned through timeout; no successor rebind",
+    "Readback reconciliation for absolute privacy only; PTZ/preset uncertainty explicit",
+    "Monotonic intake deadline plus durable wall-clock floor; clock rollback fail closed",
+    "Fixed read/write allowlists and no selected command fallback to Core",
+    "Post-command invalidation discards an observation started before command completion"
+  ],
+  "rollout": {
+    "playbook": "camera-commands.yml",
+    "stages": [
+      "workers",
+      "core",
+      "activate"
+    ],
+    "activation_order": "Compatible workers with writes disabled, certified early Core guard, then owner policy activation.",
+    "rollback": "desk_camera_commands_disable=true: disable writes and drain first, then certify empty Core command selection.",
+    "executed": true,
+    "stages_result": {
+      "workers": {
+        "result": "PASS",
+        "nodes": 3
+      },
+      "core": {
+        "result": "PASS",
+        "nodes": 3
+      },
+      "activate": {
+        "result": "PASS",
+        "nodes": 3
+      }
+    },
+    "worker_first_attempt": "Workers/RPC passed; final isolation check failed because the playbook used invalid ui_guard CLI verify. Corrected to guard with frozen state on stdin. Two CLI regression checks PASS; idempotent workers rerun PASS with changed=0 on all nodes before Core/activation."
+  },
+  "not_run": [
+    "Physical PTZ/preset movement and privacy toggle with visual confirmation",
+    "Real HA frontend/service-call invocation (live canaries used wrapped SDK methods from a separate Core-container Python process)",
+    "Loss of the device HTTP ACK (live fault injected only after bridge submit acceptance); real worker power loss during an in-flight command",
+    "Core/owner handoff or network partition while a command is in flight",
+    "Cross-host Core recovery with command authority activated",
+    "Rollback execution on the cluster",
+    "Sustained CPU/RAM or command latency benchmark"
+  ],
+  "limitations": [
+    "Deduplication covers an invocation and its ticket/RPC retries. A new HA service invocation creates a new ticket.",
+    "Receipts are local to the original owner node; there is no replicated command log or camera-enforced fencing token.",
+    "A camera ACK does not verify physical position; an ambiguous relative move is never automatically repeated.",
+    "Core startup/authentication, other native commands, state publication and automations remain Core dependencies.",
+    "No CPU saving or physical-device performance improvement is claimed."
+  ],
+  "source_sha256": {
+    "roles/desk_camera/files/command_contract.py": "c8a456cf5f22d994d1f0af337c327a935d20591b2fd468ede698d2b400a09b81",
+    "roles/desk_camera/files/command_worker.py": "b2564d06de8ab5643a7586afacc93b0d99cfc521e38ffbeecf626d66df65cebe",
+    "roles/desk_homeassistant/files/desk_cluster/command_remote.py": "b37ef98ae1a8d729940e4309fb5310e6d0c832cd06ebfb4ed463288a00dc00b7",
+    "roles/desk_camera/files/observation_worker.py": "531393c5edee441edd7d2e2c8050b25808d78ad945609b67c9e29839bfc66f79",
+    "roles/desk_camera/files/controller.py": "a5b090c28a29df0e0a5f06db4651641701f2cb3242ed2a7634e894814408afc2",
+    "roles/desk_camera/files/transport.py": "73e39a3df2f63201b02e55d147cad17274772576bf9d32d115575b22434b140e",
+    "roles/desk_camera/files/thumbnail_worker.py": "68f3cf1915f8940b9e8196bff09b3dd17481cc59f1ae5066a6ee7aebd00516b3",
+    "roles/desk_camera/files/thumbnail.service": "fd18b12d55ab4e93a25d66cae5f2f242afed38badb4589400d16ef36abad52b3",
+    "roles/desk_homeassistant/files/desk_cluster/observation_remote.py": "f814506aaaa9c834a4613d14f89c01d00ce029cb7fe2f5beaf0466ae81980228",
+    "roles/desk_homeassistant/files/recording_bootstrap.py": "ef610d6d4a538aca85f9d73b45bbcb4c8c50e804379d7b940ed3ed7ef76fdcaa",
+    "roles/desk_homeassistant/files/component_config.py": "9db18399bbe905abf88a78dc392a6ca04b4862fd49a35e80385bab5f9491e6e2",
+    "roles/desk_homeassistant/files/desk_cluster/__init__.py": "9540b1287c8e3a9599c381a55540b8bd255cd5f9e79e0fc3f6ce77d9a2cd2d55",
+    "roles/desk_homeassistant/files/ui_bridge.py": "ae5d631001c2c23aa6fede9c445b74502501317b38c04ff37347788b81b3f463",
+    "camera-commands.yml": "d09ab3350f153d1c794341c5fb4dd153237d56301b64b0aa7445ce4bbb30a8f2",
+    "roles/desk_camera/tests/test_command_rollout.py": "474567a29d2c3922b4f03fad0b94405527156fc2256894857be74c7540cea29e"
+  },
+  "live": {
+    "core": {
+      "before_revision": 61,
+      "before_pending_disk_changes": true,
+      "after_revision": 62,
+      "after_pending_disk_changes": false,
+      "synced_nodes": 3,
+      "owner_before": "deskb3x",
+      "owner_after": "deskb3x",
+      "sampled_seconds_without_ready_core": 143.361,
+      "early_guard": {
+        "ready": true,
+        "recording_authority": {
+          "version": 1,
+          "workloads": [
+            "tapo_c222_160",
+            "tapo_c222_163"
+          ],
+          "guarded": true,
+          "before_native_setup": true,
+          "blocked_core_calls": 2
+        },
+        "observation_authority": {
+          "version": 1,
+          "workloads": [
+            "tapo_c222_160",
+            "tapo_c222_161",
+            "tapo_c222_163"
+          ],
+          "guarded": true,
+          "before_native_setup": true,
+          "owner_reads": 3,
+          "failed_reads": 0
+        },
+        "command_authority": {
+          "version": 1,
+          "workloads": [
+            "tapo_c222_163"
+          ],
+          "guarded": true,
+          "before_native_setup": true,
+          "acknowledged": 0,
+          "reconciled": 0,
+          "unknown": 0,
+          "rejected": 0,
+          "blocked_core_calls": 0
+        }
+      },
+      "owner_observations_during_core_gap": {
+        "first": {
+          "tapo_c222_160": {
+            "owned": true,
+            "reads": 23,
+            "failures": 0,
+            "age_seconds": 2.776
+          },
+          "tapo_c222_161": {
+            "owned": false,
+            "reads": 0,
+            "failures": 0,
+            "age_seconds": null
+          },
+          "tapo_c222_163": {
+            "owned": false,
+            "reads": 0,
+            "failures": 0,
+            "age_seconds": null
+          }
+        },
+        "last": {
+          "tapo_c222_160": {
+            "owned": true,
+            "reads": 28,
+            "failures": 0,
+            "age_seconds": 0.829
+          },
+          "tapo_c222_161": {
+            "owned": false,
+            "reads": 0,
+            "failures": 0,
+            "age_seconds": null
+          },
+          "tapo_c222_163": {
+            "owned": false,
+            "reads": 0,
+            "failures": 0,
+            "age_seconds": null
+          }
+        }
+      }
+    },
+    "identity": {
+      "entity_bindings": 327,
+      "enabled": 228,
+      "entity_bindings_sha256": "67fbe3c3ab438c4ea8cbb7301bb389f278d2eff93715b6adf69384e1ebbd74c9",
+      "unchanged": true,
+      "dashboard_yaml_files": 5,
+      "dashboard_yaml_checksums_unchanged": true,
+      "config_entry_data_options_compared": false
+    },
+    "sources": {
+      "host_sources_sdk_and_policy_match_nodes": 3,
+      "active_core_sources_match": true,
+      "native_vendor_files_unchanged": 17,
+      "standby_core_runtime_not_started_for_comparison": true
+    },
+    "native_privacy_canaries": [
+      {
+        "label": "first",
+        "owner": "deskb1x",
+        "generation": "1dd3ab2e880d57350590174ffd30b78d",
+        "submits": 1,
+        "polls": 7,
+        "submit_reply_dropped": true,
+        "seconds": 2.142,
+        "state": "acknowledged",
+        "readback_matches": true,
+        "privacy_before": "off",
+        "privacy_after": "off",
+        "fresh_post_command_snapshot": true,
+        "raw_core_write_blocked": true
+      },
+      {
+        "label": "after-owner-transfer",
+        "owner": "deskb3x",
+        "generation": "0b890db44d0ec659ad9b5e6b79aab26c",
+        "submits": 1,
+        "polls": 8,
+        "submit_reply_dropped": true,
+        "seconds": 2.289,
+        "state": "acknowledged",
+        "readback_matches": true,
+        "privacy_before": "off",
+        "privacy_after": "off",
+        "fresh_post_command_snapshot": true,
+        "raw_core_write_blocked": true
+      }
+    ],
+    "ticket_checks": {
+      "nodes": [
+        {
+          "node": "deskb1x",
+          "duplicate_submit_same_receipt": true,
+          "cross_root_result_same_receipt": true,
+          "conflicting_ticket_rejected": true,
+          "wrong_generation_rejected": true,
+          "expired_ticket_rejected": true
+        },
+        {
+          "node": "deskb2x",
+          "duplicate_submit_same_receipt": true,
+          "cross_root_result_same_receipt": true,
+          "conflicting_ticket_rejected": true,
+          "wrong_generation_rejected": true,
+          "expired_ticket_rejected": true
+        },
+        {
+          "node": "deskb3x",
+          "duplicate_submit_same_receipt": true,
+          "cross_root_result_same_receipt": true,
+          "conflicting_ticket_rejected": true,
+          "wrong_generation_rejected": true,
+          "expired_ticket_rejected": true
+        }
+      ],
+      "before": {
+        "ledger_sha256": "7c2ec591ce46199394e324c234031cf8c3e279b00ba98d506d23f7889ea25ea8",
+        "record_sha256": "1c11e247d1887aec6c2404e3636cd94cffa7d8b9e7d66f407cbe4545c82f17fc",
+        "state": "acknowledged",
+        "receipts": 1
+      },
+      "after": {
+        "ledger_sha256": "7c2ec591ce46199394e324c234031cf8c3e279b00ba98d506d23f7889ea25ea8",
+        "record_sha256": "1c11e247d1887aec6c2404e3636cd94cffa7d8b9e7d66f407cbe4545c82f17fc",
+        "state": "acknowledged",
+        "receipts": 1
+      },
+      "original_receipt_unchanged": true
+    },
+    "warm_restart": {
+      "node": "deskb1x",
+      "ready_seconds": 33.551,
+      "generation_unchanged": true,
+      "record_preserved": true,
+      "duplicate_submit_same_receipt": true,
+      "no_journal_write_on_replay": true,
+      "receipt_state": "acknowledged"
+    },
+    "owner_transfer": {
+      "before": {
+        "tapo_c222_161": [
+          "deskb1x",
+          "b2ccf0512cb3fc7419e2a7d50275e196"
+        ],
+        "tapo_c222_163": [
+          "deskb1x",
+          "1dd3ab2e880d57350590174ffd30b78d"
+        ],
+        "tapo_c222_160": [
+          "deskb2x",
+          "014cb02a1625a2f0290e737416d6eee0"
+        ]
+      },
+      "core_before": [
+        [
+          "deskb3x",
+          62
+        ]
+      ],
+      "new_owner": "deskb3x",
+      "new_generation": "0b890db44d0ec659ad9b5e6b79aab26c",
+      "result": "PASS",
+      "drain_removed": true,
+      "old_generation_rejected_both_nodes": true,
+      "historical_receipt_available": true,
+      "no_receipt_rebind_on_successor": true,
+      "successor_snapshot_ready": true,
+      "core_and_other_owners_unchanged": true,
+      "rechecked_at": 1792295143.9039772,
+      "probe_correction": "Initial probe accepted transient local_ready with null generation; confirmed stable owner generation and snapshot without another handoff",
+      "initial_owner_ready_without_generation_seconds": 16.932
+    },
+    "isolation": {
+      "per_stage_protected_runtime_and_dns_guards": "PASS on all nodes",
+      "after_workers_pid_audit": [
+        {
+          "node": "deskb1x",
+          "all_processes_predate_rollout": true,
+          "additional_pids_unchanged": true,
+          "units": {
+            "nats-server": {
+              "MainPID": "901",
+              "ActiveState": "active",
+              "started_before_rollout": true
+            },
+            "haproxy": {
+              "MainPID": "738",
+              "ActiveState": "active",
+              "started_before_rollout": true
+            },
+            "keepalived": {
+              "MainPID": "740",
+              "ActiveState": "active",
+              "started_before_rollout": true
+            },
+            "xiaozhi-control-plane": {
+              "MainPID": "2284328",
+              "ActiveState": "active",
+              "started_before_rollout": true
+            },
+            "xiaozhi-worker": {
+              "MainPID": "2275933",
+              "ActiveState": "active",
+              "started_before_rollout": true
+            },
+            "xiaozhi-core": {
+              "MainPID": "2286291",
+              "ActiveState": "active",
+              "started_before_rollout": true
+            },
+            "xiaozhi-mqtt-gateway": {
+              "MainPID": "744",
+              "ActiveState": "active",
+              "started_before_rollout": true
+            },
+            "xiaozhi-runtime-apply": {
+              "MainPID": "903",
+              "ActiveState": "active",
+              "started_before_rollout": true
+            },
+            "deskbox-front-panel": {
+              "MainPID": "2219953",
+              "ActiveState": "active",
+              "started_before_rollout": true
+            },
+            "desk-dnsdist": {
+              "MainPID": "3444306",
+              "ActiveState": "active",
+              "started_before_rollout": true
+            },
+            "desk-dns-ui": {
+              "MainPID": "978",
+              "ActiveState": "active",
+              "started_before_rollout": true
+            },
+            "desk-dns-vip": {
+              "MainPID": "932",
+              "ActiveState": "active",
+              "started_before_rollout": true
+            },
+            "desk-dns-activity": {
+              "MainPID": "763",
+              "ActiveState": "active",
+              "started_before_rollout": true
+            }
+          }
+        },
+        {
+          "node": "deskb2x",
+          "all_processes_predate_rollout": true,
+          "additional_pids_unchanged": true,
+          "units": {
+            "nats-server": {
+              "MainPID": "882",
+              "ActiveState": "active",
+              "started_before_rollout": true
+            },
+            "haproxy": {
+              "MainPID": "748",
+              "ActiveState": "active",
+              "started_before_rollout": true
+            },
+            "keepalived": {
+              "MainPID": "750",
+              "ActiveState": "active",
+              "started_before_rollout": true
+            },
+            "xiaozhi-control-plane": {
+              "MainPID": "2077742",
+              "ActiveState": "active",
+              "started_before_rollout": true
+            },
+            "xiaozhi-worker": {
+              "MainPID": "2071386",
+              "ActiveState": "active",
+              "started_before_rollout": true
+            },
+            "xiaozhi-core": {
+              "MainPID": "2079409",
+              "ActiveState": "active",
+              "started_before_rollout": true
+            },
+            "xiaozhi-mqtt-gateway": {
+              "MainPID": "757",
+              "ActiveState": "active",
+              "started_before_rollout": true
+            },
+            "xiaozhi-runtime-apply": {
+              "MainPID": "884",
+              "ActiveState": "active",
+              "started_before_rollout": true
+            },
+            "deskbox-front-panel": {
+              "MainPID": "2015219",
+              "ActiveState": "active",
+              "started_before_rollout": true
+            },
+            "desk-dnsdist": {
+              "MainPID": "3306154",
+              "ActiveState": "active",
+              "started_before_rollout": true
+            },
+            "desk-dns-ui": {
+              "MainPID": "945",
+              "ActiveState": "active",
+              "started_before_rollout": true
+            },
+            "desk-dns-vip": {
+              "MainPID": "991",
+              "ActiveState": "active",
+              "started_before_rollout": true
+            },
+            "desk-dns-activity": {
+              "MainPID": "776",
+              "ActiveState": "active",
+              "started_before_rollout": true
+            }
+          }
+        },
+        {
+          "node": "deskb3x",
+          "all_processes_predate_rollout": true,
+          "additional_pids_unchanged": true,
+          "units": {
+            "nats-server": {
+              "MainPID": "873",
+              "ActiveState": "active",
+              "started_before_rollout": true
+            },
+            "haproxy": {
+              "MainPID": "740",
+              "ActiveState": "active",
+              "started_before_rollout": true
+            },
+            "keepalived": {
+              "MainPID": "744",
+              "ActiveState": "active",
+              "started_before_rollout": true
+            },
+            "xiaozhi-control-plane": {
+              "MainPID": "2261844",
+              "ActiveState": "active",
+              "started_before_rollout": true
+            },
+            "xiaozhi-worker": {
+              "MainPID": "2257655",
+              "ActiveState": "active",
+              "started_before_rollout": true
+            },
+            "xiaozhi-core": {
+              "MainPID": "2263356",
+              "ActiveState": "active",
+              "started_before_rollout": true
+            },
+            "xiaozhi-mqtt-gateway": {
+              "MainPID": "752",
+              "ActiveState": "active",
+              "started_before_rollout": true
+            },
+            "xiaozhi-runtime-apply": {
+              "MainPID": "875",
+              "ActiveState": "active",
+              "started_before_rollout": true
+            },
+            "deskbox-front-panel": {
+              "MainPID": "2198202",
+              "ActiveState": "active",
+              "started_before_rollout": true
+            },
+            "desk-dnsdist": {
+              "MainPID": "3435321",
+              "ActiveState": "active",
+              "started_before_rollout": true
+            },
+            "desk-dns-ui": {
+              "MainPID": "948",
+              "ActiveState": "active",
+              "started_before_rollout": true
+            },
+            "desk-dns-vip": {
+              "MainPID": "937",
+              "ActiveState": "active",
+              "started_before_rollout": true
+            },
+            "desk-dns-activity": {
+              "MainPID": "787",
+              "ActiveState": "active",
+              "started_before_rollout": true
+            }
+          }
+        }
+      ],
+      "final_pid_audit": [
+        {
+          "node": "deskb1x",
+          "all_processes_predate_rollout": true,
+          "additional_pids": {
+            "desk-network": {
+              "before": "3154125",
+              "after": "3926086",
+              "unchanged": false
+            },
+            "desk-dashboard": {
+              "before": "2578775",
+              "after": "2578775",
+              "unchanged": true
+            },
+            "desk-monitoring": {
+              "before": "0",
+              "after": "0",
+              "unchanged": true
+            }
+          },
+          "units": {
+            "nats-server": {
+              "MainPID": "901",
+              "ActiveState": "active",
+              "started_before_rollout": true
+            },
+            "haproxy": {
+              "MainPID": "738",
+              "ActiveState": "active",
+              "started_before_rollout": true
+            },
+            "keepalived": {
+              "MainPID": "740",
+              "ActiveState": "active",
+              "started_before_rollout": true
+            },
+            "xiaozhi-control-plane": {
+              "MainPID": "2284328",
+              "ActiveState": "active",
+              "started_before_rollout": true
+            },
+            "xiaozhi-worker": {
+              "MainPID": "2275933",
+              "ActiveState": "active",
+              "started_before_rollout": true
+            },
+            "xiaozhi-core": {
+              "MainPID": "2286291",
+              "ActiveState": "active",
+              "started_before_rollout": true
+            },
+            "xiaozhi-mqtt-gateway": {
+              "MainPID": "744",
+              "ActiveState": "active",
+              "started_before_rollout": true
+            },
+            "xiaozhi-runtime-apply": {
+              "MainPID": "903",
+              "ActiveState": "active",
+              "started_before_rollout": true
+            },
+            "deskbox-front-panel": {
+              "MainPID": "2219953",
+              "ActiveState": "active",
+              "started_before_rollout": true
+            },
+            "desk-dnsdist": {
+              "MainPID": "3444306",
+              "ActiveState": "active",
+              "started_before_rollout": true
+            },
+            "desk-dns-ui": {
+              "MainPID": "978",
+              "ActiveState": "active",
+              "started_before_rollout": true
+            },
+            "desk-dns-vip": {
+              "MainPID": "932",
+              "ActiveState": "active",
+              "started_before_rollout": true
+            },
+            "desk-dns-activity": {
+              "MainPID": "763",
+              "ActiveState": "active",
+              "started_before_rollout": true
+            }
+          }
+        },
+        {
+          "node": "deskb2x",
+          "all_processes_predate_rollout": true,
+          "additional_pids": {
+            "desk-network": {
+              "before": "3227754",
+              "after": "3227754",
+              "unchanged": true
+            },
+            "desk-dashboard": {
+              "before": "2363619",
+              "after": "2363619",
+              "unchanged": true
+            },
+            "desk-monitoring": {
+              "before": "0",
+              "after": "0",
+              "unchanged": true
+            }
+          },
+          "units": {
+            "nats-server": {
+              "MainPID": "882",
+              "ActiveState": "active",
+              "started_before_rollout": true
+            },
+            "haproxy": {
+              "MainPID": "748",
+              "ActiveState": "active",
+              "started_before_rollout": true
+            },
+            "keepalived": {
+              "MainPID": "750",
+              "ActiveState": "active",
+              "started_before_rollout": true
+            },
+            "xiaozhi-control-plane": {
+              "MainPID": "2077742",
+              "ActiveState": "active",
+              "started_before_rollout": true
+            },
+            "xiaozhi-worker": {
+              "MainPID": "2071386",
+              "ActiveState": "active",
+              "started_before_rollout": true
+            },
+            "xiaozhi-core": {
+              "MainPID": "2079409",
+              "ActiveState": "active",
+              "started_before_rollout": true
+            },
+            "xiaozhi-mqtt-gateway": {
+              "MainPID": "757",
+              "ActiveState": "active",
+              "started_before_rollout": true
+            },
+            "xiaozhi-runtime-apply": {
+              "MainPID": "884",
+              "ActiveState": "active",
+              "started_before_rollout": true
+            },
+            "deskbox-front-panel": {
+              "MainPID": "2015219",
+              "ActiveState": "active",
+              "started_before_rollout": true
+            },
+            "desk-dnsdist": {
+              "MainPID": "3306154",
+              "ActiveState": "active",
+              "started_before_rollout": true
+            },
+            "desk-dns-ui": {
+              "MainPID": "945",
+              "ActiveState": "active",
+              "started_before_rollout": true
+            },
+            "desk-dns-vip": {
+              "MainPID": "991",
+              "ActiveState": "active",
+              "started_before_rollout": true
+            },
+            "desk-dns-activity": {
+              "MainPID": "776",
+              "ActiveState": "active",
+              "started_before_rollout": true
+            }
+          }
+        },
+        {
+          "node": "deskb3x",
+          "all_processes_predate_rollout": true,
+          "additional_pids": {
+            "desk-network": {
+              "before": "3811282",
+              "after": "3811282",
+              "unchanged": true
+            },
+            "desk-dashboard": {
+              "before": "2553222",
+              "after": "2553222",
+              "unchanged": true
+            },
+            "desk-monitoring": {
+              "before": "0",
+              "after": "0",
+              "unchanged": true
+            }
+          },
+          "units": {
+            "nats-server": {
+              "MainPID": "873",
+              "ActiveState": "active",
+              "started_before_rollout": true
+            },
+            "haproxy": {
+              "MainPID": "740",
+              "ActiveState": "active",
+              "started_before_rollout": true
+            },
+            "keepalived": {
+              "MainPID": "744",
+              "ActiveState": "active",
+              "started_before_rollout": true
+            },
+            "xiaozhi-control-plane": {
+              "MainPID": "2261844",
+              "ActiveState": "active",
+              "started_before_rollout": true
+            },
+            "xiaozhi-worker": {
+              "MainPID": "2257655",
+              "ActiveState": "active",
+              "started_before_rollout": true
+            },
+            "xiaozhi-core": {
+              "MainPID": "2263356",
+              "ActiveState": "active",
+              "started_before_rollout": true
+            },
+            "xiaozhi-mqtt-gateway": {
+              "MainPID": "752",
+              "ActiveState": "active",
+              "started_before_rollout": true
+            },
+            "xiaozhi-runtime-apply": {
+              "MainPID": "875",
+              "ActiveState": "active",
+              "started_before_rollout": true
+            },
+            "deskbox-front-panel": {
+              "MainPID": "2198202",
+              "ActiveState": "active",
+              "started_before_rollout": true
+            },
+            "desk-dnsdist": {
+              "MainPID": "3435321",
+              "ActiveState": "active",
+              "started_before_rollout": true
+            },
+            "desk-dns-ui": {
+              "MainPID": "948",
+              "ActiveState": "active",
+              "started_before_rollout": true
+            },
+            "desk-dns-vip": {
+              "MainPID": "937",
+              "ActiveState": "active",
+              "started_before_rollout": true
+            },
+            "desk-dns-activity": {
+              "MainPID": "787",
+              "ActiveState": "active",
+              "started_before_rollout": true
+            }
+          }
+        }
+      ],
+      "note": "Protected voice/DNS/ingress PIDs predate rollout; dashboard/monitoring PIDs unchanged. Additional desk-network PID audit detected the OOM below. Core and HA agent restarts were planned."
+    },
+    "final": {
+      "camera_owners": {
+        "tapo_c222_160": [
+          "deskb2x"
+        ],
+        "tapo_c222_161": [
+          "deskb1x"
+        ],
+        "tapo_c222_163": [
+          "deskb3x"
+        ]
+      },
+      "core": "deskb3x",
+      "checkpoint_revision": 62,
+      "synced_nodes": 3,
+      "commands_storage_clock_healthy_nodes": 3,
+      "observation_failures": 0,
+      "resources_30_second_sample": {
+        "deskb1x": {
+          "available_mib": 2208,
+          "seconds": 31.41,
+          "node_busy_percent": 20.34,
+          "units": {
+            "desk-camera": {
+              "one_core_percent": 6.2,
+              "memory_mib": 21.22
+            },
+            "desk-camera-thumbnails": {
+              "one_core_percent": 0.32,
+              "memory_mib": 9.87
+            },
+            "desk-homeassistant": {
+              "one_core_percent": 2.45,
+              "memory_mib": 29.04
+            },
+            "desk-network": {
+              "one_core_percent": 3.31,
+              "memory_mib": 38.31
+            },
+            "container:desk-camera-thumbnails": {
+              "one_core_percent": 0.76,
+              "memory_mib": 48.02
+            }
+          }
+        },
+        "deskb2x": {
+          "available_mib": 1973,
+          "seconds": 31.49,
+          "node_busy_percent": 26.28,
+          "units": {
+            "desk-camera": {
+              "one_core_percent": 6.85,
+              "memory_mib": 20.74
+            },
+            "desk-camera-thumbnails": {
+              "one_core_percent": 0.4,
+              "memory_mib": 9.7
+            },
+            "desk-homeassistant": {
+              "one_core_percent": 2.59,
+              "memory_mib": 29.08
+            },
+            "desk-network": {
+              "one_core_percent": 3.51,
+              "memory_mib": 109.19
+            },
+            "container:desk-camera-thumbnails": {
+              "one_core_percent": 1.58,
+              "memory_mib": 47.95
+            }
+          }
+        },
+        "deskb3x": {
+          "available_mib": 1914,
+          "seconds": 31.45,
+          "node_busy_percent": 22.7,
+          "units": {
+            "desk-camera": {
+              "one_core_percent": 6.86,
+              "memory_mib": 20.72
+            },
+            "desk-camera-thumbnails": {
+              "one_core_percent": 0.32,
+              "memory_mib": 9.75
+            },
+            "desk-homeassistant-core": {
+              "one_core_percent": 0.61,
+              "memory_mib": 17.21
+            },
+            "desk-homeassistant": {
+              "one_core_percent": 3.91,
+              "memory_mib": 26.94
+            },
+            "desk-network": {
+              "one_core_percent": 3.32,
+              "memory_mib": 49.89
+            },
+            "container:desk-homeassistant-core": {
+              "one_core_percent": 5.33,
+              "memory_mib": 285.23
+            },
+            "container:desk-camera-thumbnails": {
+              "one_core_percent": 0.77,
+              "memory_mib": 48.04
+            }
+          }
+        }
+      }
+    },
+    "incidental_findings": [
+      {
+        "service": "desk-network",
+        "node": "deskb1x",
+        "at": "2026-10-18T10:34:42+07:00",
+        "result": "OOM-killed within its own 256 MiB memory cgroup; automatic restart at 10:34:49; network owner moved to deskb2x and recovery synced 3/3.",
+        "kernel_evidence": [
+          "2026-10-18T10:34:42+0700 deskb1x kernel: python3 invoked oom-killer: gfp_mask=0xcc0(GFP_KERNEL), order=0, oom_score_adj=0",
+          "2026-10-18T10:34:42+0700 deskb1x kernel: Memory cgroup stats for /system.slice/desk-network.service:",
+          "2026-10-18T10:34:42+0700 deskb1x kernel: oom-kill:constraint=CONSTRAINT_MEMCG,nodemask=(null),cpuset=system.slice,mems_allowed=0,oom_memcg=/system.slice/desk-network.service,task_memcg=/system.slice/desk-network.service,task=python3,pid=3154125,uid=0",
+          "2026-10-18T10:34:42+0700 deskb1x kernel: Memory cgroup out of memory: Killed process 3154125 (python3) total-vm:415828kB, anon-rss:259356kB, file-rss:11612kB, shmem-rss:0kB, UID:0 pgtables:664kB oom_score_adj:0"
+        ],
+        "network_sources_or_limits_changed": false,
+        "camera_cgroup_oom_counters": 0,
+        "root_cause_of_network_memory_growth": "Not investigated beyond the cgroup evidence; separate follow-up needed. No causal claim about camera rollout."
+      }
+    ],
+    "approval_review": {
+      "rejected": "Proposed config-entry comparison was rejected because of potential sensitive data/options export.",
+      "alternative": "No rejected script was executed. Used YAML/dashboard SHA-256 and entity-registry binding checks without reading config-entry data/options/auth."
+    },
+    "probe_notes": [
+      "Owner-transfer probe initially accepted transient local_ready with null generation and timed out. Follow-up confirmed a valid successor generation and fresh snapshot without another handoff; no valid-generation handoff latency is claimed.",
+      "Only completed tickets were replayed live. No intentional in-flight process kill, physical movement or privacy toggle."
+    ]
+  }
+}

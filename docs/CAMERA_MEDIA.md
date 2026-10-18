@@ -968,3 +968,17 @@ still fences a running download. See [delivery lifecycle, rollout and limits](CA
 and `CAMERA_MEDIA_DELIVERY_VALIDATION.json`, including the preliminary cancelled
 preparation and tests not run live. The next boundary is owner-side control
 observations/polling and then commands through a thin HA adapter.
+
+### Owner-side status observations — phase 3A, 2026-10-18
+
+The periodic native `getMost()` batch now comes from the current camera owner
+for Bed, Makeup and Guess. The existing warm process has a separate bounded
+read-only lane; it keeps polling every thirty seconds while Core is absent and
+can refresh during managed playback. Native mapping and all 327 entity bindings
+(228 enabled) retain their identity. The early Core adapter refuses stale or
+mismatched owner data without falling back to direct SDK polling.
+
+SDK construction/authentication, startup and ancillary reads, command methods,
+entity publication and automations still require Core. Bed/Guess recording
+authority and independent browser delivery are unchanged; Makeup is live-only.
+See [the observation boundary, rollout and validation](CAMERA_OBSERVATIONS.md).
