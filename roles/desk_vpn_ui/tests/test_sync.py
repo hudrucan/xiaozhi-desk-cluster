@@ -1,11 +1,25 @@
-import base64,os,copy,json,sqlite3,tempfile,unittest
+import ast,base64,os,copy,hashlib,json,sqlite3,tempfile,unittest
 from pathlib import Path
 from cryptography.fernet import Fernet
 import sys
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'files'))
 import database,seed,sync
 from config_journal import Journal,Failure,digest
-UPSTREAM=Path(os.environ.get('WG_EASY_SOURCE','/private/tmp/desk-wg-easy-source'))
+FIXTURE=Path(__file__).resolve().parent/'fixtures/wg-easy'
+MIGRATIONS=Path(os.environ['WG_EASY_SOURCE'])/'src/server/database/migrations' if 'WG_EASY_SOURCE' in os.environ else FIXTURE/'migrations'
+
+class Fixture(unittest.TestCase):
+ def test_bundled_migrations_match_the_build_pin_and_recorded_hashes(self):
+  manifest=json.loads((FIXTURE/'manifest.json').read_text())
+  build=Path(__file__).resolve().parents[3]/'scripts/build-vpn-ui.py'
+  pin=next(n.value.value for n in ast.parse(build.read_text()).body if isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='PIN' for t in n.targets))
+  self.assertEqual(manifest['upstream_revision'],pin)
+  for name,digest in manifest['files'].items():
+   with self.subTest(file=name):self.assertEqual(hashlib.sha256((FIXTURE/name).read_bytes()).hexdigest(),digest)
+  journal=json.loads((FIXTURE/'migrations/meta/_journal.json').read_text())
+  expected={entry['tag']+'.sql' for entry in journal['entries']}
+  self.assertEqual({p.name for p in (FIXTURE/'migrations').glob('*.sql')},expected)
+  self.assertEqual({name for name in manifest['files'] if name.startswith('migrations/')},{'migrations/meta/_journal.json'}|{'migrations/'+name for name in expected})
 class Native:
  def __init__(self,path):self.path=path
  def request(self,path,method,raw):
@@ -14,9 +28,9 @@ class Native:
 class Tests(unittest.TestCase):
  def setUp(self):
   self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup);root=Path(self.temp.name);self.clusters={};key=Fernet.generate_key();creds={'server_private':base64.b64encode(os.urandom(32)).decode(),'server_public':'','client_public':''};creds['server_public']=database.public(creds['server_private']);client=base64.b64encode(os.urandom(32)).decode();creds['client_public']=database.public(client)
-  value=seed.make(UPSTREAM/'src/server/database/migrations',root/'seed.db',creds,client,'hash');(root/'seed.json').write_text(json.dumps(value))
+  value=seed.make(MIGRATIONS,root/'seed.db',creds,client,'hash');(root/'seed.json').write_text(json.dumps(value))
   for node in ('n1','n2','n3'):
-   db=root/(node+'.db');seed.make(UPSTREAM/'src/server/database/migrations',db,creds,client,'hash');database.apply(db,value)
+   db=root/(node+'.db');seed.make(MIGRATIONS,db,creds,client,'hash');database.apply(db,value)
    c={'node':node,'key':key.decode(),'members':dict(n1='a',n2='b',n3='c'),'certificate':None,'database':str(db),'seed':str(root/'seed.json'),'simulate':True,'ready':str(root/(node+'.ready'))}
    j=Journal(root/(node+'.journal'),Fernet(key),node,c['members'],key);j.initialize(value)
    x=sync.Cluster.__new__(sync.Cluster);x.c=c;x.journal=j;x.native=Native(db);x.seed=value;x.lock=sync.threading.RLock();x.pool=sync.ThreadPoolExecutor(6);self.addCleanup(x.pool.shutdown);x.key=key;x.heads={};x.error=None;x.initialized=True;x.event=sync.threading.Event();x.stats_cache=(0,[]);x.apply();self.clusters[node]=x

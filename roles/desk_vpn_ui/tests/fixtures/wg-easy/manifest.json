@@ -1,0 +1,13 @@
+{
+  "upstream_revision": "2dc8ba779216929c10c1998341d36963fe0eca7a",
+  "upstream_url": "https://github.com/wg-easy/wg-easy",
+  "files": {
+    "LICENSE": "0d96a4ff68ad6d4b6f1f30f713b18d5184912ba8dd389f86aa7710db079abcb0",
+    "migrations/0000_short_skin.sql": "c9b7b217bb857baac7e0ddc81302dccea20c971c955cd5b0332ef3dcf7c29e7e",
+    "migrations/0001_classy_the_stranger.sql": "814271c6d4daec80a2de04f0aa29d9a5f1b689f51db3d9a575443942233f4c11",
+    "migrations/0002_keen_sleepwalker.sql": "28f9a9e188aa0f1a5ec0651ef168b76b53795b2207109685316f909d4fc5634c",
+    "migrations/0003_breezy_colossus.sql": "6e5a47546acfce8bb47464e0b2b024fd31c3e263dfbb91bc35c2ff4feaf1e640",
+    "migrations/0004_optimal_mandrill.sql": "abd4a4eb68cc3cdf5842f036c9e080a791217728c3657d2e5171c9b1e7be72d4",
+    "migrations/meta/_journal.json": "80651681f873cc0a2de6d0d320651de6d4ad591a5e5b8a4a9e10a8d883aefc6b"
+  }
+}

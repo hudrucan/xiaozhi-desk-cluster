@@ -1,10 +1,23 @@
 import importlib.util,json,pathlib,tempfile,threading,time,unittest,os,subprocess,sys
+from types import SimpleNamespace
 from unittest.mock import patch,MagicMock
 FILES=pathlib.Path(__file__).resolve().parents[1]/'files'
 if not (FILES/'warm_runtime.py').exists():FILES=pathlib.Path(__file__).parent
 spec=importlib.util.spec_from_file_location('warm_runtime',FILES/'warm_runtime.py');w=importlib.util.module_from_spec(spec);spec.loader.exec_module(w)
 spec=importlib.util.spec_from_file_location('warm_ha',FILES/'ha.py');ha=importlib.util.module_from_spec(spec);spec.loader.exec_module(ha)
 class Warm(unittest.TestCase):
+ def test_direct_child_observation_uses_nonreaping_waitid_without_proc_scan(self):
+  system=SimpleNamespace(P_PID=1,WEXITED=4,WNOHANG=1,WNOWAIT=0x1000000,
+   waitid=MagicMock(side_effect=[None,SimpleNamespace(si_pid=123),ChildProcessError()]))
+  with patch.object(w,'os',system),patch.object(w,'live_group',side_effect=AssertionError('active loop must not scan proc')):
+   self.assertTrue(w.child_running(123))
+   self.assertFalse(w.child_running(123))
+   self.assertFalse(w.child_running(123))
+  self.assertEqual(system.waitid.call_count,3)
+  for call in system.waitid.call_args_list:
+   self.assertEqual(call.args,(system.P_PID,123,system.WEXITED|system.WNOHANG|system.WNOWAIT))
+ @unittest.skipUnless(all(hasattr(os,name) for name in ('waitid','P_PID','WEXITED','WNOHANG','WNOWAIT')),
+  'Real child observation requires waitid with WNOWAIT; run on Linux')
  def test_direct_child_observation_keeps_exit_status_and_never_scans_proc(self):
   child=subprocess.Popen([sys.executable,'-c','import time;time.sleep(10)'])
   try:

@@ -38,6 +38,22 @@ Keep ignored `secret/vpn-ui/` and the existing ignored tunnel credentials backed
 
 Rolling upgrades stage the full hashed asset set on every replica before restarting any application. The adapter serves staged assets directly, retaining hashes used by existing browser sessions; UI affinity reduces cross-version requests. HAProxy retries failed reads on another replica, while Save/CRUD methods disable layer-seven retries to avoid duplicate mutations.
 
+## Offline regression tests
+
+With the existing Python cryptography dependency installed, run:
+
+```sh
+python3 -m unittest discover -s roles/desk_vpn_ui/tests -p 'test_*.py' -v
+```
+
+The tests use the real SQL migrations bundled under `tests/fixtures/wg-easy/`,
+pinned to the same revision as the build script and checked against recorded
+SHA256 hashes. Databases and synthetic keys are created only in temporary
+directories. No upstream checkout, network access or production credentials are
+needed. An explicit `WG_EASY_SOURCE` still selects an external source checkout;
+missing migrations fail instead of silently falling back to the bundled fixture.
+See the fixture README for provenance, licensing and pin-update instructions.
+
 ## Validation recorded on 2026-10-14
 
 PASS: seven focused sync/asset tests, seven ingress preservation checks, existing topology and timeline regressions, Go readiness and PSK recovery tests, and Ansible syntax checks. PASS: real create/edit/export QR/config/disable/enable/delete from different nodes; temporary peers removed and the original iPhone retained. PASS: native UI stopped on node 1 with its affinity cookie; HTML/client API/bundle requests continued through other replicas. PASS: a Save with node-3 adapter offline was chosen by the other two; node 3 caught up on restart, then the temporary peer was deleted.

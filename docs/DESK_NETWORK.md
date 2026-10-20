@@ -132,6 +132,14 @@ mutation classification, bounded peer TLS handshakes, isolated browser storage
 and subfolder rewriting. Live rollout additionally
 checks native health, navigation, edits, replica catchup and owner interruption.
 
+The warm direct-child integration test requires `waitid` with `WNOWAIT`. It runs
+with a real subprocess on Linux and is explicitly skipped on hosts without that
+API, including macOS. A separate portable test checks the exact non-reaping,
+nonblocking syscall flags, running/exited/reaped results and absence of a `/proc`
+group scan. The portable check does not replace real Linux process validation.
+To run only the warm tests, set `PYTHONPATH=roles/desk_network/files` and use
+`python3 -m unittest discover -s roles/desk_network/tests -p test_warm.py -v`.
+
 ## Live verification, 2026-10-15
 
 - Guarded rolling deployment: all three nodes, no protected service/VIP changes.
