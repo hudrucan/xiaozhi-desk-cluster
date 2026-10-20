@@ -1,5 +1,11 @@
 # Single-node WireGuard trial
 
+The isolated single-node workflow is retained for explicit pre-HA trials and
+credential/profile compatibility. It refuses reruns while HA is active. Existing
+HA deployments use [VPN operations](DESK_VPN.md) and `vpn-ha.yml`; their role still
+consumes the original ignored trial identity. Historical placements and the WAN
+endpoint below are dated acceptance evidence, not the current VPN endpoint.
+
 Opt-in only: `vpn-trial.yml` is separate from site provisioning. Node 3
 192.168.1.103 is selected because it currently owns neither management VIP
 192.168.1.186 nor DNS VIP 192.168.1.250. No VPN VIP, election or config sync yet.

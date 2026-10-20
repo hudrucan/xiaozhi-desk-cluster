@@ -1,5 +1,11 @@
 # Tapo distribution: remaining Core dependencies
 
+Historical research against the stated baseline below. The owner recording,
+independent browser delivery, observations and Guess command pilot have since
+been implemented. Use [current camera capabilities](CAMERA_MEDIA.md) and their
+linked contracts for supported behavior and cutover order. The original findings
+and roadmap remain design evidence, not current deployment instructions.
+
 Research date: 2026-10-17. Code baseline: `2efc2bf`. This is an investigation and
 staged design. No camera command, stream, recording read, Core restart or owner
 transfer was initiated during this investigation. The subsequent phase-0 rollout
@@ -236,7 +242,7 @@ has been measured for the proposed design.
 ## Validation performed during research
 
 Phase 0 has subsequently been implemented and deployed to all three nodes; see
-the [Core media-handle guard](CAMERA_MEDIA.md#core-media-handle-guard--phase-0).
+the [Core media-handle guard](CAMERA_MEDIA.md#ownership-transport-and-media-isolation).
 Core r51 is synced 3/3 after a clean restart. A live r50 canary exposed stale Core
 handles between media operations; the follow-up now obtains a fresh handle on Core
 at each serialized uncached-playback admission. Two consecutive Guess recording

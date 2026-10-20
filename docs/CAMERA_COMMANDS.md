@@ -1,4 +1,4 @@
-# Owner-side Tapo commands — phase 3B pilot
+# Owner-side Tapo commands — Guess pilot
 
 Status, 2026-10-18: **deployed and activated for Guess only**
 (`tapo_c222_163`). All three recovery nodes have compatible workers and the early

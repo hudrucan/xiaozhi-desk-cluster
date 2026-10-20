@@ -1,16 +1,15 @@
-# Owner recording API: phase 1
+# Owner recording API
 
-Date: 2026-10-18. Phase 1A defines the contract and ticket lifecycle; phase 1B
-connects the installed SDK, signed RPC and Core rendering. The coordinated rollout
-in `camera-recording-owner.yml` first selected Guess `.163`, then Bed `.160`
-after its transfer canary passed. Final
-live results are recorded separately from the phase-0 r51 evidence.
+The current implementation selects Bed `.160` and Guess `.163` through the
+coordinated `camera-recording-owner.yml` cutover. This contract covers the installed
+SDK backend, signed RPC and Core renderer. See [current camera capabilities](CAMERA_MEDIA.md)
+for the separate observation, command and browser delivery boundaries.
 
 `roles/desk_camera/files/recording_contract.py` defines the metadata boundary.
 `recording_jobs.py` admits and fences asynchronous tickets. `recording_owner.py`
 adapts the installed SDK in the existing warm worker. Selected cameras allocate
 media handles only in that process; Core routes typed metadata and renders the
-native browser. Unselected cameras retain the guarded phase-0 Core allocator.
+native browser. Unselected cameras retain the guarded Core allocator.
 
 ## Why tickets
 
@@ -60,9 +59,8 @@ monotonic deadline prevents a backwards wall-clock adjustment extending SDK work
 
 `dates.query` is exactly `{"cursor": null}` initially. `index.query` additionally
 contains an actual calendar date in camera `YYYYMMDD` form. A later page supplies
-an opaque 32-character cursor. The future SDK backend must bind each cursor to an
-immutable snapshot, query, camera and generation; a cursor is not an arbitrary SDK
-offset. Snapshot storage and cursor lookup are part of the next backend slice.
+an opaque 32-character cursor bound by the SDK backend to an immutable snapshot,
+query, camera and generation; a cursor is not an arbitrary SDK offset.
 
 `result` and `cancel` contain only the common fields and refer to the original
 read ticket. They do not extend its deadline. An identical read retry returns the
@@ -72,8 +70,8 @@ cannot restart after their records are pruned. There is no durable replay ledger
 or cross-generation job recovery in this step.
 
 Existing playback prepare/status/cancel and browser viewer APIs remain unchanged.
-They must be integrated with the same internal authority/admission before cutover;
-this contract does not add another competing playback or viewer framework.
+They share the same internal authority/admission; this contract does not add
+another competing playback or viewer framework.
 
 ## Response and time semantics
 
@@ -115,10 +113,10 @@ cannot be inferred from a failed SDK call. Unknown storage/read failures produce
 particular, do not turn a mapped SDK `-71105` into proof of an empty SD card.
 
 Requests are limited to 2 KiB and complete response bodies to 32 KiB, within the
-existing signed 64-KiB envelope. The future IPC host must enforce byte limits
-before JSON parsing. The maximum page also passes through the actual existing
-`protocol.pack/unpack` in offline tests. The warm worker's current thumbnail IPC
-header limits are unchanged; wiring this larger metadata response is still needed.
+existing signed 64-KiB envelope. The IPC host enforces byte limits before JSON
+parsing. The maximum page also passes through the actual existing
+`protocol.pack/unpack` in offline tests.
+Metadata responses have a separate bounded path from thumbnail IPC headers.
 
 ## Lifecycle and admission
 
@@ -138,7 +136,7 @@ At most 32 retained/active read tickets occupy the node. Terminal expired ticket
 are pruned on new admission, without another idle maintenance loop. Reaching the
 bound fails with `capacity`; valid retry records are not silently evicted.
 
-The future host must inject the **same admission lock** used by playback and
+The warm host injects the **same admission lock** used by playback and
 thumbnail SDK mutations. Before playback acquires that lock, it calls
 `await jobs.pause()`: new reads fail busy, queued reads stop without SDK access,
 and an in-flight read drains before the pause acknowledges. Existing completed
@@ -184,9 +182,11 @@ Core policy covers the node's active worker policy and terminates on bootstrap
 failure. Native readiness requires this early guard for selected cameras.
 The later owned integration skips the native media scheduler for selected entries.
 Already-created startup probes may be denied locally by the SDK guard; these do
-not send camera media requests. Control coordinator polling remains enabled.
-Native media sync, thumbnail preload/cache, sound detection and time sync must
-remain disabled. Ordinary control polling remains on Core in this phase.
+not send camera media requests. Control coordinator mapping remains enabled;
+selected periodic status reads use
+[owner observations](CAMERA_OBSERVATIONS.md), and selected commands follow their
+[separate contract](CAMERA_COMMANDS.md). Native media sync, thumbnail preload/cache,
+sound detection and time sync must remain disabled.
 
 Rollout order is enforced by `camera-recording-owner.yml`:
 
@@ -212,8 +212,9 @@ certified restart. Reverse order would permit competing allocators.
 These guards prove bounded SDK admission, cleanup and result fencing. Tapo does
 not consume our generation token; a camera rejecting an already-sent old-owner
 request is not guaranteed by the API. A software owner-transfer test must not be
-presented as a power-cut/network-partition proof. Viewer reattachment across Core
-restart and Core-independent media HTTP delivery remain later phases.
+presented as a power-cut/network-partition proof. Admitted browser viewers use the separate
+[independent delivery lifecycle](CAMERA_MEDIA_DELIVERY.md); a full page reload
+does not restore an in-memory capability.
 
 ## Offline validation
 

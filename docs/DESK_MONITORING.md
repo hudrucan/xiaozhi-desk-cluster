@@ -320,3 +320,10 @@ Protected voice/DNS/VIP service checks passed on every node.
 An optional NetAlertX CPU canary is labelled **Network trial**, only while its
 private frontend is reachable and its RAM marker is present. This does not mean
 NetAlertX has HA or that it manages the modem's DHCP configuration.
+
+The configuration journal source is
+`roles/desk_monitoring/files/config_journal.py`. Home Assistant and VPN UI source
+paths are repository symlinks to it; Ansible copies the resolved file into each
+service's existing private runtime. DNS also copies this canonical source.
+No runtime imports cross service directories, and journal/checkpoint formats,
+certificate validation and service-specific keys remain unchanged.

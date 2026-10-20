@@ -1,4 +1,4 @@
-# Owner-side Tapo status observations (phase 3A)
+# Owner-side Tapo status observations
 
 This step externalizes the pinned native integration's `getMost()` status batch.
 The three C222 cameras retain their existing native Tapo Control entities, unique
@@ -49,15 +49,16 @@ bypass it. Owner-generation changes invalidate clients and cached results.
 ## Remaining Core dependencies
 
 Native SDK construction/authentication, startup discovery/capability probes,
-ancillary integration reads and all command/action methods remain in Core in
-3A. Native entity state publication and automation execution still require Core.
-The owner polling service continues through a Core outage; that does not make
-HA automations or PTZ/privacy/preset actions Core-independent.
+ancillary integration reads and unselected command/action methods remain in Core.
+Native entity state publication and automation execution still require Core.
+The owner polling service continues through a Core outage. HA automations and
+new native command admission still require Core.
 
 Bed and Guess retain owner-side SD recording authority and independent browser
 media delivery. Makeup remains live-only. Status polling never allocates a media
-handle. Phase 3B must introduce a narrow command contract, identity/deduplication,
-ambiguous-timeout reconciliation and generation fencing before commands move.
+handle. Guess has a separate [owner command contract](CAMERA_COMMANDS.md) with
+identity/deduplication, ambiguous-timeout handling and generation fencing.
+Bed/Makeup commands retain their native Core path.
 
 ## Rollout and recovery
 

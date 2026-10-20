@@ -1,5 +1,10 @@
 # Distributed device workers — design proposal
 
+Research proposal; a general-purpose device-worker framework is not deployed.
+For implemented camera boundaries and remaining Core dependencies, use
+[current camera capabilities](CAMERA_MEDIA.md). The staged options below are
+not activation instructions.
+
 Research date: 2026-10-17. Inventory supplied by the user: two Xiaomi Mi Home
 plugs and two Smart Life plugs, none added to Home Assistant. Exact models,
 firmware, radio protocols and local-access credentials are not yet known.

@@ -15,6 +15,29 @@ Host-specific private addressing remains authoritative in
 values. `group_vars/deskboxes.yml` retains the existing interface/connection
 settings and adds password references to Vault variables.
 
+## Current service entrypoints
+
+`site.yml` provisions the node foundation, Wi-Fi driver, SSH, NATS, workers,
+control planes and management ingress. The services below retain separate
+explicit deployment/activation boundaries; they are not all part of `site.yml`.
+Repository selections describe intended configuration, not a fresh live-node audit.
+
+| Service | Deployment and operations |
+| --- | --- |
+| DNS | `dns.yml` and scoped maintenance playbooks; [DNS contract](docs/DESK_DNS.md) |
+| Monitoring and unified UI | `monitoring.yml`, `monitoring-sync.yml`, `ui.yml`; [monitoring](docs/DESK_MONITORING.md), [UI](docs/DESK_UI.md) |
+| VPN | `vpn-ha.yml`, `vpn-ui.yml`, `vpn-ddns.yml`, `vpn-recovery.yml`; [VPN operations](docs/DESK_VPN.md) |
+| Network | `network.yml`, `network-distributed.yml`, `network-warm.yml`; [current Network behavior and recovery](docs/DESK_NETWORK.md) |
+| Home Assistant | `homeassistant.yml` and scoped sync/checkpoint playbooks; [Core lifecycle](docs/HOME_ASSISTANT.md) |
+| Cameras | `camera-media.yml` for prepared workers; separate guarded authority, delivery, observation and command cutovers; [current capability matrix and rollout order](docs/CAMERA_MEDIA.md) |
+| Dashboard and local display | `desk-dashboard.yml`, `pi-panel.yml`; [dashboard](docs/DESK_DASHBOARD.md), [Pi panel](docs/PI_PANEL.md) |
+
+Camera selection currently includes Bed/Guess owner recording, all-camera owner
+observations and Guess-only PTZ/preset/privacy commands. Generic role defaults
+remain inactive; the dedicated cutovers preserve certified Core/worker authority
+ordering. Historical canary revisions and placements in validation records are
+evidence, not instructions to revert the current selections.
+
 ## DNS health and node maintenance
 
 Source for DNS reachability/routing telemetry and confirmed drain-before-reboot
@@ -67,9 +90,8 @@ the local `cluster_ip/24` exists on the private interface.
 
 This is **Core NATS only**. JetStream is disabled by omission: there is no
 JetStream block, storage directory or persistence setup. Core NATS does not
-persist messages for disconnected subscribers. Future consumers are
-`xiaozhi-core` and `xiaozhi-worker` for internal RPC and streaming-operation
-control. The MQTT gateway is not a NATS client.
+persist messages for disconnected subscribers. The deployed `xiaozhi-core` and
+`xiaozhi-worker` services use it for internal RPC and streaming-operation control. The MQTT gateway is not a NATS client.
 
 Public defaults live in `roles/nats/defaults/main.yml`: version, release URL and
 checksum, listener ports, cluster name, payload size, usernames and verification
@@ -123,13 +145,14 @@ five-second grace and a thirty-second drain, with a forty-five-second stop timeo
 `site.yml` runs:
 
 1. Existing identity, network and access roles.
-2. Existing SSH hardening with `serial: 1`, unchanged.
-3. The NATS role in its own `serial: 1` play, stopping the rollout on failure.
-4. A separate read-only NATS verification play after all serial batches finish.
-5. A separate `worker`-tagged play for the explicit `xiaozhi_workers` group.
-6. A `control-plane`-tagged `serial: 1` play for `xiaozhi_control_planes`.
-7. Final read-only control-plane verification from one deskbox over the private LAN.
-8. An `ingress`-tagged all-node preflight, serial ingress rollout and final verification.
+2. Managed Wi-Fi driver selection before cluster VIP activation.
+3. Existing SSH hardening with `serial: 1`.
+4. The NATS role in its own `serial: 1` play, stopping the rollout on failure.
+5. A separate read-only NATS verification play after all serial batches finish.
+6. A separate `worker`-tagged play for the explicit `xiaozhi_workers` group.
+7. A `control-plane`-tagged `serial: 1` play for `xiaozhi_control_planes`.
+8. Final read-only control-plane verification from one deskbox over the private LAN.
+9. An `ingress`-tagged all-node preflight, serial ingress rollout and final verification.
 
 The config template uses `nats-server -t -c <candidate>` before replacing the
 live config. Ordered handlers validate `/etc/nats-server.conf` again before
@@ -1331,5 +1354,5 @@ control-plane role's prerequisites for future deployments.
 ## Shared cluster overview
 
 The existing management VIP hosts the read-only node dashboard, node details and
-recent cluster events at `/`. It shares `/api/cluster/status` with a future local
-display. Deploy with `desk-dashboard.yml`; see [dashboard operations](docs/DESK_DASHBOARD.md).
+recent cluster events at `/`. The local Pi display uses the compact
+`/api/cluster/panel` projection; see [Pi panel operations](docs/PI_PANEL.md). Deploy with `desk-dashboard.yml`; see [dashboard operations](docs/DESK_DASHBOARD.md).

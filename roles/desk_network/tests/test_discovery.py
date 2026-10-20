@@ -1,4 +1,4 @@
-import sys,pathlib,tempfile,sqlite3,time,json,unittest,datetime,threading,http.client,http.server,contextlib
+import sys,pathlib,tempfile,sqlite3,time,json,unittest,datetime,threading,http.client,contextlib
 from unittest.mock import patch,Mock
 FILES=pathlib.Path(__file__).resolve().parents[1]/'files';sys.path.insert(0,str(FILES))
 import discovery,ha
@@ -70,7 +70,7 @@ class ScanAction(unittest.TestCase):
    def renew(self,*args):return True
    def fanout(self,*a):return {'a':True,'b':True}
    def scan_status(self):return {'scans':{'arp':{'phase':'queued' if self.scan_queued_at else 'idle'}}}
-  cluster=Cluster();server=http.server.ThreadingHTTPServer(('127.0.0.1',0),ha.UI);server.cluster=cluster
+  cluster=Cluster();server=ha.Server(('127.0.0.1',0),ha.UI);server.cluster=cluster
   thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
   try:
    def request(origin='http://192.168.1.186'):

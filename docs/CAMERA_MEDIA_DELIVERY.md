@@ -1,4 +1,4 @@
-# Independent camera delivery — phase 2
+# Independent camera delivery
 
 The existing native HA Media Browser/player remains the UI. For the selected
 owner-only recording workloads (Bed `.160` and Guess `.163`), an authenticated

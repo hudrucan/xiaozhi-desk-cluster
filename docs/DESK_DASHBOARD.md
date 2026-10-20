@@ -268,3 +268,8 @@ are not replayed or migrated. Power loss or a node that cannot boot needs manual
 intervention. Xiaozhi VIP does not preempt on return; DNS follows its separate
 health/priority policy.
 
+
+The dashboard role and scoped panel/helper refresh playbooks import
+`roles/desk_dashboard/tasks/build.yml` for the same source-addressed ARM64 build
+cache. Their installation, readiness, isolation guards and rollback paths remain
+separate; importing the build tasks does not deploy or restart a service.

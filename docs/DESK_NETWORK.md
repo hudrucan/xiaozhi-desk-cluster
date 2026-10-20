@@ -6,6 +6,19 @@ retain certified checkpoints and do not run owner scans. All three nodes are con
 for warm standby; exactly one runs the active native backend/PHP/cron groups. No new LAN VIP,
 modem DHCP change or WireGuard discovery is involved.
 
+## Current implementation map
+
+The canonical `ha.py` retains the current bounded streaming proxy, UI admission
+and buffer budgets, isolated restore/checkpoint workers, warm standby support,
+owner-routed distributed scans and mDNS discovery. Shared configuration selects
+all three warm replicas and enables distributed scans; this does not prove live
+node readiness. See [distributed scans](#owner-routed-distributed-lan-scans-over-core-nats),
+[warm standby](#warm-standby-on-all-three-nodes),
+[scan progress](#scan-progress-and-inventory-freshness), and
+[bounded proxy/restore](#bounded-proxy-and-isolated-restore-correction-2026-10-18).
+The dated sections retain measurements, failure analysis and rollback evidence;
+their earlier limits/placements do not override current source and configuration.
+
 ## Deployment
 
 ```sh

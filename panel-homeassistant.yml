@@ -17,34 +17,13 @@
         argv: [systemctl, show, desk-network, desk-homeassistant, desk-homeassistant-core, '-p', MainPID, '-p', ActiveState, '-p', NRestarts]
       register: panel_homeassistant_controller_before
       changed_when: false
-    - name: Resolve the source-addressed collector artifact
-      ansible.builtin.set_fact:
-        panel_homeassistant_artifact: "/private/tmp/desk-dashboard-build/{{ lookup('ansible.builtin.file', 'roles/desk_dashboard/files/dashboard.go') | hash('sha256') }}/desk-dashboard"
-    - name: Create the local artifact cache
-      ansible.builtin.file:
-        path: '{{ panel_homeassistant_artifact | dirname }}'
-        state: directory
-        mode: '0755'
-      delegate_to: localhost
-      become: false
-    - name: Compile only the read-only dashboard collector
-      ansible.builtin.command:
-        argv: [go, build, -trimpath, -ldflags, '-s -w -buildid=', -o, '{{ panel_homeassistant_artifact }}', '{{ playbook_dir }}/roles/desk_dashboard/files/dashboard.go']
-        creates: '{{ panel_homeassistant_artifact }}'
-      environment:
-        GOOS: linux
-        GOARCH: arm64
-        CGO_ENABLED: '0'
-        GO111MODULE: 'off'
-        GOTOOLCHAIN: local
-        GOCACHE: /private/tmp/desk-dashboard-go-cache
-      delegate_to: localhost
-      become: false
+    - name: Build the cached dashboard collector
+      ansible.builtin.import_tasks: "{{ playbook_dir }}/roles/desk_dashboard/tasks/build.yml"
     - name: Deploy only the collector with rollback on failure
       block:
         - name: Back up and install the collector binary
           ansible.builtin.copy:
-            src: '{{ panel_homeassistant_artifact }}'
+            src: '{{ dashboard_artifact }}'
             dest: /usr/local/libexec/desk-dashboard
             mode: '0755'
             backup: true

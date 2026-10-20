@@ -8,7 +8,7 @@ state.snapshot.nodes.push({id:'deskb3x',online:true,observed_at:now,vip:{xiaozhi
 vm.runInContext(source.slice(source.indexOf('function currentNetwork'),source.indexOf('function detailMarkup')),ctx);
 const ready={...node,online:true,observed_at:now,network:{state:'active',sync:'synced',observed_at:now,subnet:'192.168.1.0/24',scan_minutes:5,voter_ready:true,revision:{term:17,node:'deskb1x',sequence:5}}};
 const standby={...ready,id:'deskb2x',network:{...ready.network,state:'standby'}};state.snapshot.nodes=[ready,standby];
-assert.equal(ctx.networkDetail(ready).label,'Synced');assert.equal(ctx.networkDetail(standby).role,'Network standby');assert.match(ctx.networkDetail(standby).scope,/Cold standby/);
+assert.equal(ctx.networkDetail(ready).label,'Synced');assert.equal(ctx.networkDetail(standby).role,'Network standby');assert.equal(ctx.networkDetail(standby).scope,'Standby · 192.168.1.0/24');
 standby.network={...standby.network,revision:{term:17,node:'deskb1x',sequence:4}};
 assert.equal(ctx.networkDetail(standby).label,'Pending');
 standby.network={...standby.network,voter_ready:false};assert.equal(ctx.networkDetail(standby).label,'Warming up');
@@ -21,7 +21,7 @@ const detailNode={...ready,vip:{xiaozhi:false,dns:false,vpn:true},activity:{asr:
 state.snapshot.nodes=[detailNode];const markup=ctx.detailMarkup(detailNode);
 assert.match(markup,/Network owner/);assert.match(markup,/scan every 5 min/);assert.match(markup,/checkpoint 17.5/);assert.match(markup,/href="\/network\/">Open network/);
 assert.match(markup,/Network<br>/);assert.match(markup,/Synced/);
-const cold={...detailNode,id:'deskb2x',network:{...detailNode.network,state:'standby'}};assert.match(ctx.detailMarkup(cold),/Network standby/);assert.match(ctx.detailMarkup(cold),/Cold standby/);
+const replica={...detailNode,id:'deskb2x',network:{...detailNode.network,state:'standby'}};assert.match(ctx.detailMarkup(replica),/Network standby/);assert.match(ctx.detailMarkup(replica),/Standby · 192\.168\.1\.0\/24/);
 ctx.networkEnabled=false;assert.doesNotMatch(ctx.detailMarkup(detailNode),/Network<br>|Open network|Network owner/);
 console.log('PASS Network details render in ownership, configuration and service link; hidden when disabled');
 

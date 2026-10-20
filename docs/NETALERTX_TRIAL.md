@@ -1,5 +1,10 @@
 # NetAlertX default CPU canary — 2026-10-14
 
+Historical default-image measurement, retained as performance evidence. The
+supported Network implementation is documented in [Network operations](DESK_NETWORK.md),
+including distributed scans, warm replicas and bounded proxy/restore behavior.
+The trial topology and limits below are not current deployment defaults.
+
 NetAlertX 26.10.0, official ARM64 image pinned to
 `ghcr.io/netalertx/netalertx@sha256:f95bca7a794141296dd1d16be5bb7f39f6fdbcd20353cdb51eee696e12d317f6`.
 Measured on deskb1x (four cores), with a 90-second host baseline, 120-second

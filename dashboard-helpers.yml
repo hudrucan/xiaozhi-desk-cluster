@@ -16,32 +16,11 @@
       register: dashboard_helpers_guard
       changed_when: false
       no_log: true
-    - name: Resolve the source-addressed collector artifact
-      ansible.builtin.set_fact:
-        dashboard_helpers_artifact: "/private/tmp/desk-dashboard-build/{{ lookup('file',playbook_dir+'/roles/desk_dashboard/files/dashboard.go') | hash('sha256') }}/desk-dashboard"
-    - name: Create the local artifact cache
-      ansible.builtin.file:
-        path: '{{ dashboard_helpers_artifact | dirname }}'
-        state: directory
-        mode: '0755'
-      delegate_to: localhost
-      become: false
-    - name: Build the ARM64 collector
-      ansible.builtin.command:
-        argv: [go, build, -trimpath, -ldflags, '-s -w -buildid=', -o, '{{ dashboard_helpers_artifact }}', '{{ playbook_dir }}/roles/desk_dashboard/files/dashboard.go']
-        creates: '{{ dashboard_helpers_artifact }}'
-      environment:
-        GOOS: linux
-        GOARCH: arm64
-        CGO_ENABLED: '0'
-        GO111MODULE: 'off'
-        GOTOOLCHAIN: local
-        GOCACHE: /private/tmp/desk-dashboard-go-cache
-      delegate_to: localhost
-      become: false
+    - name: Build the cached dashboard collector
+      ansible.builtin.import_tasks: "{{ playbook_dir }}/roles/desk_dashboard/tasks/build.yml"
     - name: Replace only the collector binary and retain a rollback copy
       ansible.builtin.copy:
-        src: '{{ dashboard_helpers_artifact }}'
+        src: '{{ dashboard_artifact }}'
         dest: /usr/local/libexec/desk-dashboard
         owner: root
         group: root
