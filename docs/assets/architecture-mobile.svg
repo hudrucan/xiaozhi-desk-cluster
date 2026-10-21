@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="1050" viewBox="0 0 640 1050" role="img" aria-labelledby="title description">
+  <title id="title">Desk Cluster architecture, narrow layout</title>
+  <desc id="description">LAN clients use the management and DNS VIPs; remote clients enter through the WireGuard VIP. Three RK3528 peers share private Ethernet with Core NATS and peer RPC. Service owners are selected independently.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto" markerUnits="userSpaceOnUse"><path d="M1 1 6 4 1 7" fill="none" stroke="#8b9fbc" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></marker>
+    <style>
+      text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+      .title { fill: #f3f6fc; font-size: 29px; font-weight: 650; letter-spacing: -.4px; }
+      .body { fill: #b0bdd2; font-size: 21px; }
+      .label { fill: #dce5f5; font-size: 23px; font-weight: 600; }
+      .heading { font-size: 25px; font-weight: 650; }
+      .mono { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 21px; fill: #a9b8d0; }
+      .eyebrow { font-size: 16px; font-weight: 700; letter-spacing: 1.5px; }
+    </style>
+  </defs>
+  <rect width="640" height="1050" rx="24" fill="#0c1323"/>
+  <rect x="1" y="1" width="638" height="1048" rx="23" fill="none" stroke="#25314a"/>
+  <text x="32" y="51" class="title">Three nodes.</text>
+  <text x="32" y="87" class="title">Independent service ownership.</text>
+
+  <rect x="32" y="123" width="576" height="54" rx="11" fill="#131e32" stroke="#2b3851"/>
+  <text x="56" y="158" class="label">LAN clients</text>
+  <text x="584" y="158" class="body" text-anchor="end">Management + DNS</text>
+
+  <rect x="32" y="208" width="576" height="105" rx="13" fill="#14253e" stroke="#355881"/>
+  <text x="56" y="237" class="eyebrow" fill="#83b8ff">MANAGEMENT VIP</text>
+  <text x="56" y="270" class="heading" fill="#dbeaff">Dashboard · UIs · MQTT</text>
+  <text x="56" y="297" class="mono">192.168.1.186 · HA :8123</text>
+
+  <rect x="32" y="327" width="576" height="105" rx="13" fill="#122a30" stroke="#2d605e"/>
+  <text x="56" y="356" class="eyebrow" fill="#71ded0">DNS VIP · IPv4 + IPv6</text>
+  <text x="56" y="389" class="heading" fill="#d5f6ef">AdGuard Home + dnsdist</text>
+  <text x="56" y="416" class="mono">192.168.1.250 · fe80::250</text>
+
+  <rect x="32" y="462" width="576" height="54" rx="11" fill="#131e32" stroke="#2b3851"/>
+  <text x="56" y="497" class="label">Remote clients</text>
+  <text x="584" y="497" class="body" text-anchor="end">VPN → LAN access</text>
+  <path d="M320 516V547" stroke="#8b9fbc" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <rect x="32" y="547" width="576" height="105" rx="13" fill="#2b261f" stroke="#655336"/>
+  <text x="56" y="576" class="eyebrow" fill="#e9bd76">VPN VIP</text>
+  <text x="56" y="609" class="heading" fill="#f9e8ca">WireGuard</text>
+  <text x="56" y="636" class="mono">192.168.1.254:51820</text>
+
+  <path d="M608 260H624V676H320V696M608 380H624M608 600H624" fill="none" stroke="#8b9fbc" stroke-width="2" stroke-linejoin="round" marker-end="url(#arrow)"/>
+  <rect x="32" y="698" width="576" height="271" rx="14" fill="#101b2d" stroke="#34415b"/>
+  <text x="56" y="736" class="label">Three RK3528 peers</text>
+  <text x="56" y="766" class="body">Owners and readiness vary by service</text>
+
+  <rect x="56" y="788" width="528" height="109" rx="11" fill="#17243a" stroke="#344660"/>
+  <text x="76" y="820" class="label">deskb1x</text><text x="564" y="820" class="mono" text-anchor="end">10.10.10.11</text>
+  <text x="76" y="850" class="label">deskb2x</text><text x="564" y="850" class="mono" text-anchor="end">10.10.10.12</text>
+  <text x="76" y="880" class="label">deskb3x</text><text x="564" y="880" class="mono" text-anchor="end">10.10.10.13</text>
+
+  <text x="56" y="930" class="label" style="fill:#a7ddd9;font-size:21px">Private Ethernet · end0</text>
+  <text x="56" y="955" class="body" style="font-size:19px">Core NATS · 3 peers and peer RPC</text>
+  <text x="32" y="1009" class="body" style="font-size:18px">Logical topology · configured addresses</text>
+  <text x="32" y="1033" class="body" style="font-size:18px">Check live status before maintenance</text>
+</svg>
