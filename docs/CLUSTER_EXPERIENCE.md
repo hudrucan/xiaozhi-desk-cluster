@@ -1,11 +1,5 @@
 # DNS health and safe node maintenance
 
-Runtime source commits: server `7f757cd4`, MQTT gateway `ce8929a`.
-
-The user authorized rollout and a one-node acceptance run on 2026-10-12.
-Source updates preserve the installed Python/Node dependencies, bundles and credentials.
-See the acceptance record below for measured results and remaining checks.
-
 ## Dashboard DNS health
 
 The dashboard reads `status.desk-dns.test` TXT on each frontend and both DNS VIP
@@ -106,31 +100,12 @@ Do not deploy a new controller/page before runtime support and DNS gates.
 
 ```sh
 ansible-playbook -i inventory.ini maintenance-source.yml \
-  -e xiaozhi_maintenance_server_revision=7f757cd4e80c6ffa79c206f7d1ff29603e09a21f \
-  -e xiaozhi_maintenance_gateway_revision=ce8929a1fa115752f7916f24eefe8493cc394188
+  -e xiaozhi_maintenance_server_revision=<reviewed-server-SHA> \
+  -e xiaozhi_maintenance_gateway_revision=<reviewed-gateway-SHA>
 ansible-playbook -i inventory.ini dns-health.yml
 ansible-playbook -i inventory.ini dns-maintenance.yml
 ansible-playbook -i inventory.ini desk-dashboard.yml
 ```
-
-Acceptance on 2026-10-12:
-
-- PASS: focused fake-provider server suites (67 tests), gateway harnesses (5),
-  node controller (20 tests), dashboard Python (4) and Go (8 tests), template
-  rendering and native HAProxy validation. No paid provider calls.
-- PASS: node 3 maintenance preserved an authenticated synthetic WebSocket
-  session, rejected new sessions, withdrew its reserved DNS health probe while
-  real queries still responded, drained after the session closed, and resumed
-  admission automatically.
-- PASS: confirmed physical reboot of node 3 returned healthy and synced in
-  153.3 seconds. All 98 sampled IPv4/IPv6 DNS queries succeeded; maximum sampled
-  latency was 119.69 ms. Both other nodes remained available. Node 3 initially
-  owned neither VIP, so this run does not establish VIP-owner reboot failover.
-- Tracking recovered from one operation GET timeout during drain. DNS remained
-  available; uninterrupted operation polling is not established by this run.
-- NOT RUN: real firmware ASR/LLM/TTS conversation preservation, busy-session
-  four-minute expiry, and physical reboot of a node initially owning a VIP.
-  Firmware was off during this acceptance run.
 
 Node operation status appears immediately below the node cards, with a 14 px
 separation, before node details and Services.

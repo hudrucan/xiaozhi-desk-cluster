@@ -1,8 +1,0 @@
----
-- name: Single-node WireGuard trial before HA
-  hosts: deskb3x
-  become: true
-  gather_facts: false
-  any_errors_fatal: true
-  roles:
-    - desk_vpn_trial

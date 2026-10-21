@@ -26,7 +26,6 @@ No kernel image, BSP module, firmware blob or radio tuning is changed.
 - Runtime srcversion: `3F7CE2E19BE16E3704587B4`.
 - Original stock SHA256: `81cfe6c319eb5e2ce4b05963913978285e36011048f4053adab0c5fd58ec8a98`.
 - Durable release: [deskbox-aic8800-vip-6.1.174-v1](https://github.com/hudrucan/xiaozhi-desk-box/releases/tag/deskbox-aic8800-vip-6.1.174-v1).
-- Build evidence: [CI run 38229394483](https://github.com/hudrucan/xiaozhi-desk-box/actions/runs/38229394483).
 
 The release retains the original CI module, manifest and checksum. It is not a
 replacement Armbian image and is not marked as the latest image release.
@@ -69,14 +68,6 @@ not through flashing or replacing the kernel. The existing Armbian image-build
 workflow remains unchanged.
 
 ## Validation and rollback
-
-On 2026-10-12 all three nodes booted the candidate and held the DNS VIP during
-their individual test. Broadcast and unicast ARP probes with sender IPv4
-`0.0.0.0` received replies from the correct owner MAC. This excludes periodic
-peer announcements from being mistaken for a response. Normal empty-cache DNS
-passed UDP/TCP, and IPv6 still resolved. A user reported another LAN device
-recovered without manual DNS/ARP configuration. Long idle and broader client
-coverage remain separate validation.
 
 The original stock module remains available for recovery. To roll back, first
 move both VIPs away from the target, remove only the matching external override,

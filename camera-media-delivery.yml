@@ -1,5 +1,5 @@
 ---
-# Phase 2, after camera-recording-owner.yml: controller ingress first, then Core.
+# After camera-recording-owner.yml: controller ingress first, then Core.
 # A controller restart revokes viewer capabilities, so require idle media.
 - name: Require certified recovery and idle media before delivery maintenance
   hosts: deskboxes

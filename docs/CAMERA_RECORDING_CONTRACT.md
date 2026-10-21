@@ -23,7 +23,7 @@ The transport binding verifies the existing signed NATS envelope first,
 then passes its verified `sender` to `RecordingJobs.handle()`. The request body cannot
 choose its sender or turn on owner authority. Outer envelope IDs remain transport
 nonces; `request_id` is a separate application ticket that survives a lost reply.
-This patch defines no new NATS subject, ACL, HTTP route or unauthenticated endpoint.
+This contract defines no new NATS subject, ACL, HTTP route or unauthenticated endpoint.
 
 ## Request v1
 
@@ -67,7 +67,7 @@ read ticket. They do not extend its deadline. An identical read retry returns th
 same ticket; changing its body/deadline returns `request_conflict`. Completed and
 cancelled records are retained through their retry deadlines. Expired submissions
 cannot restart after their records are pruned. There is no durable replay ledger
-or cross-generation job recovery in this step.
+or cross-generation job recovery in this API.
 
 Existing playback prepare/status/cancel and browser viewer APIs remain unchanged.
 They share the same internal authority/admission; this contract does not add
@@ -198,8 +198,8 @@ Rollout order is enforced by `camera-recording-owner.yml`:
 3. Atomically update the directory-mounted worker policy only after that check.
    Selected cameras then reject Core handles; mode/generation changes invalidate
    cached worker clients. Core never falls back to native allocation on RPC errors.
-4. Run metadata, playback, cancellation and controlled owner-transfer canaries
-   before extending selection to Bed `.160`. `.161` remains live-only.
+4. Verify metadata, playback and cancellation for the selected workloads. Makeup
+   `.161` remains live-only.
 
 Worker policy is `/etc/desk-camera/recording-policy/owner.json`. The separate
 `recording-core-policy.json` is installed into the certified Core config at clean
@@ -232,26 +232,3 @@ command or media read is needed for these tests.
 PYTHONPATH=roles/desk_camera/files:roles/desk_camera/tests \
   python3 -m unittest test_recording_contract test_recording_jobs
 ```
-
-## Deployed result — 2026-10-18
-
-Phase 1B is active for Bed and Guess on all three nodes. Final Core is deskb2x,
-r56 synced 3/3 with no pending disk changes after the online sync of delayed
-native registry saves. Source/mounted-module checks and the early SDK guard passed
-on the original and successor Core. 198 distinct focused regression tests passed.
-Live index, thumbnail, playback, cancellation and controlled transfer results are
-in `CAMERA_RECORDING_OWNER_VALIDATION.json`.
-
-The next phase is Core-independent media delivery and viewer reattachment. Its
-acceptance test must keep a clip decoding while Core restarts, bind reattachment
-to the same workload/clip/attempt/generation and authorized viewer, preserve
-explicit close/cancel and bounded orphan cleanup, and reject stale/replayed
-capabilities. Increasing viewer timeouts or dropping Core-stop cleanup by itself
-would not meet those requirements. Phase 1B does not claim that behavior.
-
-Phase 2 has subsequently deployed scoped, controller-owned viewer refs and
-independent HTTP ingress. Its controlled 1440p browser/Core-handoff canary passed;
-final recovery is r60 synced 3/3. See [delivery lifecycle and limits](CAMERA_MEDIA_DELIVERY.md)
-and `CAMERA_MEDIA_DELIVERY_VALIDATION.json`. This preserves the phase-1 authority
-and fencing contract. It keeps an existing mounted player alive; it does not
-persist a viewer across full-page reload or migrate an active camera download.

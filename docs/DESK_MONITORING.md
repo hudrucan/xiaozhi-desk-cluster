@@ -1,4 +1,4 @@
-# Optional Beszel monitoring trial
+# Beszel monitoring
 
 Open `http://<current Xiaozhi management VIP>/monitor/` (currently
 `http://192.168.1.186/monitor/`). No new public IP or VIP is assigned.
@@ -67,15 +67,14 @@ using the bootstrap password. With auto-login disabled, verification falls back
 to the ignored credentials; those passwords must then match on all three hubs.
 
 Preflight freezes existing service states/PIDs/configuration, checks the current
-Cloud VIP against the installed ingress snapshot, and rejects occupied trial
+Cloud VIP against the installed ingress snapshot, and rejects occupied service
 ports. Hubs install serially; all public keys are collected before agents start.
 All three systems must be up with recent samples in every hub before opening
 the public route. The full HTTP+MQTT HAProxy candidate is validated before atomic
 installation and graceful reload, with restoration on reload failure. Core,
-workers, gateways, DNS and VRRP are not restarted by this playbook. DNS node 2's
-intentionally withdrawn VRRP state is preserved.
+workers, gateways, DNS and VRRP are not restarted by this playbook. Existing inactive DNS VRRP instances remain inactive.
 
-## Shared settings rollout
+## Shared settings deployment
 
 For existing three-node hubs:
 
@@ -143,60 +142,8 @@ container registry/image update checks are disabled. No DNS request forwarding,
 AdGuard policy, upstream resolver, firmware, panel or provider settings change.
 
 Beszel's network bandwidth is not DNS QPS, and a future DNS probe latency is not
-the measured latency of real queries. This trial does not add DNS/application
+the measured latency of real queries. Monitoring does not add DNS/application
 custom metrics, ASR/LLM/TTS turn timelines or alert delivery channels.
-
-## Trial verification (2026-10-11)
-
-Deployment completed on all three nodes with no failed tasks. Every hub had all
-three systems up with recent samples. Each node's HAProxy reported all three
-monitoring backends and all three Settings backends UP. The VIP served the HTML,
-JavaScript and CSS, and each hub was selectable through the sticky cookie.
-The browser showed live metrics and service counts for all three nodes.
-Protected service PIDs/states and non-monitoring configuration matched preflight;
-Settings health/page remained HTTP 200. Existing VIP ownership was unchanged.
-
-A 70.8-second read-only sample, without synthetic workload, measured combined
-hub + agent CPU at 0.43%, 0.32% and 0.32% of one CPU on nodes 1/2/3. Combined
-process RSS was approximately 45.5, 44.0 and 44.7 MiB respectively. These are
-short trial measurements, not peak limits or a voice-latency benchmark.
-
-Five monitoring safety tests, six ingress peer-ARP tests and four MQTT ingress
-stats tests passed. YAML/Python/template checks, Ansible syntax/check mode,
-HAProxy candidate validation with the existing MQTT fragment and
-`git diff --check` passed. No physical power-loss test was performed.
-
-## Shared-config verification (2026-10-12)
-
-The initial source was `deskb1x`: its changed Beszel password and PocketBase
-administrator password hashes were retained and aligned on the other two hubs.
-Read-only checks confirmed the seed hashes on all three hubs, preserved native
-administrator/system IDs and existing metric history, and three systems up on
-every hub. The temporary test account was removed.
-
-Real API checks through the VIP passed for preferences saved from nodes 1, 2
-and 3; a save with node 3's config service stopped was accepted by the other two,
-and node 3 caught up when restarted. Temporary account creation, password
-rotation from node 2 and native password authentication on all three hubs passed.
-The PocketBase console's collection-ID route also replicated an administrator
-edit; its original value was restored. These checks did not change the retained
-administrator password. No physical power-loss test was performed.
-
-Native batch transactions need at least 30 seconds for CPU-capped password
-hashing, rather than PocketBase's initial 3-second deadline. The shared boundary
-keeps that minimum when settings are saved; CPU and memory ceilings are unchanged.
-
-A 20-second idle observation measured config-process CPU at 1.52%, 1.60% and
-1.55% of one CPU on nodes 1/2/3, with service memory at 21.0, 20.2 and 19.5 MiB.
-All three encrypted checkpoints were 6,796 bytes. Their modification times and
-process disk-write counters were unchanged: no idle checkpoint writes. This is
-a short observation, not a peak measurement. DNS, Xiaozhi and monitoring URLs
-remained HTTP 200; the full deployment also passed protected-service guards.
-
-All 36 monitoring tests, template/YAML/Python validation, both playbook syntax
-checks and `git diff --check` passed. Runtime config helpers matched the tested
-source on all three nodes. Metrics never enter the encrypted config journal;
-there is no JetStream dependency.
 
 ## Add/Edit System feedback and shared configuration
 
@@ -269,14 +216,6 @@ batch. Missing mappings recover an existing monitor by its system/configuration
 before planning a create. Duplicate monitor configurations are rejected before
 commit, and irrelevant port/server fields follow Beszel's normalization.
 
-This fixes the Save failure where all hubs remained at applied revision 20 while
-revision 22 retried a duplicate create, making every monitoring backend unready.
-The recovered revision applied with zero native record changes on all three hubs;
-subsequent live edits converged to revision 24. A same-value network-monitor Save
-through each VIP-selected hub returned HTTP 200 and coverage 3/3. Regression tests
-cover native ID changes during create/update, deletion, missing-ID recovery and
-duplicate rejection. Retained administrator passwords were not changed.
-
 ## Removal
 
 Keep the ignored credentials/data if rollback may be required. Set the inventory
@@ -306,7 +245,7 @@ ansible-playbook -i inventory.ini monitoring-accounts.yml
 ```
 
 
-## Configuration failure isolation (2026-10-12)
+## Configuration failure isolation
 
 UI readiness now follows native Beszel health, independently of write quorum,
 pending apply or native validation failure. A configuration error cannot remove
@@ -333,12 +272,6 @@ ready nodes, writability and pending/error state without credentials. The
 policy/UI repair. Existing accounts, passwords, record identities and metrics
 are retained; no native hub restart is required.
 
-
-Post-rollout same-value network-monitor Save succeeded through each of the
-three VIP-selected hubs with HTTP 200 and coverage 3/3, at revision 25.
-All hubs reported the same committed/applied revision and retained their three
-existing monitors. The original administrator/password and native metrics were
-preserved. Idle encrypted checkpoint metadata stayed unchanged on every node.
 
 ## Load preference for new sessions
 
@@ -371,18 +304,6 @@ single current UI VIP owner; conflicting/missing owners suppress the badge.
 Use `dashboard-helpers.yml` to build and roll out only a changed collector binary,
 with a rollback copy and protected-service checks. It does not reload ingress or
 restart the monitoring hubs.
-
-After the 2026-10-17 collector-only rollout on all three nodes, the shared panel
-reported `deskb2x` as preferred with VPN + Network on `deskb1x`, Xiaozhi on
-`deskb2x`, and DNS + Home Assistant on `deskb3x`. The UI owner's weight agent
-returned 10% / 100% / 10%. Of 24 requests without a session cookie through the
-management VIP, 20 reached `deskb2x` and two reached each other healthy hub.
-A request carrying the existing `deskb1x` cookie still reached `deskb1x`.
-Protected voice/DNS/VIP service checks passed on every node.
-
-An optional NetAlertX CPU canary is labelled **Network trial**, only while its
-private frontend is reachable and its RAM marker is present. This does not mean
-NetAlertX has HA or that it manages the modem's DHCP configuration.
 
 The configuration journal source is
 `roles/desk_monitoring/files/config_journal.py`. Home Assistant and VPN UI source

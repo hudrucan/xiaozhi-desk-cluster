@@ -1,6 +1,6 @@
 # Owner-side Tapo status observations
 
-This step externalizes the pinned native integration's `getMost()` status batch.
+The owner reader externalizes the pinned native integration's `getMost()` status batch.
 The three C222 cameras retain their existing native Tapo Control entities, unique
 IDs, platform mapping, dashboards and command clients. It does not implement
 Core-independent commands or remove the vendor SDK from Core.
@@ -60,7 +60,7 @@ handle. Guess has a separate [owner command contract](CAMERA_COMMANDS.md) with
 identity/deduplication, ambiguous-timeout handling and generation fencing.
 Bed/Makeup commands retain their native Core path.
 
-## Rollout and recovery
+## Deployment and recovery
 
 The additive role installs inactive observation support. Explicit selection lives
 in `/etc/desk-camera/recording-policy/observations.json` (warm reader) and
@@ -81,49 +81,3 @@ idle media. Rollback first removes Core observation selection through a clean
 certified restart, while the compatible owner reader remains available. Only
 then disable warm observation policy and revert worker sources. Do not remove an
 adapter still selected by a certified Core policy.
-
-## Validation
-
-New offline checks cover the pinned read batch, private fields, bounded DTOs,
-SDK write fallback, lease/deadline loss, generation invalidation, standby silence,
-read coalescing/backoff, Core refresh and no direct-read fallback. The dispatch
-test holds worker IPC open while verifying a lease reply still completes.
-
-Live validation on 2026-10-18 passed the worker rollout and clean Core cutover.
-Core is deskb3x, revision 61 certified/synced on all three nodes, without pending
-disk changes. All 327 native entity bindings (228 enabled) have the same hash as
-before deployment. Vendor integration sources and the pinned worker SDK match
-their original hashes; deployed owned sources matched the phase-3A hashes in the
-validation record. Twenty-four
-new offline checks and the existing camera/Core/HA regression checks passed.
-
-During planned Core handoff, the status-only watcher sampled 133.477 seconds
-without a ready Core. Makeup's autonomous read count advanced 5 → 10; a second
-watcher covering 115.345 seconds observed Bed 6 → 10 and Guess 7 → 11. A separate
-Guess playback preparation/playable test obtained three distinct status snapshots
-while media was busy, then cancelled and drained the media worker.
-
-A controlled Guess handoff deskb3x → deskb2x made the new owner ready after
-17.440 seconds and returned a fresh generation-bound snapshot after 18.522 seconds.
-Old-generation reads returned unavailable, while Core and the other two owners
-stayed unchanged. An earlier node1 → node3 attempt completed the transfer but its
-test stopped on a transient unavailable RPC; the repeat test waited through that
-interval. This validates recovery with a temporary status gap. Core recorded
-three failed reads across these transitions; owner readers ended with zero
-consecutive failures. All temporary drains were removed and media was idle.
-
-Final approximately 32-second samples measured whole-node busy at 22.32–23.80%,
-warm containers at 47.53–50.27 MiB, and the active Core container at 279.79 MiB.
-The earlier short window had different placement and background activity; no
-CPU saving or causal regression can be established from these samples. Container
-cgroups were measured separately from outer systemd wrapper units. Resource and
-lease/quorum limits were unchanged.
-
-See [the sanitized validation record](CAMERA_OBSERVATIONS_VALIDATION.json) for
-source hashes, read counts, timings and resource samples. Physical command actions,
-power loss, network partitions and a long-duration resource soak were NOT RUN.
-
-The subsequent [command pilot](CAMERA_COMMANDS.md) is deployed for Guess only:
-its native PTZ-arrow/preset/privacy methods route to the camera owner. Bed/Makeup
-commands retain the phase-3A Core path described above. Core still handles native
-startup/authentication, ancillary reads, entities and automations.

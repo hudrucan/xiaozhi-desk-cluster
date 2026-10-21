@@ -40,8 +40,7 @@ Network metadata expires independently at 15 seconds, even while node telemetry
 remains current. Missing Network data does not hide the other telemetry.
 No device list, scan action or extra polling endpoint is added to the Pi.
 Overview puts all held roles (Xiaozhi, DNS, VPN, Network collector, Monitor and HA) inside
-each node card, wrapping into at most two lines. The old two owner-summary rows
-are removed. Multiple roles on one node are all retained; `!` marks conflicting
+each node card, wrapping into at most two lines. Multiple roles on one node are all retained; `!` marks conflicting
 owner claims. Network labels expire independently of VIP/node telemetry.
 Monitor identifies the ready hub preferred by the current fresh UI owner, using
 the same placement metadata as the web dashboard. All monitoring hubs can run
@@ -104,30 +103,6 @@ Focused tests:
 python3 -m unittest discover -s roles/desk_pi_panel/tests -v
 ```
 
-Historical Waveshare checks (2026-10-13, before the MPI3501 replacement):
-native red/green/blue/white packing and panel API validation
-passed. Three full UI rasterizations used a median 237.8 ms CPU time on the
-original ARMv6 Zero W (excluding framebuffer I/O). This is an initial measurement,
-not a whole-device or touch latency guarantee. Mounting rotation is confirmed as 180 degrees in `host_vars/zerow.yml`.
-The old manual helper checks touch alignment by four-point calibration, using three
-points for an affine raw-to-framebuffer transform and a fourth independent
-check (reject above 30 pixels). The transform is saved with the Pi host variables
-after user input; touch mapping applies mounting rotation afterward.
-A 15-second steady-state sample measured 6.00% one-core CPU and 28.8 MiB RSS.
-These measurements are specific to this installed Pi and current snapshots.
-
-
-Mounting/calibration rollout on 2026-10-13: the user supplied four touch points.
-The historical affine transform was persisted in `host_vars/zerow.yml`, together with a
-180-degree mounting rotation. It has since been replaced by MPI3501 calibration. The
-fourth independent point had 23.72 pixels of error (accepted threshold 30);
-the user subsequently verified the mounted image orientation and all three
-Overview/Nodes/Events buttons as correct (physical check PASS). The
-panel service is active/running with zero automatic restarts after applying
-calibration; nine focused data/format/touch tests pass. Only this Pi's client
-configuration and service were updated. No cluster or LCD driver change.
-
-
 ## Local Pi system and clock
 
 **Settings → Pi system** shows the Pi's own CPU utilization (counter delta),
@@ -150,19 +125,8 @@ panel user only the login1 reboot/reboot-multiple-sessions actions, without
 granting general unit management or bypassing shutdown inhibitors.
 
 Overview shows local time next to status, e.g. **Ready · 8:36 AM**, with explicit
-12-hour AM/PM formatting and minute refresh independent of API polling. It uses
-the Pi OS timezone; on 2026-10-17 the live Pi was verified as
-**Asia/Ho_Chi_Minh (+0700), NTP synchronized**. Timezone and NTP were not changed.
-
-Local verification: 63 tests pass; telemetry, unavailable and confirmation
-screens were rendered at 480×320. A transient service with User=pi,
-NoNewPrivileges and the panel's device restrictions read real telemetry and
-reported CanReboot=yes. On the user's request, a confirmed controller request
-performed a real reboot (PASS): the boot ID changed, the panel started
-automatically with NRestarts=0, and all three preference-file hashes were
-unchanged. `/dev/vcio` retained root:video 0660 and firmware status was 0x0.
-GMT+7 and NTP synchronization were verified again after boot. Physical touch
-and confirmation-button operation remain NOT RUN.
+12-hour AM/PM formatting and minute refresh independent of API polling. It uses the Pi OS timezone. Configure timezone and NTP through the OS;
+the panel role does not manage them.
 
 ## Fetch interval
 
@@ -180,11 +144,6 @@ response limit remain. Collector refresh/cache cadence is independent. Longer
 intervals can make metadata expire between requests; existing freshness rules
 remain in force, including 15 seconds for Network and 20 seconds for node data.
 Fetching continues when the picture is blanked by the idle timeout.
-
-Fetch interval validation: all 50 panel tests pass, including worker wake-up,
-input bounds, atomic save failure and independent preference persistence.
-The numeric keypad and validation states were rendered at 480×320. Physical
-input and Apply checks remain NOT RUN.
 
 ## Picture timeout
 
@@ -222,11 +181,6 @@ automatically extends the scrollable list; its header and bottom navigation stay
 fixed. Swipe vertically to scroll when the rows exceed the viewport. A scrollbar
 indicates position, and a swipe never opens an item on release.
 
-Settings/timeout validation: all 44 panel tests pass, and the Pi service is
-active after deployment. The saved calibration and 10-minute timeout were
-retained. The user accepted the revised Back icon and timeout dropdown UI on
-2026-10-16 (PASS). Full physical touch/wake and scrolling checks remain NOT RUN.
-
 Open **Settings → Touch calibration → Calibrate touch → Start** on the Pi LCD. Hold each gold
 target briefly (at least 120 ms and five sensor samples), then lift. Four corner
 medians fit an affine mapping; the centre is an independent validation point.
@@ -246,17 +200,6 @@ to the panel. No new port, daemon, SSH command, reboot or cluster mutation is
 added by calibration. The existing manual helper remains available as a reserve.
 
 
-Calibration UI acceptance on 2026-10-13: 20 focused offline tests pass, covering
-rotated/swapped raw axes, noisy taps, independent-centre rejection, singular
-fits, Apply-only writes, disk failure, reload persistence and Cancel/timeout.
-Settings, confirmation, target and review frames were rendered at 480×320.
-The Pi-only Ansible rollout completed; service is active/running with zero
-automatic restarts. The state directory is owned by `pi`; a disposable local
-write/restore check passed and the pre-existing mapping was retained. Physical
-recalibration through the new UI is PASS: the user confirmed Calibrate/Apply
-and correct touch. The saved mapping has 7.89 pixels independent validation
-error, mode 0600 and owner `pi`.
-
 Panel buttons use compact 48-pixel action heights (44 pixels for target Cancel),
 centred text based on glyph bounds, and shared rectangles for rendering and
 touch hit areas. Navigation and node tabs also centre labels on both axes.
@@ -265,65 +208,6 @@ LCD layout: all data tabs share 14-pixel outer padding, a vertically
 centred header with right-aligned state, and centred navigation/node labels.
 Node details separate resource, service and configuration columns into three
 outlined blocks. Events use evenly spaced rows with aligned timestamps.
-
-## MPI3501 audit and cleanup — 2026-10-15
-
-The live kernel is `6.12.109+rpt-rpi-v6`. The LCD-show `tft35a.dtbo` binds
-`fb_ili9486` at SPI0 CS0 and `ads7846` at CS1. LCD SPI remains 16 MHz, touch SPI
-2 MHz, LCD rotation 270 degrees, with reset GPIO25, DC GPIO24 and touch IRQ17.
-The client mounting rotation remains 180 degrees. No driver, pinout, kernel,
-network or package change was needed.
-
-The failed `fbcp` launch and its `sleep 7` were removed from `/etc/rc.local`.
-The unused binary `/usr/local/bin/fbcp`, legacy `/etc/inittab` and both X11
-`99-calibration.conf` files were archived. Only the overridden `hdmi_mode=1`
-line was removed from boot config; HDMI mode87 and fb0 remain to preserve fb1
-numbering. No reboot has been performed to validate the boot edit.
-
-Backups, including the original service, boot/client config and calibration,
-are in `/var/backups/mpi3501-20261015T120056Z`. To restore the complete
-pre-cleanup state over SSH:
-
-```sh
-ssh pi@192.168.1.115 'sudo sh /var/backups/mpi3501-20261015T120056Z/rollback.sh'
-```
-
-That rollback also restores the old Waveshare touch mapping and CPU quota;
-it is not a way to retain the new MPI3501 calibration.
-
-Both `CPUQuota=30%` and `MemoryMax=64M` were removed at the user's request.
-The old memory limit had not been enforced: the running kernel disables the
-memory cgroup controller. No memory-cgroup boot setting was changed.
-
-The user completed five-point calibration and chose Apply. The recovery session
-saved 10.33 px error; a subsequent on-screen Apply saved an improved 3.01 px,
-which is the current maximum of corner residual and independent centre error
-(limit 16 px), with `calibration.json` owned by `pi` and mode0600. The latest transform is also
-the Ansible fallback in `host_vars/zerow.yml`; the local override still wins.
-The panel resumed automatically with no automatic restarts. This confirms
-calibration completion; it is not a new physical validation of every panel button
-or a resolution of backlight flicker. The pre-driver backlight flicker remains
-unresolved; the overlay exposes no backlight GPIO/PWM.
-The [LCDWiki MPI3501 documentation](https://www.lcdwiki.com/3.5inch_RPi_Display)
-lists LED backlight current as 120 mA but no backlight control pin or software
-brightness procedure; physical pin12 (GPIO18) is NC. Here MPI3501 is the actual
-LCDWiki/goodtft board replacing the Waveshare LCD, not an unidentified MPI3501
-copy. Any added dimming control requires inspecting the backlight circuit before
-considering hardware modification; assigning PWM to an NC pin cannot provide it.
-
-APT/dpkg consistency checks passed during the audit. Xorg/calibrator packages
-remain installed pending a separate dependency review; none are needed by this
-evdev/framebuffer client. The LCD-show checkout and its original backups are
-retained as provenance, not executed during deployment.
-
-The Network projection rollout passed on all three dashboard collectors with
-protected-service guards passing and Network controller PIDs/restart counters
-unchanged. The Pi rollout changed only the Python renderer and restarted its
-service; the native packing helper was not rebuilt. All 30 panel/calibration
-unit tests and the Go collector tests passed. The Network layout was inspected
-at 480×320 for current, lagging, warming and expired metadata, along with the
-Overview role labels and both Nodes views. Physical use of the new Network tab
-and Nodes Status/Services controls remains a user check.
 
 ## Home Assistant display
 
@@ -345,12 +229,21 @@ ansible-playbook -i pi-panel.ini pi-panel.yml --tags panel-ui
 The collector upgrade guards Network and HA controller process identities, and
 the Pi update preserves rotation, calibration and local display preferences.
 
-Validation (2026-10-16): Go collector tests passed; the full Pi panel suite and
-focused HA freshness/conflict/unready/older-revision cases passed using the Pi
-interpreter. Serial collector rollout passed protected-service guards, including
-unchanged HA and Network controller/Core process identities. The public API was
-3868 bytes, exposing a fresh Core owner on deskb3x and r9 on all three replicas.
-The Pi service was active without restart loops, JSON settings/calibration hashes
-were unchanged, and a read-only framebuffer capture showed the live HA role,
-readiness/pending line and replica count. This is framebuffer/service validation;
-no new physical touch/calibration test was performed.
+## Display hardware and recovery
+
+`host_vars/zerow.yml` pins the MPI3501 overlay checksum, input path, 180-degree
+client mounting rotation and fallback touch transform. The local calibration
+file takes precedence. The application requires the existing SPI framebuffer
+and ADS7846 driver; deployment preflight checks their bindings and geometry.
+Preserve the installed overlay/boot configuration when rebuilding the client.
+
+The board exposes no backlight GPIO/PWM in its supported configuration. Picture
+timeout does not dim the LED, and backlight flicker remains unresolved. Do not
+assign PWM to the board's NC pin. Driver or hardware changes need their own
+inspection. The framebuffer client does not require Xorg/calibrator packages.
+
+If the UI fails, stop `desk-cluster-panel` over SSH to restore the console;
+inspect its journal and rerun `pi-panel.yml --tags panel-preflight` before
+reapplying. Preserve `/var/lib/desk-cluster-panel/` preferences. Invalid local
+calibration falls back to the host vars; use the on-screen calibration flow to
+replace a valid but unsuitable mapping.

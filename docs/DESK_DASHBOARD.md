@@ -2,9 +2,9 @@
 
 The management VIP serves a read-only overview at `/`. Xiaozhi, DNS and Monitoring
 retain `/xiaozhi/`, `/dns/` and `/monitor/`. `/api/cluster/status` is the same bounded
-JSON contract a future front-mounted ESP32 display can consume.
+JSON contract display clients can consume.
 
-For the future touch display, use the bounded, versioned
+For display clients, use the bounded, versioned
 [Front-panel API](CLUSTER_PANEL_API.md) at `/api/cluster/panel`.
 
 ## Data and ownership
@@ -98,27 +98,6 @@ in a three-node RAM map so a reboot can be recognized across an unavailable
 sample, without publishing boot IDs. No new probes, log scraping, disk history
 or daemon are introduced. The compact panel v1 projection stays compatible.
 
-Timeline acceptance on 2026-10-13: 17 Go checks and 8 dashboard/UI Python
-checks passed. Isolated UI checks covered peer grouping, legacy event records,
-disclosures, section Collapse/Expand, bounded internal scroll, focus/scroll
-retention across polls, and a 390 px viewport without overflow. Serial collector
-and page rollouts passed protected runtime/policy guards on all three nodes.
-Live event context and the deployed timeline were verified through the VIP;
-root, panel/status APIs and the three application routes returned HTTP 200.
-Only the read-only collector was restarted; no voice/DNS/VIP service, firmware
-or provider workload was changed. No physical outage was induced for this change.
-
-Telemetry-noise fix acceptance on 2026-10-13: 22 Go checks and 8 dashboard/UI
-Python checks passed, including short-loss suppression, persistent-loss recovery,
-initial discovery, legacy peer compatibility, restart versus reboot, and immediate
-removal of stale owner/activity claims from both APIs. Serial collector and page
-rollouts passed all protected guards. A collector-only restart on node 3 produced
-one deduplicated restart event on all three observers, with no new telemetry
-unavailable/restored pair; all nodes recovered fresh telemetry. Voice/DNS/VIP
-processes and policies remained unchanged. No node reboot or provider workload
-was triggered. Historical events from the previous collector remain until normal
-six-hour retention expires.
-
 ### HA operation timelines
 
 The existing Cluster timeline also shows confirmed maintenance/reboot operations
@@ -154,21 +133,6 @@ source and removes only the additive history field for legacy-reader compatibili
 Apply `dashboard-ui.yml` afterward to update the page. Normal role provisioning
 also installs the new controller and page. Authentication, confirmation,
 exclusive leases, drain deadlines and reboot execution remain unchanged.
-
-Offline acceptance: 29 node-controller tests, 11 timeline JavaScript checks and
-8 dashboard/UI Python checks passed. UI fixtures cover recovered/needs-attention
-states, dependency hints, disclosure and Collapse/Expand retention, bounded
-scroll and a 390 px viewport with no horizontal overflow. No real node reboot
-or maintenance operation is issued during metadata/page deployment.
-
-Live acceptance on 2026-10-13: controller canary node 3, remaining controllers
-and all three pages passed protected runtime/policy guards. Installed controller
-hashes match source on 3/3 nodes. The operations API returns bounded empty history
-with no scheduled operation; newly observed operations will populate it. All three
-nodes have fresh, ready metadata, and root/panel/operations/Xiaozhi/DNS/Monitoring
-routes return HTTP 200. Browser inspection verified the deployed timeline and
-fixture scroll/open retention across polling. A real HA reboot is NOT RUN for
-this presentation change.
 
 ## Deployment and isolation
 
@@ -211,16 +175,6 @@ On older Go/Darwin linker combinations, use `go test -ldflags=-linkmode=external
 Check the public overview, each node's details, `/api/cluster/status`, and the
 three unchanged service links. Compare `desk-dashboard` CPUUsageNSec over a
 sample interval and MemoryCurrent on each node before claiming any overhead.
-
-Topology acceptance on 2026-10-12: existing dashboard/UI Python suites passed
-(8 checks), rendered JavaScript passed syntax validation, and isolated browser
-fixtures verified active TTS, failover, fallback, stale metadata and duplicate
-owners. A 390 px viewport had no horizontal overflow; native DNS disclosure
-remained open across polls. Node 3 canary and subsequent nodes 1/2 page-only
-rollouts passed runtime/policy guards. Public root, Xiaozhi, DNS and Monitoring
-returned HTTP 200; live ownership, three eligible DNS backends and node detail
-controls were verified. No real voice workload or physical reboot was triggered
-for this page change.
 
 ## Firmware Web Control link
 

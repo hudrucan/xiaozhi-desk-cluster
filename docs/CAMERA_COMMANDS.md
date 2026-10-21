@@ -1,9 +1,8 @@
-# Owner-side Tapo commands — Guess pilot
+# Owner-side Tapo commands
 
-Status, 2026-10-18: **deployed and activated for Guess only**
-(`tapo_c222_163`). All three recovery nodes have compatible workers and the early
-Core guard. Bed and Makeup commands retain their native Core path. The installed
-pinned SDK also passed fixture checks with all test HTTP/socket I/O mocked.
+Shared configuration selects Guess only (`tapo_c222_163`). Activation requires
+compatible workers and the certified early Core guard on every recovery node.
+Bed and Makeup commands retain their native Core path.
 
 ## Supported boundary
 
@@ -38,7 +37,7 @@ is no automatic rediscovery, successor resubmission, inverse action or write ret
 Deduplication covers this invocation/ticket and its internal RPC retries. A fresh
 HA service call creates a fresh ticket; external callers must not automatically
 repeat an uncertain action as a new service call. No end-to-end browser or
-automation intent ID is added in this pilot.
+automation intent ID is added by this contract.
 The journal is local to the original owner node, outside HA checkpoints. If that
 node is unreachable, its receipt remains unavailable. A Core restart does not
 reconstruct an interrupted native service call or automatically replay it.
@@ -92,10 +91,10 @@ remove the ledger, restore an old copy, or create a new generation/ticket to ret
 an uncertain command automatically. This provides bounded at-most-one dispatch
 attempts, not camera-enforced exactly-once physical execution or partition fencing.
 
-## Canary rollout and rollback
+## Deployment and rollback
 
 `camera-commands.yml` defaults to **Guess only** (`tapo_c222_163`). It requires
-phase-3A owner observations and synced three-node recovery, and issues no physical
+owner observations and synced three-node recovery, and issues no physical
 camera command itself. With idle media:
 
 ```bash
@@ -110,14 +109,7 @@ Activation checks certified guard readiness before enabling owner writes. A gap
 between guard installation and activation temporarily rejects the selected UI
 commands. Lease/quorum timing, SDK dependencies and resource budgets are unchanged.
 
-After the Guess canary is physically checked, expand the explicit selection:
-
-```bash
-ansible-playbook -i inventory.ini camera-commands.yml \
-  -e '{"desk_camera_command_workloads":["tapo_c222_160","tapo_c222_161","tapo_c222_163"]}'
-```
-
-The validated Guess selection is recorded in `group_vars/deskboxes.yml` as
+The Guess selection is recorded in `group_vars/deskboxes.yml` as
 `desk_camera_command_workloads` so provisioning a new recovery node seeds the same
 Core guard. Generic role defaults remain empty. Forward
 rollout rejects authority removal; use the ordered rollback instead:
@@ -131,61 +123,3 @@ Rollback first disables owner write admission everywhere and waits for attempts
 to drain. It then certifies empty Core command selection through clean handoff,
 restoring the original native path. It retains the compatible modules and journal.
 Do not reverse that order or restore an old HA snapshot over user configuration.
-
-## Validation and remaining checks
-
-Offline tests cover duplicate/lost ACKs, same-ticket recovery after restart,
-conflicting retries, generation/deadline loss, durable-storage failure, capacity,
-clock rollback, native method routing/raw bypass rejection, fresh post-command
-observations, and lease subscription responsiveness during slow command IPC.
-Seven additional checks run actual installed SDK request/transport code with HTTP
-and socket connections replaced by fixtures. They cover positive ACK, readback,
-unknown preset, lease loss, and all audited SDK retry paths.
-
-Live Guess validation passed the ordered workers/Core/activation stages. The
-first worker pass exposed an invalid final isolation-guard CLI invocation; it was
-corrected to `guard` with frozen state on stdin, covered by two regression checks,
-and rerun successfully before Core cutover. Recovery advanced from r61 with pending
-disk changes to clean r62 synced 3/3. Core recovered on the same node, deskb3x;
-the sampled readiness gap was 143.4 seconds. Owner observation reads continued
-during the gap. All 327 entity bindings (228 enabled) and five YAML/dashboard
-file checksums stayed unchanged. Staged sources, command policies and pinned SDK
-hashes matched on all nodes; 17 native vendor files matched on active Core.
-
-Two live probes invoked the native wrapped privacy method from separate Python
-processes in the Core container. Both set the existing `off` state again, received
-camera ACK and matching independent readback, and obtained fresh post-command
-status snapshots. Each deliberately dropped the bridge submit reply and completed
-with exactly one submit, polling the same ticket; command completion took 2.142
-and 2.289 seconds. These are adapter/bridge checks, not HA frontend/service-call
-tests or lost camera-HTTP-ACK tests.
-
-Replaying the completed ticket through all three root bridges returned the same
-receipt without changing the journal. Conflicting, expired and wrong-generation
-requests were rejected. A warm-worker restart preserved the completed record and
-replay behavior without changing the camera generation. A controlled idle Guess
-handoff moved deskb1x → deskb3x; both nodes rejected the old generation, the old
-receipt remained on its original node, and the successor supplied a fresh snapshot
-and passed the second privacy probe. Core and the other camera owners did not
-change. The initial handoff probe caught transient `local_ready` with a null
-generation; follow-up waited for a valid generation and a ready snapshot. No
-usable-generation handoff latency is claimed. The temporary drain was removed.
-
-The final 31-second sample measured whole-node busy CPU at 20.34%, 26.28% and
-22.70%, with 2208/1973/1914 MiB available RAM. Camera controller memory was about
-21 MiB per node, warm container memory about 48 MiB, and active Core container
-memory 285 MiB. This short sample does not establish savings or sustained peaks.
-Camera command storage/clock checks and observation failure counters were healthy.
-
-The extra PID audit also caught **desk-network OOM on deskb1x at 10:34:42 +07**.
-Kernel logs identify its own 256 MiB cgroup limit. It automatically restarted and
-network recovered on deskb2x with sync 3/3. Network sources/limits were not changed;
-the cause of its memory growth needs separate investigation. Protected voice/DNS/
-ingress process PIDs predate the rollout; dashboard/monitoring PIDs were unchanged.
-
-See [validation evidence](CAMERA_COMMANDS_VALIDATION.json) for sources and results.
-Physical PTZ/preset motion, a privacy toggle, actual HA frontend service calls,
-in-flight Core/owner loss or partition, cross-host Core recovery, rollback and
-sustained resource measurements remain **NOT RUN**. Next validate a small arrow
-movement, preset and privacy toggle with visual confirmation before expanding
-authority beyond Guess. An ACK alone does not validate physical motion.

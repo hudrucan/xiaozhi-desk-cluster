@@ -1,8 +1,7 @@
 # Camera media workers
 
 This page describes the supported implementation in this checkout. Configuration
-and guarded activation policies determine enablement; historical validation
-records do not establish the current state of live nodes.
+and guarded activation policies determine enablement; this document does not establish the current state of live nodes.
 
 ## Supported capabilities and authority
 
@@ -25,13 +24,10 @@ Role defaults leave recording/observation/command authority inactive. The ordina
 camera role seeds policies without overwriting an existing selection. Dedicated
 cutovers validate and activate authority; changing a variable alone does not
 prove that a running cluster has completed that cutover. `desk_camera_progressive`
-defaults to `true` for configured cameras with usable storage. The former
-Bed-only progressive flag is superseded.
+defaults to `true` for configured cameras with usable storage.
 
 Core still owns authentication/UI admission, native SDK startup and ancillary
-reads, entity publication, recorder and automations. Smart-plug distribution is
-research only. [The original dependency research](TAPO_DISTRIBUTION_RESEARCH.md)
-explains the design constraints; the current contracts above supersede its roadmap.
+reads, entity publication, recorder and automations. Smart-plug distribution is not implemented.
 
 ## Paths and services
 
@@ -215,11 +211,6 @@ idempotency marker. Camera additions use a preflighted, idempotent stopped-Core 
   recognized. Existing entries, auth and user dashboard cards remain intact.
   Later camera settings are edited through the native UI.
 
-The previous remote tplink worker, Core `desk_remote` proxy entities, service units,
-NATS ACLs and deployment code are retired. r14 is the last pre-migration online
-recovery copy; r15 preserves the last old Core configuration before activation.
-Do not restore an older bundle while expecting the retired worker to be running.
-
 Keep these deployment boundaries:
 
 | Entrypoint | Scope and required order |
@@ -240,37 +231,11 @@ Existing installations and recovery nodes reuse the retained private
 `core-migration.json` and optional `core-additions.json` exports. The camera role
 copies these inputs; `camera_config.py` applies them only through the existing
 stopped-Core lifecycle, preserving migration markers and rollback backups.
-The isolated seed runtimes were disposable validation inputs, not recovery
-prerequisites. Their removal and the completed remote-pilot cleanup are recorded
-in [migration evidence](CAMERA_MEDIA_VALIDATION.json). Do not regenerate camera
-identities or replace the retained exports as part of routine deployment.
+Do not regenerate camera identities or replace the retained exports as part of
+routine deployment.
 
 Manually invoked node tools live in `roles/desk_camera/tools/`, outside offline
 test discovery. `verify_transfer.py` and `verify_camera_transfer.py` create real
 owner drains. `verify_bundle.py` reads/decrypts an installed recovery bundle;
 measurement/fleet/control tools also require node state and credentials. These
 are operator tools, not offline tests, and are never auto-run.
-
-## Verification and evidence
-
-Run Python camera test modules in separate processes: some older modules install
-global lease/protocol fixtures that conflict during combined discovery. Run the
-camera/HA JavaScript checks with Node separately. SDK fixture tests skip when the
-pinned SDK/dependencies are absent. Synthetic media pipeline checks require
-FFmpeg/Pillow. None of these offline checks establishes live-node equivalence.
-
-Sanitized validation JSON files retain dated observations, source hashes,
-performance sample scopes and unperformed checks. The current boundary is covered
-by [recording owner evidence](CAMERA_RECORDING_OWNER_VALIDATION.json),
-[delivery evidence](CAMERA_MEDIA_DELIVERY_VALIDATION.json),
-[observation evidence](CAMERA_OBSERVATIONS_VALIDATION.json) and
-[command evidence](CAMERA_COMMANDS_VALIDATION.json). Earlier
-`CAMERA_*_VALIDATION.json` records remain evidence for media isolation, progressive
-packaging, thumbnails, cancellation and warm playback; their node placement,
-checkpoint revisions and resource readings are historical measurements.
-
-Physical power loss/partitions, every browser/codec/audio combination, sustained
-resource behavior and physical PTZ/preset/privacy actions are not established by
-those short software canaries. Opening a new recording still needs Core; admitted
-media survival is distinct from Core-independent HA automation or camera control.
-No production state was reverified as part of this documentation cleanup.

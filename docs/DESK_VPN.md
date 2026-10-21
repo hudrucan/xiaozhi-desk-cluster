@@ -1,11 +1,11 @@
 # WireGuard HA
 
 Opt-in `vpn-ha.yml`; never included by `site.yml`. Management UI and resolver
-routes are unchanged. User reserved 192.168.1.254 outside modem DHCP.
+routes are unchanged. Reserve 192.168.1.254 outside modem DHCP.
 VPN endpoint is vpn.huynm.dev:51820; modem UDP mapping changes are user-owned.
 All three nodes have the same server identity and peer list. Prepared kernel
 tunnels exist on each node; only the floating address receives public VPN
-traffic. The modem cutover to .254 was confirmed on iPhone 4G/5G; the transitional .103 endpoint is disabled.
+traffic. The legacy physical-node endpoint is disabled by the current defaults.
 
 Separate keepalived process/PIDs, VRID 53, randomized persisted base priorities
 100/110/120 (no hard-coded primary). Xiaozhi/DNS owners each receive a 40-point
@@ -30,37 +30,23 @@ runtime metadata is not shared secret state; server keys and peer list are commo
 Owner notification maintains routing table 51853 and rule priority 11853 for
 WireGuard mark 51853 only. Replies originate from .254 rather than a physical
 node IP, so endpoint roaming cannot pin clients to the previous owner. A scoped
-OUTPUT gate suppresses marked replies on standby nodes; the transitional node-3 legacy exception is disabled after WAN cutover. Main routing tables are untouched.
+OUTPUT gate suppresses marked replies on standby nodes. The legacy physical-node
+exception is disabled by default. Main routing tables are untouched.
 
 Peer updates are supplied once in ignored credentials, applied with Ansible to
 all three nodes, and reloaded with wg syncconf to preserve existing sessions.
-No browser CRUD/config sync service is added in this phase.
+The [VPN UI](DESK_VPN_UI.md) provides replicated peer management;
+`vpn-ha.yml` preserves UI-managed membership.
 
 Run `ansible-playbook -i inventory.ini vpn-ha.yml`. Native helper builds locally
 for ARM64; role readiness must pass on all nodes before any election starts.
 Do not expose dashboard HTTP, DNS port 53 or SSH as modem port mappings.
 
 Cloudflare A vpn.huynm.dev should be DNS only to the public IPv4. Creation is
-separate from DDNS: no DNS API credential is stored on nodes. Automated DDNS
+separate from the owner-only DDNS updater described below. Automated DDNS
 requires a dedicated token limited to this zone, never the existing developer
 Cloudflare tunnel certificate. Public-IP changes require updating A, and clients
 may need to toggle their tunnel to resolve the new endpoint.
-
-## Validation on 2026-10-14
-
-Native readiness/firewall regression tests and Ansible deployment passed on all
-three nodes. The initial transport failover test exposed physical-IP endpoint
-roaming; owner source routing and standby reply gating fixed the failure. The
-retest used one temporary .3 peer and an isolated client without changing its
-endpoint or toggling the tunnel. Encrypted dashboard HTTP and LAN SSH passed
-on owners 1, 2 and 3. Observed recovery was 9.2 seconds from 1 to 2 and 18.7
-seconds from 2 to 3, including SSH/polling overhead. These are measurements for
-this test, not a guaranteed recovery bound. Election services were restored and
-the temporary peer, namespace and RAM key file removed in finally.
-
-LAN-side VIP failover passed, and the user subsequently confirmed iPhone
-4G/5G access to both the dashboard and modem through .254 using vpn.huynm.dev. The Cloudflare DNS-only A record
-was created as 171.248.168.14; automated DDNS remains pending.
 
 ## Dashboard and front panel
 
@@ -80,23 +66,7 @@ owner, with a single shared local address query per poll.
 Maintenance/Reboot releases the VPN election along with the configured Xiaozhi
 and DNS elections, verifies one healthy survivor owns each VIP, and restores
 only election services that were running. Installed VPN metadata keeps the
-VPN handoff requirement even if telemetry becomes unknown. No real reboot or
-maintenance operation was triggered for this UI rollout.
-
-## Dashboard telemetry rollout regression
-
-The initial dashboard change omitted VPN from the telemetry component whitelist.
-Local collectors continued to report healthy application components, but cluster
-aggregation rejected their snapshots and displayed all nodes as unavailable.
-The whitelist now accepts the bounded VPN states, and local `/health` validates
-the collector's own snapshot before it can pass rollout readiness. Peer outages
-still leave a healthy local dashboard available. Regression tests cover both
-the rejected snapshot and the surviving-peer case.
-
-After the hotfix, all three nodes were online, each VIP had one owner, and root,
-Xiaozhi, DNS, monitoring, cluster status and compact panel API returned HTTP 200.
-The user confirmed the physical node-1 display reads `tL01`. Combined-worker
-activity icons are retained in group vars for subsequent panel-only rollouts.
+VPN handoff requirement even if telemetry becomes unknown.
 
 ## Owner-only Cloudflare DDNS
 
@@ -135,59 +105,11 @@ because WireGuard does not guarantee continuous endpoint DNS re-resolution.
 
 Inspect outcomes with `systemctl status desk-vpn-ddns.timer` and
 `journalctl -u desk-vpn-ddns -n 10`. Stopping the timer affects only DDNS.
-The dedicated user-supplied token is deployed through systemd credentials.
-DDNS timers are enabled on all three nodes. Owner readback reports unchanged,
-standby nodes skip HTTP. No IP change is simulated on the real DNS record.
-
-DDNS fake regression tests passed (12 cases, including startup snapshot lifetime). A credential-free canary on all
-three nodes verified that the actual DynamicUser sandbox can read only its
-systemd metadata copies and sees exactly node 1 as eligible; nodes 2/3 skip.
-This credential-free canary made no external HTTP calls or DNS changes;
-the subsequent live deployment was verified separately with the dedicated token.
-
 The short DDNS process is capped at 20% of one CPU core (5% of a four-core
-host), with Nice=15 and CPUWeight=1; it does not stay resident. A 5% one-core
-cap stretched Python startup beyond the 20-second health freshness window on
-these nodes, so it was raised for the bounded startup/TLS burst. The updater
+host), with Nice=15 and CPUWeight=1; it does not stay resident. The updater
 reuses one TLS context and validates startup freshness only once.
 
-## iPhone WAN handoff validation
-
-With the iPhone tunnel kept on 4G/5G, node-1 VPN election was stopped temporarily.
-Node 2 acquired .254, and its existing iPhone peer formed a new WAN handshake
-and exchanged encrypted traffic without changing the client profile. Observed
-handshake recovery was approximately 100 seconds, including polling overhead.
-The user confirmed application access recovered but reported noticeable delay.
-The original election was restored using finally; a separate 300-second remote
-restore timer guarded against controller disconnection. No peer configuration,
-Xiaozhi or DNS service was modified. This validates automatic WAN recovery,
-not fast or seamless session failover.
-
-A second unchanged-profile WAN test recovered in approximately 31 seconds.
-Both runs restored the original election and its standby placement. Recovery
-time varies; the VIP and handshake observations narrow the delay to the path
-after ownership election, but do not prove whether router ARP/NAT delivery or
-client session renewal dominates. No fast-failover guarantee is made. The
-bounded packet-type capture was stopped and stored no packet payload or keys.
-
-Live DDNS on node 1 reports unchanged after public-IP agreement and Cloudflare
-record readback. Nodes 2 and 3 report standby. The observed updater process
-used roughly 1.29 CPU seconds for an owner check and 0.76–0.78 CPU seconds for
-a standby check, once per approximately two minutes. These are single-run
-measurements, not a TTS contention benchmark. Dashboard and node-control
-mount namespaces deny both /etc/desk-vpn-ddns and /run/credentials.
-
 ## Proactive peer-session recovery
-
-The 2026-10-14 header-only WAN diagnostic separated election from session renewal.
-Node 2 received the former session's encrypted packets 1.403 seconds after the
-handoff began and acquired .254 at 1.964 seconds. The client did not send a new
-handshake until 17.769 seconds; the kernel response followed about 2 ms later.
-Thus modem delivery was already working in this run while the new node waited
-for a client handshake. A controlled server-initiated canary formed the new
-session at about 6.46 seconds from handoff start, with about 50 ms between server
-initiation and client response. SSH/polling overhead delayed that trigger; these
-measurements are not guarantees or validation of a real power outage.
 
 `vpn-recovery.yml` is a separate optional deployment. It installs a small native
 `desk-vpn-recovery` helper on all nodes, independent of VPN election and readiness.
@@ -202,13 +124,13 @@ cannot access `/etc/desk-vpn-recovery`.
 
 After a false-to-true local VIP transition, the helper waits for source routing
 and the owner output gate. If one fresh hint remains, it renews only the matching
-public-key-only peer's ephemeral state, retaining the installed peer identity
+peer's ephemeral state, retaining the installed peer identity
 and AllowedIPs, then emits one UDP discard-port datagram through the tunnel to
 start a standard kernel handshake. The former owner does not need to answer any
-RPC or remain powered on. Already renewed, deleted, altered, PSK or keepalive
-peers are skipped. The helper deliberately supports the deployed peers with
-no PSK or server-side persistent keepalive; future peer-management changes must
-preserve that guard or implement preservation of those settings separately.
+RPC or remain powered on. Already renewed, deleted or altered peers are skipped. The current helper
+preserves PSKs through private stdin and retains keepalive when recreating a peer.
+The standalone `vpn-recovery.yml` prerequisite still rejects PSK/keepalive peers;
+for UI-managed peers use the coordinated `vpn-ui.yml` deployment.
 
 Starting/restarting this helper on an existing owner never resets its current
 peer session. Missing/expired/conflicting cache, helper failure or a cold cluster
@@ -217,28 +139,3 @@ on-disk WireGuard config, modem rules and election priorities stay unchanged.
 The service has CAP_NET_ADMIN for kernel WG state, no CAP_NET_RAW, binds only the
 private address and is capped at 10% of one core with a 32 MiB memory limit.
 This accelerates re-handshake, not transport-key or TCP/NAT-state replication.
-
-Fake/race tests passed for signature/source/server/peer validation,
-replay/expiry/conflicting owners, no standby mutation and protected peer cases.
-With explicit user approval, the helper was deployed on all three nodes, with
-existing voice/DNS configuration and runtime guards passing. Web-reader mount
-namespaces were verified unable to read its credential; UDP 51854 is bound only
-to each node's private 10.10.10.x address. No unexpected helper restarts occurred.
-
-Integrated WAN failover from node 1 to node 2 formed a new handshake after about
-3.9 seconds from handoff start (4.7 seconds observed through polling). For the
-abrupt-loss simulation, node 1's publisher was stopped and only its VPN VRRP
-process was paused before .254 was removed, so no priority-zero handoff notice
-was sent. Node 2's VPN election was held inactive to exercise node 3. Node 3
-formed a fresh handshake from its existing RAM cache after about 5.8 seconds
-(6.1 seconds observed), without a former-owner RPC or controller peer mutation.
-The controller's SSH steps are included in these timings. The user confirmed
-both dashboard and modem recovered through iPhone 4G/5G without toggling the
-tunnel. No real power cut was performed; timing is not a guaranteed HA bound.
-Remote restore timers and finally blocks restored all paused/stopped elections
-and publisher services; normal separated VIP placement returned.
-
-A roughly 32-second idle sample measured 0.249/0.154/0.134 percent of one core
-on nodes 1/2/3, respectively, or approximately 0.062/0.039/0.034 percent of each
-four-core host. Helper memory was about 5.6–5.8 MiB. These are short helper-only
-measurements, not a TTS benchmark or a long-duration stress test.

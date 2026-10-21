@@ -1,11 +1,12 @@
 # Three-node Desk DNS foundation
 
-This is an opt-in AdGuard Home + dnsdist stack. `dns.yml` is deliberately absent
+This is an opt-in AdGuard Home + dnsdist stack. Shared inventory enables real-client
+identity, IPv6, emergency fallback, serialized updates and anonymous LAN UI.
+These selections do not establish live-node readiness. `dns.yml` is deliberately absent
 from `site.yml`. It does not change router DHCP/DNS, `/etc/resolv.conf`, Xiaozhi
 Cloud Config, NATS, MQTT, provider runtimes or the Settings VIP service.
 Panel support is a separate source change and uses the existing opt-in `panel.yml`.
-No ISP fallback is implemented. Keep the router's current DNS until the separate
-deployment, query, failover and Xiaozhi latency checks have passed.
+Emergency fallback is described below; no router setting is changed by Ansible.
 
 ## Traffic and fairness
 
@@ -36,11 +37,11 @@ seconds; avoidance is a preference, not an instantaneous exclusion.
 The DNS instance has its own configuration, service, PID directory and VRID 52.
 Owner-only GARP and peer ARP refreshes mirror the existing management-Wi-Fi
 workaround with separate DNS files/timer. They announce only the DNS VIP.
-Ansible owns the DNS VIP selected for this experiment. Changing it after initial
+Ansible owns the configured DNS VIP. Changing it after initial
 deployment requires a separate migration; a rerun rejects changes to existing
 VIP, ports and membership.
 
-## Isolation and rollout
+## Deployment and isolation
 
 AdGuard Home is pinned to **v0.107.79**, schema 34, with the official ARM64 archive
 SHA256 `3f7893c18e8aaadc456d0452839190561c306ca95175a2254958be80a769c1ae`.
@@ -61,11 +62,6 @@ quota 100% of one CPU (one of the four CPUs), low CPU/IO weights, 512 MiB memory
 768 MiB hard limit. AdGuard has a 320 MiB Go memory target, 384 MiB pressure
 threshold and 512 MiB hard limit; individual services also have limits. This bounds resource
 use but cannot prove zero voice-latency impact without a simultaneous load test.
-The earlier half-CPU ceiling caused DNS/VRRP health timeouts during native
-filter rebuilds. Large OISD lists also exceeded the old 160 MiB Go target and
-memory pressure thresholds, causing continuous GC/reclaim, HTTP timeouts and
-all DNS VIP candidates entering FAULT. The larger bounded memory budgets give
-these rebuilds headroom while preserving the one-CPU ceiling and low weights.
 `ansible-playbook -i inventory.ini dns-resources.yml` updates only resource units,
 retains mutable UI policy, restarts AdGuard serially and waits for backend health
 before advancing. Larger filter lists still need measured tuning.
@@ -81,7 +77,7 @@ three AdGuard identities; frontend liveness does not claim that filtering is up.
 
 The unified DNS UI probes an available native API and uses a 180-second
 backend timeout. Its native asset/read fallback keeps local filter compilation
-from removing the entire UI proxy. The last rollout phase validates the combined HTTP/MQTT
+from removing the entire UI proxy. The final deployment stage validates the combined HTTP/MQTT
 HAProxy configuration and gracefully reloads only its DNS UI backend route.
 
 The deployed emergency pool is `1.1.1.1`. Native AdGuard servers stay in the
@@ -126,16 +122,13 @@ Preflight is read-only across all three nodes. It checks ARM64/systemd, reserved
 port collisions, management interface, separate VIP/VRID, existing nonlocal bind,
 package availability and agreeing persisted elections. It freezes Xiaozhi service
 PIDs/configuration hashes and resolver state. A guard checks those snapshots
-before each serial phase and again at completion. A drift or failed phase stops
-the run. No automatic rollback of already completed DNS phases is claimed.
+before each serial stage and again at completion. Drift or failure stops the run;
+completed stages are not automatically rolled back.
 
-The phases are: three private AdGuard backends -> three verified dnsdist
-frontends -> independent DNS VIP -> exactly one owner separated from the Xiaozhi VIP and LAN UDP/TCP queries
-while all three nodes are healthy.
+Deployment order: three private AdGuard backends -> three verified dnsdist
+frontends -> independent DNS VIP -> unique ownership, placement preference and LAN UDP/TCP checks.
 DNS Keepalived is started/restarted only after all three backends and frontends
-pass. At runtime its health check needs a working frontend with at least one
-AdGuard backend; temporary loss of one backend does not withdraw a usable VIP.
-Health probes use synthetic local DNS names and do not require internet access.
+pass. Health probes use synthetic local DNS names and do not require internet access.
 Final verification also checks each node's backend identity and filtering.
 It does not prove external upstream availability or a successful power-loss
 failover. DNS queries in flight during a failure can require client retries.
@@ -146,14 +139,9 @@ all service changes. It is not an actual service/configuration acceptance test.
 
 ## UI, policy and monitoring
 
-Open `http://192.168.1.250:3001/` for the authenticated UI on the current DNS
-VIP owner. `desk-dns-ui` is a separate unprivileged HAProxy process restricted
-to the management LAN, with a bounded DNS-slice budget. It never changes or
-reloads the Xiaozhi HAProxy service. The backend remains loopback-only. UI failure
-does not withdraw otherwise healthy DNS. A VIP failover may require signing in
-again because login sessions and statistics remain node-local.
-
-The optional `dns-sync.yml` shares policy from the current DNS VIP owner.
+Use `http://192.168.1.186/dns/` for the unified UI. The legacy `.250:3001`
+listener accepts only cluster proxies and loopback. `dns-sync.yml` configures
+shared policy with the certified journal described below.
 Query logs, statistics and caches remain per node. For a specific node, use an
 SSH tunnel, for example:
 
@@ -167,15 +155,6 @@ tunnels. This foundation does not add a shared DNS dashboard to Xiaozhi Settings
 or expose the dnsdist administrative API/console. Inspect dedicated service
 logs with `journalctl -u desk-adguard -u desk-dnsdist -u desk-dns-vip`.
 
-The base policy comes from Ansible until policy synchronization is enabled.
-With sync enabled, edit shared policy through the DNS VIP UI. Every non-owner
-pulls from the current VIP owner; edits through a backup node's SSH tunnel are
-overwritten by the next successful pull. Ordinary `dns.yml` reruns retain UI
-edits when the base-policy fingerprint is unchanged. Changing managed policy
-variables or passing `-e desk_dns_reconcile_policy=true` intentionally replaces
-UI policy. The automation login is retained even in those base candidates.
-Do not remove the synthetic health/filter/identity records.
-
 Production forwarding uses private TLS DoH at 5443 and trusted original-client
 headers, preserving real LAN client IPs. The original private port 5354 remains
 available for strict backend probes. `/dns/` aggregates the three backends'
@@ -184,9 +163,9 @@ a 1000-entry memory buffer with file logging disabled; statistics retain one day
 AdGuard caches are independent. DNS frontend caching is disabled so queries
 actually reach the three equal backends.
 
-## Preparing a later deployment
+## Initial deployment inputs
 
-Reserve `192.168.1.250` outside DHCP leases first. Keep the current router DNS.
+Reserve `192.168.1.250` outside DHCP leases first. Router changes remain manual.
 Generate an AdGuard-compatible bcrypt admin password hash locally (for example
 with `htpasswd -nB admin`, entering the password interactively), then put only
 the portion after `admin:` into ignored `secret/desk-dns.yml`:
@@ -196,7 +175,8 @@ desk_dns_admin_password_hash: '<bcrypt hash, not a plaintext password>'
 ```
 
 Use permissions 600 or encrypt that file with Ansible Vault. Do not commit it.
-When explicitly ready for live deployment, from the repository root:
+From the repository root (shared inventory also requires the existing sync
+credentials and backend trust generated by `create-dns-backend-trust.py`):
 
 ```bash
 ansible-playbook -i inventory.ini dns.yml --check -e @secret/desk-dns.yml
@@ -313,99 +293,40 @@ or credentials and do not change the election.
 
 ## Shared policy synchronization
 
-`dns-sync.yml` is a separate opt-in deployment, absent from `site.yml`. It uses
-the official **bakito/adguardhome-sync v0.9.3** ARM64 archive, pinned to SHA256
-`cb1909ad9f4516cf16e3a06e195f4094c29aa97a1a9418a8edfae352d869098c`.
-There is no fixed source node: all three run the same timer. A VIP owner skips
-pulling; each backup reads the current VIP over an authenticated, pinned TLS
-endpoint and applies through its own loopback API. Ownership is checked at
-each source request and replica write; a receiver promoted to owner refuses
-the old pull. No sync process participates in DNS query forwarding. The API boundary logs in
-once to local AdGuard and reuses its in-memory session cookie, refreshing on
-authentication rejection. This avoids expensive bcrypt verification on every
-metadata request; no human browser session is reused.
+`dns-sync.yml` installs the private policy agent, certificate/key, automation
+account and encrypted journal support. Reuse ignored credentials and trust files:
 
-The default interval is 30 seconds after the preceding run finishes, plus up
-to two seconds jitter. Unchanged policy skips the upstream process entirely.
-The initial pull gets three bounded retries before deployment fails; the timer
-is enabled only after that succeeds. Failed/offline replicas retain local state
-and retry. Sync is eventual and not
-transactional: filter downloads may take longer; a failed run can apply some
-policy fields before retrying. A save followed by immediate owner power loss
-may lose a change that has not reached another node. Let replicas converge
-before deliberate failover. This does not claim quorum storage or multi-writer
-conflict merging, and assumes the DNS VRRP has exactly one owner.
-
-Shared fields: API-portable upstream/bootstrap/fallback and DNS options,
-protection, safe search/browsing/parental settings, filter subscriptions,
-allowlists, custom rules, user rewrites, blocked-service schedules and persistent
-client settings. Client policy still has the existing dnsdist source-identity
-limitation described above. Files referenced by `upstream_dns_file` are rejected
-as non-portable; enter upstreams in the UI instead.
-
-Node-specific bindings, ports, DNS access lists, DHCP, TLS listeners, admin
-accounts/passwords, query log/statistics records, caches and UI
-theme are excluded. Query-log/statistics settings are now shared. The small API boundary omits reserved health/identity
-rewrites from both sides of upstream reconciliation and rejects changes to
-them. Rewrite processing remains enabled, and the internal filtering probe rule
-is retained. Global disabling of protection/filtering still conflicts with the
-existing strict filtering health probes; their checks and election weights
-are unchanged. The two VRRP scripts run every five seconds with a four-second
-timeout, rather than starting both every three seconds. On these ARM nodes
-each Python probe consumes roughly 0.4 CPU seconds even before network waits;
-the slower cadence leaves room in the existing serving CPU budget and avoids
-false priority/health failures. Two failed health samples withdraw readiness;
-this can take around ten seconds. Loss of VRRP advertisements on power loss
-continues to use the existing one-second advertisement interval.
-
-`desk-dns-sync-agent` exposes read-only authenticated TLS on DNS VIP port 3002,
-restricted to the three management node addresses. Replica mutations are accepted
-only on 127.0.0.1:3002. TLS verification is enabled; private trust/key material
-is not committed. The dedicated `desk-sync` automation account is provisioned
-serially while each AdGuard is stopped, preserving all existing users, password
-hashes and UI policy. Candidates are validated; provisioning failure restores
-the private rollback YAML. AdGuard does not support scoped user permissions:
-the automation login is an admin-equivalent secret. Its random password and
-bcrypt hash stay in ignored files and service-readable private configuration.
-Changing the human admin password does not interrupt synchronization.
-
-The sync units have no capabilities and run under a dedicated account in
-`desk-dnssync.slice`, a sibling of the serving/VRRP `desk-dns.slice`. Its
-aggregate quota is 20% of one CPU and 128 MiB; metadata work cannot consume
-the serving slice's CPU budget and delay VRRP health checks. Sync neither modifies nor restarts Xiaozhi
-services.
-The source API allows at most eight concurrent metadata requests and bounds
-policy bodies at 2 MiB. These bounds affect configuration synchronization only,
-not DNS query volume. Larger custom policy bodies fail clearly and retain local
-policy. The trusted self-signed certificate lasts 825 days; renew and deploy the
-trust certificate/key together before expiry. No automatic rotation is implied.
-
-Initialize the ignored automation material once on the controller (requires
-existing `openssl` and `htpasswd`), then deploy:
-
-```bash
+```sh
 python3 scripts/create-dns-sync-secret.py --vip 192.168.1.250
-ansible-playbook -i inventory.ini dns-sync.yml --check
 ansible-playbook -i inventory.ini dns-sync.yml -e @secret/desk-dns-sync.json
 ```
 
-Initialization retains an existing complete credential set and never prints a
-password. Back up the ignored credential/certificate files securely. Check mode
-performs read-only preflight/guards and skips credentials, downloads, account
-changes and all service activation. A normal rerun is idempotent.
+The initializer preserves a complete credential set. Back up these files securely.
+Peer API port 3002 uses authenticated pinned TLS and fixed cluster membership;
+replica writes are loopback-only. The `desk-sync` account is admin-equivalent,
+so its credentials stay private. Its trust certificate lasts 825 days; deploy
+certificate/key updates together before expiry.
 
-The certified policy journal described below is now authoritative. The pinned
-upstream pull boundary is retained for migration/reference; routine timers call
-the long-lived policy agent instead of launching an upstream process. Inspect
-safe metadata without reading policy contents or credentials:
+Routine reconciliation uses the long-lived policy agent. The pinned
+adguardhome-sync 0.9.3 binary is retained by installation for compatibility; it
+is not the authoritative policy journal or the routine timer path.
+Policy sync has a separate 20% CPU / 128 MiB slice and bounded 2 MiB API bodies.
+It does not forward DNS queries. Native policy keeps serving during catchup.
 
-```bash
-curl http://192.168.1.186/dns/control/desk_policy
-ssh ops@192.168.1.101 'sudo journalctl -u desk-dns-sync-agent --since "10 minutes ago"'
-```
+Shared API-portable policy includes upstreams, filtering/protection, subscriptions,
+allowlists, rewrites, client policy, schedules, query-log and statistics settings.
+Accounts, host bindings, DHCP/TLS listeners, native query records, caches and
+statistics data stay local. Files referenced by `upstream_dns_file` are rejected
+as non-portable. Edit managed policy through the unified UI; direct node edits
+bypass coordination and can be overwritten. Preserve reserved probe records.
 
-Sync remains independent of AdGuard, dnsdist and DNS VIP health. DNS serves the
-last native policy while a replica catches up. No router changes are performed.
+The base policy fingerprint is managed by Ansible. Unchanged `dns.yml` reruns
+preserve mutable UI policy; changed managed variables or
+`desk_dns_reconcile_policy=true` intentionally reconcile the base policy.
+
+Inspect safe state with `/dns/control/desk_policy` and
+`journalctl -u desk-dns-sync-agent`. Check mode skips private provisioning and
+activation; it cannot establish runtime health.
 
 ## Current unified UI and local auth mode
 
@@ -415,7 +336,7 @@ AdGuard instances. Protected peer sync still requires its existing token/TLS
 boundary. The legacy DNS-VIP UI port accepts only the three cluster proxies and rejects other LAN devices;
 DNS traffic still uses `.250:53`. See [Unified UI](DESK_UI.md) for deployment.
 
-## Unified real-client UI (2026-10-11)
+## Real-client UI
 
 `dns-cluster.yml` adds a restricted TLS-only backend boundary and a loopback UI
 aggregator on each node. Run `python3 scripts/create-dns-backend-trust.py` first;
@@ -433,9 +354,7 @@ come from public inventory. Unknown names remain IP-only; no names are invented.
 
 Query-log/statistics saves use PUT and synchronize across all nodes. No-body Clear
 and Reset requests omit Content-Type as required by pinned AdGuard. Internal
-health/identity/filtering names are excluded from new logging/statistics. Existing
-historical entries remain until a user-authorized Clear/Reset or normal expiry.
-No client IP is hidden to disguise historical relay/probe traffic.
+health/identity/filtering names are excluded from new logging/statistics. Existing entries remain until an explicit Clear/Reset or normal expiry.
 
 For DoH forwarding, panel activity reads the native `adguard_clients` backend
 request counter through `show stat` on a local UNIX socket with CLI level `user`.
@@ -443,10 +362,9 @@ The observer joins `desk-dnsdist`; socket mode 660 and directory mode 0710 grant
 only group read access and traversal. It stores no domains and is outside DNS
 forwarding.
 The plain-DNS packet observer remains available for the disabled identity mode.
-IPv6 DNS shares the existing DNS VIP election; see `DESK_DNS_IPV6.md`. It is
-deployed on all three nodes; no modem change is made by Ansible.
+IPv6 DNS shares the existing DNS VIP election; see [IPv6 DNS](DESK_DNS_IPV6.md).
 
-## Filter mutation response handling (2026-10-12)
+## Filter mutations
 
 AdGuard filter mutations do not all share the same response format. Add/remove,
 set URL/config/rules can return plain text or an empty HTTP 200 response; refresh
@@ -461,19 +379,9 @@ Restarting the maintenance coordinator retains its existing 180-second startup
 cooldown, allowing any previous update lease to expire before another backend can
 start a rebuild. DNS forwarding and filtering remain active during this window.
 An update during maintenance/cooldown returns HTTP 409, distinct from a backend or
-transport failure. The response fix restarts only the sync/API agent, leaving
-AdGuard, dnsdist, VIP processes and existing lists unchanged. Fake API regressions
-cover add/remove/refresh contracts and native HTTP 400/429/502 propagation.
+transport failure.
 
-After the startup cooldown, a real request through `186/dns/control/filtering/refresh`
-with the confirmed-empty whitelist returned HTTP 200 and `updated: 0`. Existing
-filter lists and their metadata were identical before/after. All three native DNS
-backends were healthy, with both replicas synced to the current DNS VIP owner.
-This checks the live maintenance/refresh transport without downloading or replacing
-active lists; live add/delete of the user's lists was not performed by the agent.
-
-
-## Certified policy and resilient UI (2026-10-12)
+## Certified policy and resilient UI
 
 Every managed public Save uses the same protected validation as replica apply.
 Reserved health/identity rewrites cannot be deleted or disabled. Host-local DNS
@@ -525,19 +433,6 @@ The repair playbook stops reconciliation timers, waits for old jobs, validates
 HAProxy candidates and updates API/proxies one node at a time. It verifies
 protected process identities and resumes timers after all peers understand the
 journal protocol. The initial policy comes from the current DNS VIP owner.
-
-
-Validation after the repair: 106 DNS Python tests and 6 native UI adapter tests
-passed; monitoring has 45 passing tests. All rendered templates, Python/YAML
-fixtures, repair playbook syntax and whitespace checks passed. Serial rollout
-had zero failed/unreachable nodes. A real Query Log config edit through the VIP
-returned HTTP 200 and coverage 3/3; native readback confirmed the scratch ignored
-domain on each backend. The original config was restored at DNS revision 2 and
-existing filter lists/metadata were unchanged. Same-value Query Log/Statistics
-saves succeeded. All three installed helper hashes matched the tested source,
-and both encrypted journal mtimes/sizes remained unchanged during an idle
-observation. This is a short IO observation, not a stress benchmark. No modem or
-firmware changes were made.
 
 
 Dashboard compatibility: AdGuard uses POST for the read-only `version.json`

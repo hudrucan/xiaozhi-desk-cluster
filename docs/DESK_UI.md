@@ -11,7 +11,8 @@ uses Beszel's native `AUTO_LOGIN` for `admin@desk.cluster` on all three independ
 These are full administration interfaces, including policy edits and allowed
 service logs. The management HTTP routes accept the existing management LAN;
 The legacy `.250:3001` UI listener accepts only cluster-node source addresses and loopback. Other private backend listeners are unchanged. No password prompt is expected.
-Beszel history, users and preferences remain independent across hubs.
+Beszel metric history stays local; accounts and preferences use the shared
+configuration boundary described in [Monitoring](DESK_MONITORING.md).
 
 `/dns/` forwards to the current DNS VIP owner, rather than round-robin across
 independent AdGuard UIs. Existing protected peer synchronization replicates that

@@ -1,5 +1,5 @@
 ---
-# Phase 3B canary. Installs workers -> certifies the Core guard -> enables writes.
+# Owner commands: install workers, certify the Core guard, then enable writes.
 # No physical camera action is issued by this playbook.
 - name: Freeze protected services and validate command canary prerequisites
   hosts: deskboxes

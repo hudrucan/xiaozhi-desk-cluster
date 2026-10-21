@@ -1,7 +1,7 @@
 # Front-panel API v1
 
 `GET http://192.168.1.186/api/cluster/panel` is the compact, read-only endpoint
-for a future ESP32-S3 touch display. Use the applied management VIP if it changes;
+for the Pi panel and other display clients. Use the applied management VIP if it changes;
 do not bind the client to a particular node. Every collector serves the same
 versioned projection from its own bounded cluster snapshot. Samples can differ
 by a few seconds after failover; clients must use freshness, not pin an observer.
@@ -97,19 +97,7 @@ the exact public route. Binary/route rollback staging is in `/run` and removed
 when complete. Voice, DNS, VIP, credentials, models, policy and firmware remain
 unchanged. Existing dashboard/monitoring/DNS reruns retain the exact panel route.
 
-## Acceptance (2026-10-13)
-
-PASS: 14 Go checks, 8 dashboard/UI Python checks, Ansible syntax and native
-HTTP+MQTT proxy validation. Serial rollout passed protected runtime/policy
-guards on all three nodes. Every private collector and the public management
-VIP returned v1 JSON with three node identities and bounded Content-Length;
-the measured response was approximately 2.5 KiB. The legacy status endpoint,
-root page, Xiaozhi, DNS and Monitoring all returned HTTP 200.
-
-NOT RUN: ESP32 display decoding, rendering, touch and physical failover with a
-connected screen. No firmware build/flash or voice provider call was performed.
-
-## Optional Home Assistant projection (2026-10-16)
+## Home Assistant projection
 
 `owners.homeassistant` uses the existing known/conflict/unknown shape and counts
 fresh active/starting/checkpointing Core owners. A missing owner does not imply

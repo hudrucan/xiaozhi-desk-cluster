@@ -1,5 +1,5 @@
 ---
-# Phase 3A: warm read lane first, validate fixed snapshots, then certified Core cutover.
+# Owner observations: warm read lane, snapshot validation, then certified Core cutover.
 # --tags workers runs only the compatible shadow worker rollout.
 # --tags core requires already healthy owner snapshots. No vendor/control changes.
 - name: Freeze protected services and require idle camera media

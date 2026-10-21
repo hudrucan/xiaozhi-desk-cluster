@@ -53,11 +53,3 @@ directories. No upstream checkout, network access or production credentials are
 needed. An explicit `WG_EASY_SOURCE` still selects an external source checkout;
 missing migrations fail instead of silently falling back to the bundled fixture.
 See the fixture README for provenance, licensing and pin-update instructions.
-
-## Validation recorded on 2026-10-14
-
-PASS: seven focused sync/asset tests, seven ingress preservation checks, existing topology and timeline regressions, Go readiness and PSK recovery tests, and Ansible syntax checks. PASS: real create/edit/export QR/config/disable/enable/delete from different nodes; temporary peers removed and the original iPhone retained. PASS: native UI stopped on node 1 with its affinity cookie; HTML/client API/bundle requests continued through other replicas. PASS: a Save with node-3 adapter offline was chosen by the other two; node 3 caught up on restart, then the temporary peer was deleted.
-
-All three native UIs and adapters are active at revision 7 with three Applied acknowledgments, and native VPN readiness passes on each node. Thirty-second measurements with the VPN page closed showed combined native UI plus adapter CPU of 1.53–2.08% of one CPU, approximately 0.38–0.52% of a four-core node; combined memory was 71–91 MiB. This is a short idle sample, not a load-test guarantee. The existing real iPhone WAN failover was previously validated; no power-cut or new-PSK-client WAN failover was performed in this UI rollout.
-
-The initial mixed-version rolling upgrade caused missing dynamic JavaScript bundles and a blank page. Reproduced per-node 404s identified the cause. The fixed deployment stages immutable bundles on all three replicas before code changes, and the adapter serves those bundles without depending on the running Nitro manifest. The current page renders its original client and the 3/3 Applied state.

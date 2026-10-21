@@ -4,9 +4,8 @@ Native UI: `http://192.168.1.186:8123/`. Use the existing Home Assistant account
 its authentication remains enabled. The management VIP forwards HTTP/WebSocket
 traffic to the one native-ready Core, independently of which node holds that VIP.
 Core ownership remains single-active. Camera live view uses separate go2rtc workers;
-Tapo Control and recordings playback remain on Core. See [CAMERA_MEDIA.md](CAMERA_MEDIA.md).
-The former `desk_remote` integration pilot has been retired.
-The former Generic Camera PoC entry is retained but disabled on initial import.
+Tapo Control remains in Core; selected recording work and admitted media delivery
+run on camera owners. See [CAMERA_MEDIA.md](CAMERA_MEDIA.md).
 
 ## Ownership and failure behavior
 
@@ -81,7 +80,7 @@ Artifact cleanup retains the seed, certified/accepted bundles, current generatio
 and three newest artifacts of each kind. Files under one hour old are protected
 for in-flight operations; cleanup runs at most once per ten minutes.
 
-From this repository (there is currently no checkpoint button in the UI):
+For a clean-stop checkpoint or planned handoff from this repository:
 
 ```sh
 cd /Users/hudrucan/Personals/repos/xiaozhi-desk-cluster
@@ -119,7 +118,6 @@ Create local ignored credentials once with
 `secret/homeassistant/` directory securely for reruns and disaster recovery.
 Never regenerate these keys for a running cluster. Native auth and encryption keys
 are not placed in the dashboard, Git, NATS payloads or deployment output.
-The initial stopped PoC source is retained untouched for recovery.
 The pinned Core HTTP store is normalized only while Core is stopped: port 8123,
 all container interfaces and the four exact internal proxy addresses are owned by
 this deployment. Other HTTP protections remain intact. Core 2026.10 reads these
@@ -156,48 +154,19 @@ HTML navigation shows an automatically retrying reconnect page during cold takeo
 Readiness and API requests still return their real unavailable status. A warming
 page is never counted as a healthy Core.
 
-## Initial validation — 2026-10-16
-
-Final state: deskb1x native-ready, two stopped Core standbys, checkpoint r6 synced
-on all three nodes. Native HTML, HTTP 401 for unauthenticated API, and WebSocket
-101/auth_required passed through the stable ingress. Existing six service UIs
-remained HTTP 200. Original user identities and password-provider data matched
-the retained source. The user confirmed PASS: the existing account logs in and
-reaches Overview through the stable VIP.
-
-Planned checkpoint/handoff took 124.47 seconds. A controller SIGSTOP experiment
-recovered on a peer in 116.39 seconds; the old namespace stopped within 11.31
-seconds of the test request, with no process overlap at 250 ms sampling. These
-are measured cold-start results, not a power-cut test or an uptime guarantee.
-The final quiet 20-second sample measured Core at 272.8 MiB working memory and
-0.28% of one CPU core; each controller used 23.6–24.8 MiB and 2.52–3.98% of one
-CPU core. No HA cgroup OOM kills were recorded. Native UI Restart has an offline
-regression and the official supervisor restart path was inspected; an interactive
-restart was not exercised. See `HOME_ASSISTANT_VALIDATION.json` for measurements.
-
 ## Bluetooth limitation
 
 The host BlueZ adapters are powered, but the current Core container deliberately
 has no host D-Bus mount and drops all Linux capabilities. The existing Bluetooth
 entry therefore reports its adapter as not found. This is not evidence of failed
 hardware. Native Container Bluetooth requires access to `/run/dbus` and additional
-capabilities; these have not been enabled by this diagnostic.
+capabilities; these are not enabled by this deployment.
 
 The retained Bluetooth entry identifies node 1's adapter MAC. All three nodes have
 different local adapters, so granting container access alone would not make that
 entry portable during Core takeover. Device integration design must address this
 explicitly; a stable remote Bluetooth proxy is an option for later evaluation.
 Reference: https://www.home-assistant.io/integrations/bluetooth/#additional-details-for-container
-
-## Display-name checkpoint — 2026-10-16
-
-Checkpoint r7 preserves the user's latest saved configuration and renames the
-readiness component to **Core Health** (manifest version 1.0.1). All three encrypted
-bundles were checksum-verified and contain the renamed manifest. Core returned
-native-ready on node 1 after one clean checkpoint restart. After startup, the only
-changed file found against the snapshot manifest was `.storage/core.restore_state`;
-the current broad `pending_disk_changes` indicator counts this runtime state too.
-Consequently, that badge alone does not prove an unsaved configuration change.
 
 ## Online sync deployment
 
@@ -212,59 +181,3 @@ while an online operation is in progress.
 Dirty tracking excludes known restore-state/trace data and backup bookkeeping.
 The recovery archive still retains those files. A pending indicator cannot detect
 configuration that an integration has not yet written to disk.
-
-### Online validation — 2026-10-16
-
-The native sidebar button completed an online sync to r9, certified and present
-on 3/3 nodes. Each encrypted bundle was independently restored into an isolated
-temporary directory: 33 files, SQLite quick_check OK, native auth/provider data
-retained, and the Cluster component present. The owner's user identities matched
-the restored bundle. These were isolated restore checks, not a second live
-failover or a physical power-cut test.
-
-A 78.31-second observation (75 samples) around the online operation recorded no
-readiness/native HTTP failures. Container and HA process identities were unchanged,
-with zero cgroup OOM kills. Core averaged 2.53% of one CPU core and peaked at
-43.02%; final cgroup memory was 261.19 MiB. This CPU figure excludes the separately
-budgeted snapshot validation/encryption worker and does not represent total node
-load. The sync button and replica rows now preserve unchanged DOM between polls,
-preventing native button flicker.
-
-Routine availability checks use the explicitly public `/api/desk_cluster/ready`
-endpoint. Do not probe protected `/api/` without authentication: the expected 401
-still creates a native invalid-login notification. The one-off negative auth
-check from node 2 at 14:33:06 was identified in the HA log and removed from the
-scratch validation script. Native authentication remains enabled.
-
-### Online snapshot takeover validation — 2026-10-16
-
-Created the disposable native UI helper `input_boolean.cluster_sync_verification`,
-then pressed **Sync config** and verified the same certified r10 blob on 3/3 nodes.
-SIGSTOP was applied only to the owner's HA controller on deskb3x; an independent
-70-second systemd CONT backstop and test-finally cleanup restored the controller.
-No clean-stop checkpoint preceded the failure, so takeover exercised the actual
-online backup artifact rather than a newer maintenance snapshot.
-
-The old namespace stopped at 11.24 seconds, the successor namespace on deskb1x
-started at 24.62 seconds, native readiness returned at 94.80 seconds, and native
-HTML through the stable VIP returned at 95.82 seconds. The outer test runner
-observed readiness at 97.17 seconds. There was no observed namespace overlap at
-250 ms sampling; HTTP/ready observations used approximately one-second sampling.
-This is a controller-freeze experiment, not physical power removal or an SLA.
-
-The successor's helper file and both native auth/password-provider files matched
-the r10 snapshot by SHA-256. The signed-in browser reconnected, the helper was
-visible in native HA, and the new owner's Cluster sidebar remained functional.
-Native Recorder reported recovering an unfinished session, as the online backup
-was made while HA was running; this does not replace SQLite integrity validation.
-The temporary helper was then deleted through the native UI and cleanup synced.
-No camera/device integration, ownership framework or timeout was changed by this
-validation. Previous 116.39-second and current 95.82-second observations are
-separate runs on different successors; this is not a controlled speedup claim.
-
-Cleanup finished at r11, synced 3/3 with pending=false on the owner. Each r11
-bundle was restored in an isolated directory: SQLite quick_check passed and the
-temporary helper was absent on all three copies. The old controller resumed
-without a restart loop; no test resume timer remains. One Core is native-ready
-on deskb1x; both other Core containers are stopped. Existing service UIs and
-native WebSocket authentication negotiation passed the final checks.
