@@ -87,7 +87,7 @@ contract; the existing browser-only node action flow is not part of this API.
 ## Deployment
 
 ```sh
-ansible-playbook -i inventory.ini panel-api.yml
+ansible-playbook -i inventory.ini playbooks/dashboard/panel-api.yml
 curl --max-time 3 http://192.168.1.186/api/cluster/panel
 ```
 
@@ -110,5 +110,5 @@ Exclude metadata at 15 seconds even when the node itself is still online. Derive
 the replica count from fresh, synced nodes matching the newest observed revision;
 do not count an older bundle as synced to the new revision. No auth material,
 backup content, private peer endpoint or additional probes are exposed. The v1
-protocol and 8192-byte budget remain unchanged. `panel-homeassistant.yml` updates
+protocol and 8192-byte budget remain unchanged. `playbooks/dashboard/panel-homeassistant.yml` updates
 only the cached collectors serially with rollback and process-identity guards.

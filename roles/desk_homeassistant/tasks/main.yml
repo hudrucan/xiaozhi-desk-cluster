@@ -6,7 +6,7 @@
       - ansible_play_hosts_all | sort == ['deskb1x','deskb2x','deskb3x']
 - name: Freeze protected services before preparation
   ansible.builtin.command:
-    argv: [python3, '-c', "{{ lookup('file',playbook_dir+'/roles/desk_ui/files/ui_guard.py') }}", freeze]
+    argv: [python3, '-c', "{{ lookup('file',desk_repo_root+'/roles/desk_ui/files/ui_guard.py') }}", freeze]
   register: homeassistant_protected
   changed_when: false
   no_log: true
@@ -23,8 +23,8 @@
     - {path: /usr/local/libexec/desk-homeassistant, mode: '0755'}
 - name: Load ignored cluster and scoped NATS credentials
   ansible.builtin.set_fact:
-    homeassistant_secret: "{{ lookup('file',playbook_dir+'/secret/homeassistant/cluster.json') | from_json }}"
-    homeassistant_nats: "{{ lookup('file',playbook_dir+'/secret/homeassistant/nats.json') | from_json }}"
+    homeassistant_secret: "{{ lookup('file',desk_repo_root+'/secret/homeassistant/cluster.json') | from_json }}"
+    homeassistant_nats: "{{ lookup('file',desk_repo_root+'/secret/homeassistant/nats.json') | from_json }}"
   no_log: true
 - name: Install Python helpers and readiness-only custom component
   ansible.builtin.copy:
@@ -35,7 +35,7 @@
   register: homeassistant_helpers
 - name: Retain the optional stopped-Core camera migration hook
   ansible.builtin.copy:
-    src: '{{ playbook_dir }}/roles/desk_camera/files/camera_config.py'
+    src: '{{ desk_repo_root }}/roles/desk_camera/files/camera_config.py'
     dest: /usr/local/libexec/desk-homeassistant/camera_config.py
     mode: '0600'
 - name: Install readiness component source separately from executable helpers
@@ -69,7 +69,7 @@
     extra_args: '--require-hashes --only-binary=:all:'
 - name: Install private peer TLS material
   ansible.builtin.copy:
-    src: '{{ playbook_dir }}/secret/homeassistant/{{ item }}'
+    src: '{{ desk_repo_root }}/secret/homeassistant/{{ item }}'
     dest: '/etc/desk-homeassistant/{{ item }}'
     mode: '0600'
   loop: [peer.crt, peer.key]
@@ -117,12 +117,12 @@
       no_log: true
     - ansible.builtin.fetch:
         src: '/var/lib/desk-homeassistant/blobs/{{ homeassistant_seed.digest }}'
-        dest: '{{ playbook_dir }}/secret/homeassistant/seed.bin'
+        dest: '{{ desk_repo_root }}/secret/homeassistant/seed.bin'
         flat: true
       no_log: true
 - name: Install and verify the same encrypted seed on every voter
   ansible.builtin.copy:
-    src: '{{ playbook_dir }}/secret/homeassistant/seed.bin'
+    src: '{{ desk_repo_root }}/secret/homeassistant/seed.bin'
     dest: '/var/lib/desk-homeassistant/blobs/{{ hostvars[desk_homeassistant_seed_node].homeassistant_seed.digest }}'
     mode: '0600'
   no_log: true

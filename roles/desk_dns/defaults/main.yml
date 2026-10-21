@@ -15,7 +15,7 @@ desk_dns_ui_vip_proxy_only: false
 desk_dns_admin_password_hash: ''
 desk_dns_filter_url: https://adguardteam.github.io/AdGuardSDNSFilter/Filters/filter.txt
 desk_dns_user_rules: []
-# Base policy replacement is explicit; dns-sync.yml enables shared UI policy.
+# Base policy replacement is explicit; playbooks/dns/dns-sync.yml enables shared UI policy.
 desk_dns_reconcile_policy: false
 
 # Separate opt-in policy sync; independent of DNS serving and Xiaozhi.

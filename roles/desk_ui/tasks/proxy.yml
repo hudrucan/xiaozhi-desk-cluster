@@ -23,7 +23,7 @@
         mode: '0644'
     - name: Update the atomic HTTP and MQTT candidate validator
       ansible.builtin.copy:
-        src: "{{ playbook_dir }}/roles/desk_monitoring/files/install_proxy.py"
+        src: "{{ desk_repo_root }}/roles/desk_monitoring/files/install_proxy.py"
         dest: /usr/local/libexec/desk-monitoring/install-proxy.py
         mode: '0755'
     - name: Recheck protected state immediately before HTTP reload
@@ -39,7 +39,7 @@
 
     - name: Restrict the legacy DNS VIP UI port to cluster proxies
       ansible.builtin.template:
-        src: "{{ playbook_dir }}/roles/desk_dns/templates/ui-haproxy.cfg.j2"
+        src: "{{ desk_repo_root }}/roles/desk_dns/templates/ui-haproxy.cfg.j2"
         dest: /etc/desk-dns/ui-haproxy.cfg
         mode: '0644'
         validate: /usr/sbin/haproxy -c -f %s

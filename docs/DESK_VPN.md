@@ -1,6 +1,6 @@
 # WireGuard HA
 
-Opt-in `vpn-ha.yml`; never included by `site.yml`. Management UI and resolver
+Opt-in `playbooks/vpn/vpn-ha.yml`; never included by `site.yml`. Management UI and resolver
 routes are unchanged. Reserve 192.168.1.254 outside modem DHCP.
 VPN endpoint is vpn.huynm.dev:51820; modem UDP mapping changes are user-owned.
 All three nodes have the same server identity and peer list. Prepared kernel
@@ -36,9 +36,9 @@ exception is disabled by default. Main routing tables are untouched.
 Peer updates are supplied once in ignored credentials, applied with Ansible to
 all three nodes, and reloaded with wg syncconf to preserve existing sessions.
 The [VPN UI](DESK_VPN_UI.md) provides replicated peer management;
-`vpn-ha.yml` preserves UI-managed membership.
+`playbooks/vpn/vpn-ha.yml` preserves UI-managed membership.
 
-Run `ansible-playbook -i inventory.ini vpn-ha.yml`. Native helper builds locally
+Run `ansible-playbook -i inventory.ini playbooks/vpn/vpn-ha.yml`. Native helper builds locally
 for ARM64; role readiness must pass on all nodes before any election starts.
 Do not expose dashboard HTTP, DNS port 53 or SSH as modem port mappings.
 
@@ -70,7 +70,7 @@ VPN handoff requirement even if telemetry becomes unknown.
 
 ## Owner-only Cloudflare DDNS
 
-`vpn-ddns.yml` is a separate opt-in deployment. Create a dedicated Cloudflare
+`playbooks/vpn/vpn-ddns.yml` is a separate opt-in deployment. Create a dedicated Cloudflare
 API token from the Edit zone DNS template, restricted to the `huynm.dev` zone.
 Cloudflare DNS tokens cover a zone; they are not restricted to one record.
 The updater itself pins the exact record ID, hostname, A type and DNS-only
@@ -80,7 +80,7 @@ Run locally from the repository:
 
 ```bash
 python3 scripts/setup-vpn-ddns-secret.py
-ansible-playbook -i inventory.ini vpn-ddns.yml
+ansible-playbook -i inventory.ini playbooks/vpn/vpn-ddns.yml
 ```
 
 The helper reads the token through a hidden prompt, validates access to the
@@ -111,7 +111,7 @@ reuses one TLS context and validates startup freshness only once.
 
 ## Proactive peer-session recovery
 
-`vpn-recovery.yml` is a separate optional deployment. It installs a small native
+`playbooks/vpn/vpn-recovery.yml` is a separate optional deployment. It installs a small native
 `desk-vpn-recovery` helper on all nodes, independent of VPN election and readiness.
 The owner sends HMAC-authenticated endpoint hints every 5 seconds to private
 10.10.10.x addresses on UDP 51854. Only endpoints already learned by WireGuard
@@ -129,8 +129,8 @@ and AllowedIPs, then emits one UDP discard-port datagram through the tunnel to
 start a standard kernel handshake. The former owner does not need to answer any
 RPC or remain powered on. Already renewed, deleted or altered peers are skipped. The current helper
 preserves PSKs through private stdin and retains keepalive when recreating a peer.
-The standalone `vpn-recovery.yml` prerequisite still rejects PSK/keepalive peers;
-for UI-managed peers use the coordinated `vpn-ui.yml` deployment.
+The standalone `playbooks/vpn/vpn-recovery.yml` prerequisite still rejects PSK/keepalive peers;
+for UI-managed peers use the coordinated `playbooks/vpn/vpn-ui.yml` deployment.
 
 Starting/restarting this helper on an existing owner never resets its current
 peer session. Missing/expired/conflicting cache, helper failure or a cold cluster

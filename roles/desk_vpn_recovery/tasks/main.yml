@@ -6,7 +6,7 @@
       - ansible_play_hosts_all | length == 3
 - name: Freeze protected services and policies
   ansible.builtin.command:
-    argv: [/usr/bin/python3, '-c', "{{ lookup('ansible.builtin.file', 'roles/desk_ui/files/ui_guard.py') }}", freeze]
+    argv: [/usr/bin/python3, '-c', "{{ lookup('ansible.builtin.file', desk_repo_root + '/roles/desk_ui/files/ui_guard.py') }}", freeze]
   register: recovery_before
   changed_when: false
   no_log: true
@@ -32,7 +32,7 @@
   no_log: true
 - name: Resolve dedicated ignored metadata authentication key
   ansible.builtin.set_fact:
-    vpn_recovery_key: "{{ lookup('ansible.builtin.password', playbook_dir + '/secret/vpn-recovery.key', length=64, chars=['hexdigits']) }}"
+    vpn_recovery_key: "{{ lookup('ansible.builtin.password', desk_repo_root + '/secret/vpn-recovery.key', length=64, chars=['hexdigits']) }}"
   no_log: true
 - name: Create controller recovery build directory
   ansible.builtin.file:
@@ -143,6 +143,6 @@
   changed_when: false
 - name: Verify unchanged protected services and policies
   ansible.builtin.command:
-    argv: [/usr/bin/python3, '-c', "{{ lookup('ansible.builtin.file', 'roles/desk_ui/files/ui_guard.py') }}", guard]
+    argv: [/usr/bin/python3, '-c', "{{ lookup('ansible.builtin.file', desk_repo_root + '/roles/desk_ui/files/ui_guard.py') }}", guard]
     stdin: "{{ recovery_before.stdout }}"
   changed_when: false

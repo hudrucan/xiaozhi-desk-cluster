@@ -54,9 +54,9 @@ From the cluster repository:
 
 ```bash
 python3 scripts/create-monitoring-secret.py
-ansible-playbook -i inventory.ini monitoring.yml --syntax-check
-ansible-playbook -i inventory.ini monitoring.yml --check
-ansible-playbook -i inventory.ini monitoring.yml
+ansible-playbook -i inventory.ini playbooks/monitoring/monitoring.yml --syntax-check
+ansible-playbook -i inventory.ini playbooks/monitoring/monitoring.yml --check
+ansible-playbook -i inventory.ini playbooks/monitoring/monitoring.yml
 ```
 
 The generated credentials are in ignored `secret/desk-monitoring.json`, mode 600.
@@ -79,8 +79,8 @@ workers, gateways, DNS and VRRP are not restarted by this playbook. Existing ina
 For existing three-node hubs:
 
 ```bash
-ansible-playbook -i inventory.ini monitoring-sync.yml --syntax-check
-ansible-playbook -i inventory.ini monitoring-sync.yml
+ansible-playbook -i inventory.ini playbooks/monitoring/monitoring-sync.yml --syntax-check
+ansible-playbook -i inventory.ini playbooks/monitoring/monitoring-sync.yml
 ```
 
 Inventory enables shared settings and sets `desk_monitoring_sync_source` to
@@ -121,7 +121,7 @@ curl -fsS http://192.168.1.186/monitor/api/desk-config/status
 
 Crypto wheels are checksum-pinned and unpacked into a dedicated vendor directory
 for the installed Debian 12/Python 3.11 ARM64 runtime. No system Python or Xiaozhi
-virtual environment is modified. The regular `monitoring.yml` also preserves and
+virtual environment is modified. The regular `playbooks/monitoring/monitoring.yml` also preserves and
 installs shared settings before exposing its proxy when the flag is enabled.
 
 ## Scope and overhead
@@ -199,7 +199,7 @@ install preserves the patched hub. To update existing hubs without rerunning
 bootstrap or touching agent membership:
 
 ```bash
-ansible-playbook -i inventory.ini monitoring-ui.yml
+ansible-playbook -i inventory.ini playbooks/monitoring/monitoring-ui.yml
 ```
 
 This rollout restarts one `beszel-hub` at a time, checks native health and shared
@@ -234,14 +234,14 @@ The original ignored bootstrap credentials remain available for provisioning;
 histories remain local and preferences now sync when enabled. See [Unified UI](DESK_UI.md).
 
 All three existing admin accounts and new bootstrap accounts use
-`admin@desk.cluster`. `monitoring-accounts.yml` migrates existing emails serially
+`admin@desk.cluster`. `playbooks/monitoring/monitoring-accounts.yml` migrates existing emails serially
 with a private backup and rollback; it retains each account's ID, password,
 token key, settings and history. Monitoring reruns also converge this email
 before enabling auto-login. The email migration itself does not replicate settings or histories; the separate
 shared configuration boundary above handles settings.
 
 ```bash
-ansible-playbook -i inventory.ini monitoring-accounts.yml
+ansible-playbook -i inventory.ini playbooks/monitoring/monitoring-accounts.yml
 ```
 
 
@@ -268,7 +268,7 @@ Ephemeral tokens themselves remain native local runtime state.
 
 `/monitor/api/desk-config/status` exposes revision, native apply progress,
 ready nodes, writability and pending/error state without credentials. The
-`repair-ui-sync.yml` playbook installs these changes serially alongside the DNS
+`playbooks/ui/repair-ui-sync.yml` playbook installs these changes serially alongside the DNS
 policy/UI repair. Existing accounts, passwords, record identities and metrics
 are retained; no native hub restart is required.
 
@@ -301,7 +301,7 @@ Existing cookies retain healthy sessions even when their hub is not preferred.
 The dashboard displays **Monitoring preferred** on the choice reported by the
 single current UI VIP owner; conflicting/missing owners suppress the badge.
 
-Use `dashboard-helpers.yml` to build and roll out only a changed collector binary,
+Use `playbooks/dashboard/dashboard-helpers.yml` to build and roll out only a changed collector binary,
 with a rollback copy and protected-service checks. It does not reload ingress or
 restart the monitoring hubs.
 

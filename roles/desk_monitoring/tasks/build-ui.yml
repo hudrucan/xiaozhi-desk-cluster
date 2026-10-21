@@ -1,7 +1,7 @@
 ---
 - name: Build the cached pinned Beszel hub with native UI feedback
   ansible.builtin.command:
-    argv: ["{{ ansible_playbook_python }}", "{{ playbook_dir }}/scripts/build-beszel-ui.py"]
+    argv: ["{{ ansible_playbook_python }}", "{{ desk_repo_root }}/scripts/build-beszel-ui.py"]
   delegate_to: localhost
   become: false
   run_once: true

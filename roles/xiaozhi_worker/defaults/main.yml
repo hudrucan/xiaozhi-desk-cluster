@@ -34,4 +34,4 @@ xiaozhi_worker_tts_revision: null
 xiaozhi_worker_tts_config: /etc/xiaozhi-worker-tts/config.json
 # Private cache-only bundle exported on the controller using the server exporter.
 xiaozhi_worker_tts_asset_bundle: ''
-xiaozhi_worker_tts_controller_server_dir: "{{ playbook_dir }}/../xiaozhi-esp32-server/main/xiaozhi-server"
+xiaozhi_worker_tts_controller_server_dir: "{{ desk_repo_root }}/../xiaozhi-esp32-server/main/xiaozhi-server"

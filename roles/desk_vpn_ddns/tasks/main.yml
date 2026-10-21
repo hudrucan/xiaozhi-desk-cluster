@@ -6,7 +6,7 @@
       - ansible_play_hosts_all | length == 3
 - name: Load dedicated ignored DNS credential
   ansible.builtin.set_fact:
-    vpn_ddns_secret: "{{ lookup('ansible.builtin.file', 'secret/vpn-ddns.json') | from_json }}"
+    vpn_ddns_secret: "{{ lookup('ansible.builtin.file', desk_repo_root + '/secret/vpn-ddns.json') | from_json }}"
   no_log: true
 - name: Validate dedicated DNS credential shape
   ansible.builtin.assert:

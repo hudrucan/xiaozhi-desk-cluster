@@ -4,10 +4,11 @@ A dedicated read-only client for Raspberry Pi Zero W / LCDWiki/goodtft MPI3501
 (ILI9486 + XPT2046), 480×320 RGB565. It runs on the display Pi, never on the three cluster nodes.
 The current device is `zerow`, `192.168.1.115`, user `pi`.
 
-Deploy explicitly:
+Deploy explicitly from the repository root (loads `ansible.cfg` and the shared
+`roles/` search path):
 
 ```sh
-ansible-playbook -i pi-panel.ini pi-panel.yml
+ansible-playbook -i playbooks/pi-panel/inventory.ini playbooks/pi-panel/deploy.yml
 ```
 
 The separate `pi_panels` inventory is not included in the normal cluster site
@@ -16,13 +17,13 @@ it does not flash, reboot or change network settings. Existing framebuffer
 `/dev/fb1` and the stable ADS7846 `/dev/input/by-path` symlink are required.
 This is an application deployment role, not provisioning for a fresh OS image.
 Before any package/file changes, a read-only preflight verifies the overlay
-SHA-256 pinned in `host_vars/zerow.yml`, live driver bindings, SPI/GPIO settings,
+SHA-256 pinned in `playbooks/pi-panel/host_vars/zerow.yml`, live driver bindings, SPI/GPIO settings,
 RGB565 framebuffer geometry and the touch input's SPI parent. It also runs in
 check mode. An unexpected driver/overlay change requires an audit, not a bypass.
 Run only that check with:
 
 ```sh
-ansible-playbook -i pi-panel.ini pi-panel.yml --tags panel-preflight
+ansible-playbook -i playbooks/pi-panel/inventory.ini playbooks/pi-panel/deploy.yml --tags panel-preflight
 ```
 
 The application reads only `GET /api/cluster/panel` from the management VIP,
@@ -61,15 +62,15 @@ existing cache, within the same 8 KiB limit. For an existing cluster, deploy onl
 that collector projection (including monitoring preference) before updating the Pi:
 
 ```sh
-ansible-playbook -i inventory.ini panel-network.yml
-ansible-playbook -i pi-panel.ini pi-panel.yml
+ansible-playbook -i inventory.ini playbooks/dashboard/panel-network.yml
+ansible-playbook -i playbooks/pi-panel/inventory.ini playbooks/pi-panel/deploy.yml
 ```
 
-`panel-network.yml` rolls through the three dashboard collectors with binary
+`playbooks/dashboard/panel-network.yml` rolls through the three dashboard collectors with binary
 backups and protected-service checks. It does not change routes or restart
 the Network controller. The Pi role backs up changed `panel.py` versions;
 its local calibration override is preserved.
-For later renderer-only changes, `ansible-playbook -i pi-panel.ini pi-panel.yml
+For later renderer-only changes, `ansible-playbook -i playbooks/pi-panel/inventory.ini playbooks/pi-panel/deploy.yml
 --tags panel-ui` runs preflight and updates/restarts only the Pi client, skipping
 package installation and native compilation. An unchanged renderer does not
 restart the service.
@@ -222,8 +223,8 @@ added. Manual Sync config remains in the native HA Cluster panel.
 For an existing installation:
 
 ```sh
-ansible-playbook -i inventory.ini panel-homeassistant.yml
-ansible-playbook -i pi-panel.ini pi-panel.yml --tags panel-ui
+ansible-playbook -i inventory.ini playbooks/dashboard/panel-homeassistant.yml
+ansible-playbook -i playbooks/pi-panel/inventory.ini playbooks/pi-panel/deploy.yml --tags panel-ui
 ```
 
 The collector upgrade guards Network and HA controller process identities, and
@@ -231,7 +232,7 @@ the Pi update preserves rotation, calibration and local display preferences.
 
 ## Display hardware and recovery
 
-`host_vars/zerow.yml` pins the MPI3501 overlay checksum, input path, 180-degree
+`playbooks/pi-panel/host_vars/zerow.yml` pins the MPI3501 overlay checksum, input path, 180-degree
 client mounting rotation and fallback touch transform. The local calibration
 file takes precedence. The application requires the existing SPI framebuffer
 and ADS7846 driver; deployment preflight checks their bindings and geometry.
@@ -243,7 +244,7 @@ assign PWM to the board's NC pin. Driver or hardware changes need their own
 inspection. The framebuffer client does not require Xorg/calibrator packages.
 
 If the UI fails, stop `desk-cluster-panel` over SSH to restore the console;
-inspect its journal and rerun `pi-panel.yml --tags panel-preflight` before
+inspect its journal and rerun `playbooks/pi-panel/deploy.yml --tags panel-preflight` before
 reapplying. Preserve `/var/lib/desk-cluster-panel/` preferences. Invalid local
 calibration falls back to the host vars; use the on-screen calibration flow to
 replace a valid but unsuitable mapping.

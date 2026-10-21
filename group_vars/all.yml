@@ -1,0 +1,4 @@
+---
+# The cluster inventory lives at repository root. Keep this anchor tied to the
+# original inventory host even when controller tasks delegate to localhost.
+desk_repo_root: "{{ hostvars[inventory_hostname].inventory_dir }}"

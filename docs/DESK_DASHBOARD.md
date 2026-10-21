@@ -126,11 +126,11 @@ History from reachable peers is merged by operation ID/node/start time; it is a
 bounded observation history, not a complete audit log or consensus store.
 
 The private state file has an additive `history` field. Legacy state migrates
-without changing lease/execution/maintenance records. `ha-timeline.yml` updates
+without changing lease/execution/maintenance records. `playbooks/dashboard/ha-timeline.yml` updates
 only the existing controller when no operation is active, checks bounded history
 and protects Voice/DNS/VIP services and policy. On rollback it restores the old
 source and removes only the additive history field for legacy-reader compatibility.
-Apply `dashboard-ui.yml` afterward to update the page. Normal role provisioning
+Apply `playbooks/dashboard/dashboard-ui.yml` afterward to update the page. Normal role provisioning
 also installs the new controller and page. Authentication, confirmation,
 exclusive leases, drain deadlines and reboot execution remain unchanged.
 
@@ -138,11 +138,11 @@ exclusive leases, drain deadlines and reboot execution remain unchanged.
 
 ```sh
 ANSIBLE_LOCAL_TEMP=/private/tmp/desk-ui-ansible ANSIBLE_PIPELINING=1 \
-  ansible-playbook -i inventory.ini -u ops desk-dashboard.yml
+  ansible-playbook -i inventory.ini -u ops playbooks/dashboard/desk-dashboard.yml
 ```
 
 For page-only updates after the dashboard is installed, use
-`ansible-playbook -i inventory.ini dashboard-ui.yml`. It uses the installed
+`ansible-playbook -i inventory.ini playbooks/dashboard/dashboard-ui.yml`. It uses the installed
 public membership, retains each prior page, validates the existing proxy routes,
 and checks protected runtime/policy before and after each node. It does not
 build or restart the collector, node controller, DNS or voice services.

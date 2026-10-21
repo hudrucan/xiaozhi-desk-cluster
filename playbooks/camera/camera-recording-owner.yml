@@ -1,0 +1,237 @@
+---
+# First cutover: compatible workers, certified Core guard, then owner authority.
+# Rollback uses the reverse order: drain media, disable worker authority on all
+# nodes, then remove Core selection through another clean certified restart.
+- name: Require idle media and certified recovery before authority maintenance
+  hosts: deskboxes
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  vars:
+    recording_selected: "{{ desk_camera_recording_owner_workloads | default(['tapo_c222_163']) }}"
+  tasks:
+    - ansible.builtin.file:
+        path: /var/lib/desk-camera/commands
+        state: directory
+        mode: '0700'
+    - ansible.builtin.assert:
+        that:
+          - ansible_play_hosts_all | sort == ['deskb1x','deskb2x','deskb3x']
+          - recording_selected | difference(['tapo_c222_160','tapo_c222_163']) | length == 0
+          - recording_selected | unique | length == recording_selected | length
+    - name: Freeze unrelated production services
+      ansible.builtin.command:
+        argv: [python3, '-c', "{{ lookup('file',desk_repo_root+'/roles/desk_ui/files/ui_guard.py') }}", freeze]
+      register: recording_guard
+      changed_when: false
+      no_log: true
+    - name: Capture current Core status
+      ansible.builtin.uri:
+        url: 'http://{{ cluster_ip }}:20223/status'
+        use_proxy: false
+      register: recording_before
+    - name: Require synced voters and exactly one healthy Core
+      ansible.builtin.assert:
+        that:
+          - recording_before.json.sync == 'synced'
+          - recording_before.json.voter_ready
+          - not recording_before.json.ready or (recording_before.json.error == None and recording_before.json.pending_disk_changes == false)
+          - groups['deskboxes'] | map('extract',hostvars,'recording_before') | map(attribute='json') | selectattr('ready','equalto',true) | list | length == 1
+    - name: Require idle warm media workers
+      ansible.builtin.command:
+        argv:
+          - python3
+          - -c
+          - |
+            import socket,json
+            with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as s:
+                s.settimeout(3);s.connect('/run/desk-camera-thumbnails/worker.sock')
+                s.sendall(json.dumps({'action':'status','id':'0'*32}).encode()+bytes([10]))
+                v=json.loads(s.makefile('rb').readline())
+                assert v['ok'] and not v['value']['busy'] and not v['value']['media']['busy'], 'Media busy'
+      changed_when: false
+    - name: Prevent this forward rollout from revoking an already selected owner
+      ansible.builtin.command:
+        argv:
+          - python3
+          - -c
+          - |
+            import json,pathlib,sys
+            p=pathlib.Path('/etc/desk-camera/recording-policy/owner.json')
+            current=json.loads(p.read_bytes())['workloads'] if p.exists() else []
+            assert set(current)<=set(json.loads(sys.argv[1])), 'Use the reverse cutover for authority removal'
+          - '{{ recording_selected | to_json }}'
+      changed_when: false
+
+- name: Install compatible warm workers one node at a time
+  hosts: deskboxes
+  become: true
+  gather_facts: false
+  serial: 1
+  any_errors_fatal: true
+  tasks:
+    - ansible.builtin.file:
+        path: /etc/desk-camera/recording-policy
+        state: directory
+        mode: '0700'
+    - name: Seed inactive authority only when the policy does not exist
+      ansible.builtin.copy:
+        content: '{"version":1,"workloads":[]}'
+        dest: /etc/desk-camera/recording-policy/owner.json
+        mode: '0600'
+        force: false
+    - name: Install camera helpers with rollback copies
+      ansible.builtin.copy:
+        src: "{{ desk_repo_root }}/roles/desk_camera/files/{{ item }}"
+        dest: '/usr/local/libexec/desk-camera/{{ item }}'
+        mode: '0600'
+        backup: true
+        validate: /usr/bin/python3 -c "import ast,sys; ast.parse(open(sys.argv[1]).read())" %s
+      loop: [controller.py, transport.py, playback.py, playback_worker.py, thumbnail_fetch.py, thumbnail_worker.py, warm_playback.py, media_rpc.py, recording_contract.py, recording_jobs.py, recording_owner.py, media_delivery.py, observation_contract.py, observation_worker.py, command_contract.py, command_worker.py]
+      register: recording_sources
+    - name: Mount owner modules and the live policy directory in the warm runtime
+      ansible.builtin.copy:
+        src: "{{ desk_repo_root }}/roles/desk_camera/files/thumbnail.service"
+        dest: /etc/systemd/system/desk-camera-thumbnails.service
+        mode: '0644'
+        backup: true
+      register: recording_unit
+    - ansible.builtin.systemd_service:
+        name: desk-camera
+        state: restarted
+        daemon_reload: true
+      when: recording_sources.changed or recording_unit.changed
+    - name: Wait for camera voter and transport
+      ansible.builtin.uri:
+        url: 'http://{{ cluster_ip }}:20226/status'
+        use_proxy: false
+      register: recording_voter
+      until: recording_voter.json.voter_ready | default(false) and recording_voter.json.transport.connected | default(false)
+      retries: 35
+      delay: 2
+    - name: Wait for SDK preload without opening a camera session
+      ansible.builtin.command:
+        argv:
+          - python3
+          - -c
+          - |
+            import socket,json
+            with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as s:
+                s.settimeout(3);s.connect('/run/desk-camera-thumbnails/worker.sock')
+                s.sendall(json.dumps({'action':'status','id':'0'*32}).encode()+bytes([10]))
+                assert json.loads(s.makefile('rb').readline())['ok']
+      register: recording_preloaded
+      until: recording_preloaded.rc == 0
+      retries: 40
+      delay: 2
+      changed_when: false
+
+- name: Stage Core guard and owner metadata client on all recovery nodes
+  hosts: deskboxes
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  tasks:
+    - name: Stage Core selection without enabling workers yet
+      ansible.builtin.copy:
+        content: "{{ {'version':1,'workloads':desk_camera_recording_owner_workloads | default(['tapo_c222_163'])} | to_json }}"
+        dest: /etc/desk-camera/recording-core-policy.json
+        mode: '0600'
+        backup: true
+    - name: Stage changed HA bridge and component installer
+      ansible.builtin.copy:
+        src: "{{ desk_repo_root }}/roles/desk_homeassistant/files/{{ item }}"
+        dest: '/usr/local/libexec/desk-homeassistant/{{ item }}'
+        mode: '0700'
+        backup: true
+        validate: /usr/bin/python3 -c "import ast,sys; ast.parse(open(sys.argv[1]).read())" %s
+      loop: [ui_bridge.py, component_config.py, runtime.py, recording_bootstrap.py]
+    - name: Stage changed cluster-owned integration files
+      ansible.builtin.copy:
+        src: "{{ desk_repo_root }}/roles/desk_homeassistant/files/desk_cluster/{{ item }}"
+        dest: '/usr/local/libexec/desk-homeassistant/desk_cluster/{{ item }}'
+        mode: '0644'
+        backup: true
+        validate: /usr/bin/python3 -c "import ast,sys; ast.parse(open(sys.argv[1]).read())" %s
+      loop: [__init__.py, camera_recordings.py, recording_remote.py, observation_remote.py, command_remote.py, recording_model.py, recording_thumbnails.py]
+    - ansible.builtin.group_by:
+        key: "recording_{{ 'core' if recording_before.json.ready else 'standby' }}"
+
+- name: Load the new bridge on standby agents first
+  hosts: recording_standby
+  become: true
+  gather_facts: false
+  serial: 1
+  any_errors_fatal: true
+  tasks:
+    - ansible.builtin.systemd_service:
+        name: desk-homeassistant
+        state: restarted
+    - ansible.builtin.uri:
+        url: 'http://{{ cluster_ip }}:20223/status'
+        use_proxy: false
+      register: recording_standby_ready
+      until: recording_standby_ready.json.voter_ready | default(false) and recording_standby_ready.json.sync | default('') == 'synced'
+      retries: 35
+      delay: 2
+
+- name: Certify the guard and metadata client through a clean Core handoff
+  hosts: recording_core
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  tasks:
+    - ansible.builtin.command:
+        argv: [/opt/desk-homeassistant/bin/python, /usr/local/libexec/desk-homeassistant/agent.py, --action, handoff]
+    - ansible.builtin.systemd_service:
+        name: desk-homeassistant
+        state: restarted
+
+- name: Verify certified Core authority before arming owner allocation
+  hosts: deskboxes
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  tasks:
+    - name: Require one guarded Core, matching certified recovery and unique camera owners
+      ansible.builtin.command:
+        argv:
+          - python3
+          - -c
+          - |
+            import json,sys,urllib.request
+            o=urllib.request.build_opener(urllib.request.ProxyHandler({}))
+            def get(ip,port,path):return json.load(o.open('http://'+ip+':'+str(port)+path,timeout=3))
+            ips=['10.10.10.'+str(i) for i in (11,12,13)]
+            states=[get(ip,20223,'/status') for ip in ips]
+            assert sum(v['ready'] for v in states)==1
+            assert len({v['checkpoint_revision'] for v in states})==1
+            assert all(v['sync']=='synced' and v['voter_ready'] for v in states)
+            core=next((ip,v) for ip,v in zip(ips,states) if v['ready'])
+            assert core[1]['error'] is None and core[1]['pending_disk_changes'] is False
+            authority=get(core[0],18123,'/api/desk_cluster/ready')['recording_authority']
+            assert authority['guarded'] and authority['before_native_setup'] and set(authority['workloads'])==set(json.loads(sys.argv[1]))
+            cameras=[get(ip,20226,'/status') for ip in ips]
+            assert all(v['voter_ready'] and v['transport']['connected'] for v in cameras)
+            for w in ('tapo_c222_160','tapo_c222_161','tapo_c222_163'):
+                assert sum(c['local_ready'] for v in cameras for c in v['cameras'] if c['workload']==w)==1
+            print('Guard installed; certified recovery 3/3; unique camera owners: PASS')
+          - "{{ desk_camera_recording_owner_workloads | default(['tapo_c222_163']) | to_json }}"
+      run_once: true
+      register: recording_certified
+      until: recording_certified.rc == 0
+      retries: 90
+      delay: 3
+      changed_when: false
+    - name: Arm owner authority only after the certified Core guard is live
+      ansible.builtin.copy:
+        content: "{{ {'version':1,'workloads':desk_camera_recording_owner_workloads | default(['tapo_c222_163'])} | to_json }}"
+        dest: /etc/desk-camera/recording-policy/owner.json
+        mode: '0600'
+        backup: true
+    - name: Verify unrelated services and DNS policy remain unchanged
+      ansible.builtin.command:
+        argv: [python3, '-c', "{{ lookup('file',desk_repo_root+'/roles/desk_ui/files/ui_guard.py') }}", guard]
+        stdin: '{{ recording_guard.stdout }}'
+      changed_when: false
+      no_log: true

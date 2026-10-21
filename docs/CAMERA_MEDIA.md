@@ -199,7 +199,7 @@ of releasing authority to an older cold restore.
 
 ## Deployment and cleanup
 
-`camera-media.yml` maintains the prepared three-node media deployment and is never
+`playbooks/camera/camera-media.yml` maintains the prepared three-node media deployment and is never
 included in `site.yml`. It requires the existing ignored `secret/camera/` files.
 Use the original pinned Core image. Reuse those private files; do not regenerate
 keys for a running cluster. First activation uses `camera_config.py` only while
@@ -215,12 +215,12 @@ Keep these deployment boundaries:
 
 | Entrypoint | Scope and required order |
 | --- | --- |
-| `camera-media.yml` | Maintain the prepared worker deployment, with existing policy retained |
-| `camera-helpers.yml` | Controller-only refresh; insufficient for coordinated worker/Core changes |
-| `camera-recording-owner.yml` | Compatible workers, certified early Core guard, then owner authority; reverse cutover required for removal |
-| `camera-media-delivery.yml` | Idle media, controller support, ingress, then certified Core viewer client |
-| `camera-observations.yml` | Read-only worker validation before certified Core source switch |
-| `camera-commands.yml` | Compatible inactive workers, certified Core write guard, then explicit activation; ordered disable rollback |
+| `playbooks/camera/camera-media.yml` | Maintain the prepared worker deployment, with existing policy retained |
+| `playbooks/camera/camera-helpers.yml` | Controller-only refresh; insufficient for coordinated worker/Core changes |
+| `playbooks/camera/camera-recording-owner.yml` | Compatible workers, certified early Core guard, then owner authority; reverse cutover required for removal |
+| `playbooks/camera/camera-media-delivery.yml` | Idle media, controller support, ingress, then certified Core viewer client |
+| `playbooks/camera/camera-observations.yml` | Read-only worker validation before certified Core source switch |
+| `playbooks/camera/camera-commands.yml` | Compatible inactive workers, certified Core write guard, then explicit activation; ordered disable rollback |
 
 Close all viewers before controller maintenance, including cached-media viewers.
 Keep matching recovery copies and compatible adapters across all three nodes.

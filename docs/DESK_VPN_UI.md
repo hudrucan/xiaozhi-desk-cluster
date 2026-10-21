@@ -27,14 +27,14 @@ Server key, port, tunnel CIDRs, firewall and shell hooks remain cluster-managed.
 ```sh
 python3 scripts/build-vpn-ui.py --node /path/to/node --pnpm /path/to/pnpm
 python3 roles/desk_vpn_ui/files/seed.py --repo "$PWD" --upstream /private/tmp/desk-wg-easy-build --node /path/to/node
-ansible-playbook -i inventory.ini vpn-ui.yml
+ansible-playbook -i inventory.ini playbooks/vpn/vpn-ui.yml
 ```
 
 The build pins upstream commit `2dc8ba779216929c10c1998341d36963fe0eca7a`, applies the tracked patch and installs the frozen dependency lock. Node ARM64 archives use official SHA-256 checksums; native npm packages use registry integrity checks. The exact modified upstream source and license ship at `/opt/desk-vpn-ui/app/wg-easy-source.tar.gz`. The native build has no authentication bypass patch.
 
-Keep ignored `secret/vpn-ui/` and the existing ignored tunnel credentials backed up. Shared encryption/session identity must survive a rebuild. Journal state is under `/var/lib/desk-vpn-ui-sync/`; native SQLite is under `/var/lib/desk-vpn-ui/`. Foundation `vpn-ha.yml` retains UI-managed peers instead of restoring the original one-peer seed.
+Keep ignored `secret/vpn-ui/` and the existing ignored tunnel credentials backed up. Shared encryption/session identity must survive a rebuild. Journal state is under `/var/lib/desk-vpn-ui-sync/`; native SQLite is under `/var/lib/desk-vpn-ui/`. Foundation `playbooks/vpn/vpn-ha.yml` retains UI-managed peers instead of restoring the original one-peer seed.
 
-`vpn-ui.yml` preserves protected Xiaozhi/DNS runtime state and validates both HTTP and MQTT HAProxy fragments before a graceful reload. Other UI deployments retain the VPN route. CPU quotas cap native UI at 35% of one CPU and the adapter at 20%; the existing idle workers retain priority. Credential namespaces are excluded from dashboard and node-control metadata services.
+`playbooks/vpn/vpn-ui.yml` preserves protected Xiaozhi/DNS runtime state and validates both HTTP and MQTT HAProxy fragments before a graceful reload. Other UI deployments retain the VPN route. CPU quotas cap native UI at 35% of one CPU and the adapter at 20%; the existing idle workers retain priority. Credential namespaces are excluded from dashboard and node-control metadata services.
 
 Rolling upgrades stage the full hashed asset set on every replica before restarting any application. The adapter serves staged assets directly, retaining hashes used by existing browser sessions; UI affinity reduces cross-version requests. HAProxy retries failed reads on another replica, while Save/CRUD methods disable layer-seven retries to avoid duplicate mutations.
 

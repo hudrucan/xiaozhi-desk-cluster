@@ -6,6 +6,19 @@ Source revisions and Cloud/runtime configuration revisions are different values.
 Role defaults and explicit deployment vars are authoritative; private operator
 overrides are required to describe a particular installed voice deployment.
 
+## Playbook layout
+
+Run from the repository root with `-i inventory.ini`; Ansible loads the shared
+role search path from `ansible.cfg`. Xiaozhi entrypoints are grouped by scope:
+
+| Folder | Scope |
+| --- | --- |
+| `playbooks/xiaozhi/core/` | Core deployment and TTS core activation |
+| `playbooks/xiaozhi/workers/` | LLM, ASR, TTS workers and explicit LLM verification |
+| `playbooks/xiaozhi/mqtt/` | Gateways, MQTT ingress and firmware bootstrap |
+| `playbooks/xiaozhi/settings/` | Shared key provisioning and Soundbank authoring |
+| `playbooks/xiaozhi/source/` | Coordinated source updates preserving runtime bundles |
+
 ## Foundation and configuration
 
 `site.yml` installs NATS, `xiaozhi-worker`, `xiaozhi-control-plane` and ingress.
@@ -38,7 +51,7 @@ HTTP health alone does not prove Cloud access. See [OAuth recovery](CLOUD_OAUTH.
 
 ## Ingress and MQTT
 
-`ingress.yml` reads one agreed desired VIP/revision from all control planes,
+`playbooks/ui/ingress.yml` reads one agreed desired VIP/revision from all control planes,
 freezes it before mutation and checks it again during serial apply. The interface
 comes from the inventory management address. HAProxy serves the VIP; unicast
 Keepalived VRID 51 uses `nopreempt`. Backend health needs at least one usable
@@ -52,11 +65,11 @@ before VIP activation. Owner-only GARP and peer ARP announcements support moving
 addresses; adapter/MAC replacement requires fresh ingress preflight.
 
 ```sh
-ansible-playbook -i inventory.ini ingress.yml
-ansible-playbook -i inventory.ini verify-ingress.yml
+ansible-playbook -i inventory.ini playbooks/ui/ingress.yml
+ansible-playbook -i inventory.ini playbooks/ui/verify-ingress.yml
 ```
 
-`verify-ingress-failover.yml` is an explicit interruption exercise: it stops the
+`playbooks/ui/verify-ingress-failover.yml` is an explicit interruption exercise: it stops the
 current owner's election service, checks a new unique owner and restores the
 old service in `always`. It is never part of routine apply. If the controller is
 lost, restore `keepalived` on the original owner before repeating.
@@ -67,20 +80,20 @@ remote gateways and uses its local gateway as backup. This applies to new TCP
 connections; established sessions stay attached until disconnect/failure.
 Marked-down backends close old TCP sessions so firmware can reconnect.
 
-Use `mqtt-gateway.yml` then `mqtt-ingress.yml`. Gateway configuration supports
+Use `playbooks/xiaozhi/mqtt/mqtt-gateway.yml` then `playbooks/xiaozhi/mqtt/mqtt-ingress.yml`. Gateway configuration supports
 explicit external `chat_servers` or `xiaozhi_mqtt_gateway_cluster_core: true`,
 which derives the symmetric core endpoints. The empty external default rejects
 an unconfigured apply. Start from [gateway vars](../examples/mqtt-gateway.vars.yml)
 and supply matching Vault `vault_mqtt_signature_key` / `vault_mqtt_server_secret`.
 The latter must match the core auth key. Secrets are never public vars.
 
-`core.yml` deploys the isolated private `:8000` core serially. At each new hello,
+`playbooks/xiaozhi/core/core.yml` deploys the isolated private `:8000` core serially. At each new hello,
 the gateway prefers a remote core away from the observed UI VIP, then a remote
 VIP owner, then local fallback. Conflicting VIP observations block admission.
 Established conversations are not migrated or replayed after core/gateway loss.
 Transport-only readiness does not imply provider readiness.
 
-`mqtt-bootstrap.yml` opts control planes into `/xiaozhi/ota/`, issuing signed
+`playbooks/xiaozhi/mqtt/mqtt-bootstrap.yml` opts control planes into `/xiaozhi/ota/`, issuing signed
 MQTT credentials for the applied VIP. Retain
 `xiaozhi_control_plane_mqtt_bootstrap: true` in deployment vars. It does not serve
 firmware updates or Vision. A robot needs bootstrap, MQTT hello and UDP audio to
@@ -91,10 +104,10 @@ LAN MQTT and Settings HTTP use the trusted network boundary, without public TLS.
 
 | Entrypoint | Required configuration and behavior |
 | --- | --- |
-| `worker-llm.yml` | Explicit text provider, matching validated Cloud revision and local key; uses `examples/worker-llm.vars.yml` |
-| `worker-asr.yml` | Combined ASR/LLM worker, explicit source SHA, existing VAD path/checksum and ASR assets; no model download |
-| `worker-tts.yml` | Combined voice worker, frozen controller TTS bundle and verified model/tokens/phonemes; see `examples/worker-tts.vars.yml` |
-| `core-tts.yml` | Separate core audio activation after matching worker readiness and synthesis acceptance |
+| `playbooks/xiaozhi/workers/worker-llm.yml` | Explicit text provider, matching validated Cloud revision and local key; uses `examples/worker-llm.vars.yml` |
+| `playbooks/xiaozhi/workers/worker-asr.yml` | Combined ASR/LLM worker, explicit source SHA, existing VAD path/checksum and ASR assets; no model download |
+| `playbooks/xiaozhi/workers/worker-tts.yml` | Combined voice worker, frozen controller TTS bundle and verified model/tokens/phonemes; see `examples/worker-tts.vars.yml` |
+| `playbooks/xiaozhi/core/core-tts.yml` | Separate core audio activation after matching worker readiness and synthesis acceptance |
 
 Keep reviewed immutable source SHAs in the corresponding revision variables.
 ASR export reads selected ASR/VAD only. Local Sherpa assets must exist; provider,
@@ -116,14 +129,14 @@ play through that pipeline without consuming a synthesis slot; a corrupt matched
 recording fails explicitly. Model/dependency installation remains separate from
 Cloud runtime Apply.
 
-`verify-worker-llm.yml` sends real provider requests and can consume quota; it is
+`playbooks/xiaozhi/workers/verify-worker-llm.yml` sends real provider requests and can consume quota; it is
 not an offline check. Use matching example/local vars and Vault files for
 playbook syntax or check mode. Check mode can read Cloud state but does not export
 secrets, install models or activate services.
 
 ## Shared Settings operations
 
-`settings-secrets.yml` enables all-node provider key provisioning. Keep
+`playbooks/xiaozhi/settings/settings-secrets.yml` enables all-node provider key provisioning. Keep
 `xiaozhi_control_plane_secret_provisioning: true` and a common encrypted
 `vault_xiaozhi_secret_provision_key` (64 hex characters). **Save key on all 3 nodes**
 is separate from ordinary Config Save: every node durably stores the new immutable
@@ -150,7 +163,7 @@ Memory CRUD uses one shared Cloud Memory authority, CAS publication, NATS hints
 and periodic refresh. Runtime activation is needed to enable `manage_memory`;
 later CRUD needs no restart. Soundbank authoring at `/xiaozhi/#soundbank` uses
 existing TTS workers for draft generation, Save for Cloud entries/audio, then
-Apply runtime for active voice. `soundbank-authoring.yml` updates only control
+Apply runtime for active voice. `playbooks/xiaozhi/settings/soundbank-authoring.yml` updates only control
 planes on an existing compatible deployment.
 
 Compatible voice source supports firmware device MCP tools, session-bound Vision
@@ -168,13 +181,13 @@ Server contracts live in the server repository under `docs/cluster-device-mcp.md
 
 ## Source updates and recovery
 
-`vision-source.yml -e xiaozhi_vision_revision=<reviewed-pushed-server-SHA>` stages
+`playbooks/xiaozhi/source/vision-source.yml -e xiaozhi_vision_revision=<reviewed-pushed-server-SHA>` stages
 Git worktrees, verifies unchanged requirements and preserves installed runtime
 bundles/environment digests and Cloud revision. Workers activate first, control
 planes next, cores last, serially with readiness and per-node rollback. Existing
 data roots are exposed through read-only namespace mounts; no model copy occurs.
 
-`maintenance-source.yml` requires explicit immutable server/gateway SHAs and idle
+`playbooks/xiaozhi/source/maintenance-source.yml` requires explicit immutable server/gateway SHAs and idle
 worker/core/gateway admission. It preserves bundles and credentials while
 installing compatible maintenance source. See [maintenance](CLUSTER_EXPERIENCE.md)
 for DNS gates and controller deployment order. These entrypoints are source
@@ -190,7 +203,7 @@ from service readiness.
 
 ## FD6551 node panel
 
-`panel.yml` is opt-in and requires the pinned image driver and existing panel
+`playbooks/panel/panel.yml` is opt-in and requires the pinned image driver and existing panel
 units. It replaces their entrypoints through drop-ins, retaining one continuous
 writer. Node numbers come from host vars, never election preference.
 

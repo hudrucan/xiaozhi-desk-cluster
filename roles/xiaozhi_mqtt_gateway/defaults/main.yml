@@ -3,7 +3,7 @@ xiaozhi_mqtt_gateway_repo_url: https://github.com/hudrucan/xiaozhi-desk-mqtt-gat
 # Reviewed MCP release forwards session Vision initialization to firmware.
 xiaozhi_mqtt_gateway_revision: 33a7b0394e9acccbd4691834eae149ded99b2e28
 xiaozhi_mqtt_gateway_chat_servers: []
-# Opt in after deploying core.yml with a reviewed new server/gateway release.
+# Opt in after deploying playbooks/xiaozhi/core/core.yml with a reviewed new server/gateway release.
 xiaozhi_mqtt_gateway_cluster_core: false
 xiaozhi_mqtt_gateway_root: /opt/xiaozhi-mqtt-gateway
 xiaozhi_mqtt_gateway_repo_dir: "{{ xiaozhi_mqtt_gateway_root }}/releases/{{ xiaozhi_mqtt_gateway_revision }}"

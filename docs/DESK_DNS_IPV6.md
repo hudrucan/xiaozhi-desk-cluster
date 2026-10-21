@@ -17,7 +17,7 @@ The inventory enables `desk_dns_ipv6_vip_enabled: true`; the role default remain
 false. For an existing real-client DNS deployment:
 
 ```bash
-ansible-playbook -i inventory.ini dns-ipv6.yml
+ansible-playbook -i inventory.ini playbooks/dns/dns-ipv6.yml
 ```
 
 The playbook freezes the current election, interface, DNS VIP service states and

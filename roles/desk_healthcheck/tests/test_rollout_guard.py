@@ -40,7 +40,7 @@ class RolloutTests(unittest.TestCase):
             guard.candidate(before, after)
 
     def test_yaml_and_python_sources_are_valid(self):
-        for path in [ROOT / 'healthchecks.yml', *ROOT.joinpath('roles/desk_healthcheck').rglob('*.yml')]:
+        for path in [ROOT / 'playbooks/cluster/healthchecks.yml', *ROOT.joinpath('roles/desk_healthcheck').rglob('*.yml')]:
             yaml.safe_load(path.read_text())
         ast.parse(ROOT.joinpath('roles/desk_healthcheck/files/rollout_guard.py').read_text())
 

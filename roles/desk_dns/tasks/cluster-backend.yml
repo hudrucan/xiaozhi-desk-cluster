@@ -12,7 +12,7 @@
         mode: '0750'
     - name: Install pinned internal TLS trust and key
       ansible.builtin.copy:
-        src: "{{ playbook_dir }}/secret/desk-dns-backend.{{ item }}"
+        src: "{{ desk_repo_root }}/secret/desk-dns-backend.{{ item }}"
         dest: "/etc/desk-dns/backend/peer.{{ item }}"
         owner: root
         group: desk-dnsdist

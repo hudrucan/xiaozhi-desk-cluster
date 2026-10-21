@@ -27,7 +27,7 @@ Original client addresses pass over private TLS DoH with trusted forwarding
 headers. Hostnames are retained when known; the original IP remains available
 for AdGuard's native display. Local logs/caches are still stored per backend.
 
-Run `ansible-playbook -i inventory.ini ui.yml` explicitly; it is not part of
+Run `ansible-playbook -i inventory.ini playbooks/ui/ui.yml` explicitly; it is not part of
 `site.yml`. The play freezes process/configuration state and live DNS policy,
 quiesces policy pulls, changes each node serially, and restores reconciliation.
 Failure cleanup restores periodic pulls on reachable nodes. AdGuard validates a
@@ -55,6 +55,6 @@ paths stay compatible. HAProxy maps the public UI path to the installed native
 Settings handler, preserving /xiaozhi/ota/ for firmware bootstrap. This change
 requires only a validated graceful HAProxy reload, not a Xiaozhi runtime restart.
 
-ui-routes.yml updates an already unified installation serially, validates the
+playbooks/ui/ui-routes.yml updates an already unified installation serially, validates the
 combined HTTP/MQTT candidate and verifies protected processes/configuration and
 the native bootstrap response.

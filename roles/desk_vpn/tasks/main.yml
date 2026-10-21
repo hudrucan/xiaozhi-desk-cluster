@@ -13,14 +13,14 @@
   changed_when: false
 - name: Freeze protected existing services and policies
   ansible.builtin.command:
-    argv: [/usr/bin/python3, '-c', "{{ lookup('ansible.builtin.file', 'roles/desk_ui/files/ui_guard.py') }}", freeze]
+    argv: [/usr/bin/python3, '-c', "{{ lookup('ansible.builtin.file', desk_repo_root + '/roles/desk_ui/files/ui_guard.py') }}", freeze]
   register: vpn_protected_before
   changed_when: false
   no_log: true
 - name: Load common ignored credentials and persisted randomized election
   ansible.builtin.set_fact:
-    desk_vpn_credentials: "{{ lookup('ansible.builtin.file', 'secret/vpn-trial/credentials.json') | from_json }}"
-    desk_vpn_election: "{{ lookup('ansible.builtin.file', 'secret/vpn-ha-election.json') | from_json }}"
+    desk_vpn_credentials: "{{ lookup('ansible.builtin.file', desk_repo_root + '/secret/vpn-trial/credentials.json') | from_json }}"
+    desk_vpn_election: "{{ lookup('ansible.builtin.file', desk_repo_root + '/secret/vpn-ha-election.json') | from_json }}"
   no_log: true
 - name: Validate equal membership and election ranks
   ansible.builtin.assert:
@@ -131,7 +131,7 @@
   changed_when: false
 - name: Verify protected voice DNS VIP and policy remained unchanged
   ansible.builtin.command:
-    argv: [/usr/bin/python3, '-c', "{{ lookup('ansible.builtin.file', 'roles/desk_ui/files/ui_guard.py') }}", guard]
+    argv: [/usr/bin/python3, '-c', "{{ lookup('ansible.builtin.file', desk_repo_root + '/roles/desk_ui/files/ui_guard.py') }}", guard]
     stdin: "{{ vpn_protected_before.stdout }}"
   changed_when: false
 - name: Enable only the independent VPN election after all candidates pass

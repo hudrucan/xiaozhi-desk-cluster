@@ -1,0 +1,173 @@
+---
+# On-demand CPU profiling of the Python control-plane processes with py-spy.
+# Nothing here restarts or reconfigures a service. py-spy runs with --nonblocking so
+# sampled processes (notably the lease/fencing loops) are never paused, at a low sample
+# rate and nice 19. The binary lives only in /opt/desk-diagnostics and can be removed.
+#
+#   ansible-playbook -i inventory.ini playbooks/diagnostics/diagnostics-profile.yml                      # install if missing, profile all nodes
+#   ansible-playbook -i inventory.ini playbooks/diagnostics/diagnostics-profile.yml -e diag_limit=deskb1x
+#   ansible-playbook -i inventory.ini playbooks/diagnostics/diagnostics-profile.yml -e diag_duration=60 -e diag_rate=100
+#   ansible-playbook -i inventory.ini playbooks/diagnostics/diagnostics-profile.yml -e diag_action=install
+#   ansible-playbook -i inventory.ini playbooks/diagnostics/diagnostics-profile.yml -e diag_action=remove
+#
+# Raw collapsed stacks are fetched to diag_out (default /tmp/desk-diagnostics) and summarised by
+# scripts/profile-summary.py. Percentages are the share of wall time a process had an *active*
+# Python thread, i.e. roughly its single-thread CPU use; idle threads are excluded.
+- name: Fetch the pinned py-spy wheel once
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    diag_action: profile
+    diag_cache: /tmp/desk-diagnostics-cache
+  tasks:
+    - name: Create wheel cache directory
+      ansible.builtin.file:
+        path: '{{ diag_cache }}'
+        state: directory
+        mode: '0700'
+      when: diag_action in ['profile', 'install']
+
+    - name: Download py-spy wheel (sha256 pinned)
+      ansible.builtin.get_url:
+        url: 'https://files.pythonhosted.org/packages/89/23/3eb4c23c684ebd667674ce1d076ae855e0621d1d9bd5e052aa3f7982f757/py_spy-0.4.2-py2.py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.whl'
+        dest: '{{ diag_cache }}/py_spy-0.4.2-aarch64.whl'
+        checksum: 'sha256:142887e984a4e541071c99a4401ff8c3770f255d329dbd0f64e8c1dd51882cce'
+        mode: '0600'
+      when: diag_action in ['profile', 'install']
+
+- name: Profile the control-plane processes, one node at a time
+  hosts: "{{ diag_limit | default('deskboxes') }}"
+  become: true
+  gather_facts: false
+  serial: 1
+  vars:
+    diag_action: profile
+    diag_dir: /opt/desk-diagnostics
+    diag_cache: /tmp/desk-diagnostics-cache
+    diag_out: /tmp/desk-diagnostics
+    diag_duration: 30
+    diag_rate: 50
+    diag_version: 0.4.2
+    diag_units:
+      network-controller: desk-network.service
+      camera-controller: desk-camera.service
+      ha-agent: desk-homeassistant.service
+      front-panel: deskbox-front-panel.service
+    diag_patterns:
+      netalertx-warm: 'desk_network/warm_runtime.py'
+  tasks:
+    - name: Remove py-spy and collected profiles
+      ansible.builtin.file:
+        path: '{{ diag_dir }}'
+        state: absent
+      when: diag_action == 'remove'
+
+    - name: Create diagnostics directory
+      ansible.builtin.file:
+        path: '{{ diag_dir }}'
+        state: directory
+        mode: '0750'
+      when: diag_action in ['profile', 'install']
+
+    - name: Install py-spy binary from the wheel
+      ansible.builtin.copy:
+        src: '{{ diag_cache }}/py_spy-0.4.2-aarch64.whl'
+        dest: '{{ diag_dir }}/py_spy.whl'
+        mode: '0600'
+      register: diag_wheel
+      when: diag_action in ['profile', 'install']
+
+    - name: Extract py-spy
+      ansible.builtin.command:
+        argv:
+          - python3
+          - -c
+          - |
+            import zipfile,sys
+            with zipfile.ZipFile(sys.argv[1]) as z:
+                name=[n for n in z.namelist() if n.endswith('.data/scripts/py-spy')][0]
+                open(sys.argv[2],'wb').write(z.read(name))
+          - '{{ diag_dir }}/py_spy.whl'
+          - '{{ diag_dir }}/py-spy'
+      when: diag_action in ['profile', 'install']
+      changed_when: diag_wheel.changed
+
+    - name: Make py-spy executable by root only
+      ansible.builtin.file:
+        path: '{{ diag_dir }}/py-spy'
+        mode: '0750'
+      when: diag_action in ['profile', 'install']
+
+    - name: Verify py-spy version
+      ansible.builtin.command:
+        argv: ['{{ diag_dir }}/py-spy', '--version']
+      register: diag_version_out
+      changed_when: false
+      failed_when: diag_version not in diag_version_out.stdout
+      when: diag_action in ['profile', 'install']
+
+    - name: Sample the processes in parallel
+      ansible.builtin.shell: |
+        set -u
+        OUT='{{ diag_dir }}/out/{{ inventory_hostname }}'
+        rm -rf "$OUT"; mkdir -p "$OUT"
+        run() { nice -n 19 '{{ diag_dir }}/py-spy' record --nonblocking --rate {{ diag_rate }} \
+          --duration {{ diag_duration }} --format raw --output "$OUT/$1-$2.txt" --pid "$2" >"$OUT/$1-$2.log" 2>&1 & }
+        {% for name, unit in diag_units.items() %}
+        pid=$(systemctl show -p MainPID --value {{ unit }}); [ "${pid:-0}" -gt 0 ] && run {{ name }} "$pid"
+        {% endfor %}
+        {% for name, pattern in diag_patterns.items() %}
+        for pid in $(pgrep -f '{{ pattern }}'); do run {{ name }} "$pid"; done
+        {% endfor %}
+        wait
+        ls "$OUT"
+      args:
+        executable: /bin/bash
+      register: diag_run
+      changed_when: false
+      when: diag_action == 'profile'
+
+    - name: List collected raw profiles
+      ansible.builtin.find:
+        paths: '{{ diag_dir }}/out/{{ inventory_hostname }}'
+        patterns: '*.txt'
+      register: diag_files
+      when: diag_action == 'profile'
+
+    - name: Fetch raw profiles
+      ansible.builtin.fetch:
+        src: '{{ item.path }}'
+        dest: '{{ diag_out }}/{{ inventory_hostname }}/'
+        flat: true
+      loop: '{{ diag_files.files }}'
+      loop_control:
+        label: '{{ item.path | basename }}'
+      when: diag_action == 'profile'
+
+- name: Summarise the collected profiles
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    diag_action: profile
+    diag_out: /tmp/desk-diagnostics
+    diag_duration: 30
+    diag_rate: 50
+  tasks:
+    - name: Print top functions per process
+      ansible.builtin.command:
+        argv:
+          - python3
+          - '{{ desk_repo_root }}/scripts/profile-summary.py'
+          - '{{ diag_out }}'
+          - '{{ diag_duration }}'
+          - '{{ diag_rate }}'
+      register: diag_summary
+      changed_when: false
+      when: diag_action == 'profile'
+
+    - name: Show summary
+      ansible.builtin.debug:
+        msg: '{{ diag_summary.stdout_lines }}'
+      when: diag_action == 'profile'

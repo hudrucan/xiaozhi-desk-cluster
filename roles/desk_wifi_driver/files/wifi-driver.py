@@ -91,7 +91,7 @@ def inspect(management):
 def verify(management):
     result = inspect(management)
     require(result['override_sha256'] == MODULE_SHA and result['selected_override'] and result['runtime_ready'],
-            'Fixed WLAN module must be selected AND running before VIP activation; run wifi-driver.yml and activate with a controlled reboot')
+            'Fixed WLAN module must be selected AND running before VIP activation; run playbooks/cluster/wifi-driver.yml and activate with a controlled reboot')
     return result
 
 

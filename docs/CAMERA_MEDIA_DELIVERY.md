@@ -60,7 +60,7 @@ recording list may also need the camera's shared SDK admission to become idle.
 
 ## Deployment and rollback
 
-Use `camera-media-delivery.yml` after the certified owner-only recording cutover.
+Use `playbooks/camera/camera-media-delivery.yml` after the certified owner-only recording cutover.
 It requires idle SDK workers, matching worker/Core authority and synced recovery 3/3.
 It installs controller/helper files one node at a time, waiting for the voter and
 warm runtime before continuing. It then validates and reloads the combined

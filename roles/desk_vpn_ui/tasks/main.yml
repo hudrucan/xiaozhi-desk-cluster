@@ -7,13 +7,13 @@
       - not (desk_vpn_ui_simulate | bool and desk_vpn_ui_publish | bool)
 - name: Read protected runtime state
   ansible.builtin.command:
-    argv: [/usr/bin/python3, '-c', "{{ lookup('ansible.builtin.file','roles/desk_ui/files/ui_guard.py') }}", freeze]
+    argv: [/usr/bin/python3, '-c', "{{ lookup('ansible.builtin.file',desk_repo_root + '/roles/desk_ui/files/ui_guard.py') }}", freeze]
   changed_when: false
   no_log: true
   register: vpn_ui_before
 - name: Load ignored shared identity and package checksums
   ansible.builtin.set_fact:
-    vpn_ui_credentials: "{{ lookup('ansible.builtin.file','secret/vpn-ui/credentials.json') | from_json }}"
+    vpn_ui_credentials: "{{ lookup('ansible.builtin.file',desk_repo_root + '/secret/vpn-ui/credentials.json') | from_json }}"
     vpn_ui_checksums: "{{ lookup('ansible.builtin.file',desk_vpn_ui_package+'/checksums.json') | from_json }}"
   no_log: true
 - name: Verify crypto in existing private package directory
@@ -62,7 +62,7 @@
   when: vpn_ui_packages.changed
 - name: Install unchanged native seed only on first deployment
   ansible.builtin.copy:
-    src: secret/vpn-ui/seed.db
+    src: "{{ desk_repo_root }}/secret/vpn-ui/seed.db"
     dest: /var/lib/desk-vpn-ui/wg-easy.db
     owner: desk-vpn-ui
     group: desk-vpn-ui
@@ -71,7 +71,7 @@
   no_log: true
 - name: Install fixed logical seed and encrypted peer credentials
   ansible.builtin.copy:
-    src: "secret/vpn-ui/{{ item }}"
+    src: "{{ desk_repo_root }}/secret/vpn-ui/{{ item }}"
     dest: "/etc/desk-vpn-ui/{{ item }}"
     mode: '0600'
   loop: [seed.json, tls.crt, tls.key]
@@ -102,7 +102,7 @@
   register: vpn_ui_units
 - name: Build current bounded VPN readiness helper on controller
   ansible.builtin.command:
-    argv: [go, build, -trimpath, -ldflags, '-s -w -buildid=', -o, /private/tmp/desk-vpn-ui-probe-arm64, "{{ playbook_dir }}/roles/desk_vpn/files/probe.go"]
+    argv: [go, build, -trimpath, -ldflags, '-s -w -buildid=', -o, /private/tmp/desk-vpn-ui-probe-arm64, "{{ desk_repo_root }}/roles/desk_vpn/files/probe.go"]
   environment:
     GOOS: linux
     GOARCH: arm64
@@ -144,7 +144,7 @@
   block:
     - name: Install complete proxy composer with VPN retention
       ansible.builtin.copy:
-        src: roles/desk_monitoring/files/install_proxy.py
+        src: "{{ desk_repo_root }}/roles/desk_monitoring/files/install_proxy.py"
         dest: /usr/local/libexec/desk-monitoring/install-proxy.py
         mode: '0755'
     - name: Render independent UI HA backend
@@ -180,6 +180,6 @@
   when: vpn_ui_isolation.changed
 - name: Verify protected services DNS policies and VIPs
   ansible.builtin.command:
-    argv: [/usr/bin/python3, '-c', "{{ lookup('ansible.builtin.file','roles/desk_ui/files/ui_guard.py') }}", guard]
+    argv: [/usr/bin/python3, '-c', "{{ lookup('ansible.builtin.file',desk_repo_root + '/roles/desk_ui/files/ui_guard.py') }}", guard]
     stdin: "{{ vpn_ui_before.stdout }}"
   changed_when: false

@@ -1,7 +1,7 @@
 # Owner recording API
 
 The current implementation selects Bed `.160` and Guess `.163` through the
-coordinated `camera-recording-owner.yml` cutover. This contract covers the installed
+coordinated `playbooks/camera/camera-recording-owner.yml` cutover. This contract covers the installed
 SDK backend, signed RPC and Core renderer. See [current camera capabilities](CAMERA_MEDIA.md)
 for the separate observation, command and browser delivery boundaries.
 
@@ -188,7 +188,7 @@ selected periodic status reads use
 [separate contract](CAMERA_COMMANDS.md). Native media sync, thumbnail preload/cache,
 sound detection and time sync must remain disabled.
 
-Rollout order is enforced by `camera-recording-owner.yml`:
+Rollout order is enforced by `playbooks/camera/camera-recording-owner.yml`:
 
 1. Require idle media, healthy quorum and certified recovery on all nodes; freeze
    unrelated services. Install compatible workers with initially empty authority.

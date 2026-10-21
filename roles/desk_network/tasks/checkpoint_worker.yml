@@ -6,7 +6,7 @@
     mode: '0700'
 - name: Install the matched ARM64 worker and policy bridge
   ansible.builtin.copy:
-    src: '{{ playbook_dir }}/tools/desk-checkpoint/{{ item.src }}'
+    src: '{{ desk_repo_root }}/tools/desk-checkpoint/{{ item.src }}'
     dest: '/usr/local/libexec/desk-network/rust/{{ item.name }}'
     mode: '{{ item.mode }}'
   loop:

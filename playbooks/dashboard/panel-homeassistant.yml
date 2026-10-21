@@ -1,0 +1,71 @@
+---
+- name: Extend only the cached panel projection with Home Assistant metadata
+  hosts: deskboxes
+  become: true
+  gather_facts: false
+  serial: 1
+  any_errors_fatal: true
+  tasks:
+    - name: Freeze protected voice, DNS and VIP state
+      ansible.builtin.command:
+        argv: [/usr/bin/python3, '-c', "{{ lookup('ansible.builtin.file', desk_repo_root + '/roles/desk_ui/files/ui_guard.py') }}", freeze]
+      register: panel_homeassistant_before
+      changed_when: false
+      no_log: true
+    - name: Record the existing Network and Home Assistant controllers without touching it
+      ansible.builtin.command:
+        argv: [systemctl, show, desk-network, desk-homeassistant, desk-homeassistant-core, '-p', MainPID, '-p', ActiveState, '-p', NRestarts]
+      register: panel_homeassistant_controller_before
+      changed_when: false
+    - name: Build the cached dashboard collector
+      ansible.builtin.import_tasks: ../../roles/desk_dashboard/tasks/build.yml
+    - name: Deploy only the collector with rollback on failure
+      block:
+        - name: Back up and install the collector binary
+          ansible.builtin.copy:
+            src: '{{ dashboard_artifact }}'
+            dest: /usr/local/libexec/desk-dashboard
+            mode: '0755'
+            backup: true
+          register: panel_homeassistant_binary
+        - name: Refresh only the dashboard collector
+          ansible.builtin.systemd_service:
+            name: desk-dashboard
+            state: "{{ 'restarted' if panel_homeassistant_binary.changed else 'started' }}"
+        - name: Require the extended cached projection
+          ansible.builtin.uri:
+            url: 'http://{{ cluster_ip }}:8010/api/cluster/panel'
+            use_proxy: false
+            timeout: 5
+          register: panel_homeassistant_ready
+          until: panel_homeassistant_ready.status == 200 and panel_homeassistant_ready.json.owners.homeassistant is defined and panel_homeassistant_ready.json.nodes | selectattr("homeassistant","defined") | list | length == 3
+          retries: 12
+          delay: 2
+          changed_when: false
+        - name: Verify protected services and configuration stayed unchanged
+          ansible.builtin.command:
+            argv: [/usr/bin/python3, '-c', "{{ lookup('ansible.builtin.file', desk_repo_root + '/roles/desk_ui/files/ui_guard.py') }}", guard]
+            stdin: '{{ panel_homeassistant_before.stdout }}'
+          changed_when: false
+        - name: Read the Network and Home Assistant controllers after the collector refresh
+          ansible.builtin.command:
+            argv: [systemctl, show, desk-network, desk-homeassistant, desk-homeassistant-core, '-p', MainPID, '-p', ActiveState, '-p', NRestarts]
+          register: panel_homeassistant_controller_after
+          changed_when: false
+        - name: Require the existing Network and Home Assistant controllers to remain untouched
+          ansible.builtin.assert:
+            that: panel_homeassistant_controller_before.stdout == panel_homeassistant_controller_after.stdout
+      rescue:
+        - name: Restore the collector backup when installation changed it
+          ansible.builtin.copy:
+            src: '{{ panel_homeassistant_binary.backup_file }}'
+            dest: /usr/local/libexec/desk-dashboard
+            remote_src: true
+            mode: '0755'
+          when: panel_homeassistant_binary.backup_file is defined
+        - name: Resume the restored collector
+          ansible.builtin.systemd_service:
+            name: desk-dashboard
+            state: restarted
+        - ansible.builtin.fail:
+            msg: Panel Home Assistant projection rollout failed; collector backup restored when available.

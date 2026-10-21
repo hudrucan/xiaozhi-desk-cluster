@@ -1,7 +1,7 @@
 ---
 - name: Require pre-created ignored scan credentials
   ansible.builtin.set_fact:
-    network_scan_secret: "{{ lookup('file',playbook_dir+'/secret/network/scan-nats.json') | from_json }}"
+    network_scan_secret: "{{ lookup('file',desk_repo_root+'/secret/network/scan-nats.json') | from_json }}"
   no_log: true
 - name: Install Python isolated runtime support
   ansible.builtin.apt:
@@ -25,7 +25,7 @@
     mode: '0700'
 - name: Install bounded scan helpers
   ansible.builtin.copy:
-    src: '{{ playbook_dir }}/roles/desk_network/files/{{ item }}'
+    src: '{{ desk_repo_root }}/roles/desk_network/files/{{ item }}'
     dest: '/usr/local/libexec/desk-network/{{ item }}'
     mode: '0755'
     validate: /usr/bin/python3 -c "import ast,sys; ast.parse(open(sys.argv[1]).read())" %s
@@ -33,7 +33,7 @@
   register: scan_helpers
 - name: Install hash-pinned Python requirements
   ansible.builtin.copy:
-    src: '{{ playbook_dir }}/roles/desk_network/files/scan-requirements.txt'
+    src: '{{ desk_repo_root }}/roles/desk_network/files/scan-requirements.txt'
     dest: /usr/local/libexec/desk-network/scan-requirements.txt
     mode: '0644'
 - name: Install hash-verified packages in dedicated worker venv
@@ -64,7 +64,7 @@
   no_log: true
 - name: Install resource-bounded scan worker service
   ansible.builtin.template:
-    src: '{{ playbook_dir }}/roles/desk_network/templates/desk-network-scan.service.j2'
+    src: '{{ desk_repo_root }}/roles/desk_network/templates/desk-network-scan.service.j2'
     dest: /etc/systemd/system/desk-network-scan.service
     mode: '0644'
   register: scan_unit

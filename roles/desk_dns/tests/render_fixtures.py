@@ -8,7 +8,7 @@ from jinja2 import Environment, StrictUndefined, FileSystemLoader
 root=Path(__file__).resolve().parents[3]
 role=root/'roles/desk_dns'
 defaults=yaml.safe_load((role/'defaults/main.yml').read_text())
-yamls=[root/'dns.yml', root/'verify-dns.yml', root/'dns-sync.yml', root/'dns-cluster.yml', root/'dns-ipv6.yml', root/'dns-resources.yml', root/'dns-resilience.yml', *role.rglob('*.yml')]
+yamls=[root/'playbooks/dns/dns.yml', root/'playbooks/dns/verify-dns.yml', root/'playbooks/dns/dns-sync.yml', root/'playbooks/dns/dns-cluster.yml', root/'playbooks/dns/dns-ipv6.yml', root/'playbooks/dns/dns-resources.yml', root/'playbooks/dns/dns-resilience.yml', *role.rglob('*.yml')]
 for path in yamls:
     yaml.safe_load(path.read_text())
 pyfiles=list(role.rglob('*.py'))

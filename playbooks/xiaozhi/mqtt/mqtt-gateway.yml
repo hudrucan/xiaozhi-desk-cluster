@@ -1,0 +1,32 @@
+---
+# Opt-in symmetric transport deployment; intentionally not imported by site.yml.
+- name: Validate all gateway inputs before changing any node
+  hosts: xiaozhi_mqtt_gateways
+  become: true
+  gather_facts: true
+  gather_subset: [min]
+  any_errors_fatal: true
+  vars_files:
+    - ../../../vars/vault.yml
+  tasks:
+    - name: Preflight every gateway without mutations
+      ansible.builtin.include_role:
+        name: xiaozhi_mqtt_gateway
+        tasks_from: preflight
+    - name: Require the same source, runtime, backend and listener settings
+      ansible.builtin.assert:
+        that: hostvars[item].xiaozhi_mqtt_gateway_rollout == xiaozhi_mqtt_gateway_rollout
+      loop: "{{ groups['xiaozhi_mqtt_gateways'] | sort }}"
+      run_once: true
+
+- name: Deploy all three Xiaozhi Desk MQTT gateways
+  hosts: xiaozhi_mqtt_gateways
+  become: true
+  gather_facts: true
+  gather_subset: [min]
+  serial: 1
+  any_errors_fatal: true
+  vars_files:
+    - ../../../vars/vault.yml
+  roles:
+    - xiaozhi_mqtt_gateway

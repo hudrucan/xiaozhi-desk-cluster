@@ -7,7 +7,7 @@
       - ansible_play_hosts_all | length == 3
 - name: Freeze protected services before Network installation
   ansible.builtin.command:
-    argv: [python3, '-c', "{{ lookup('file',playbook_dir+'/roles/desk_ui/files/ui_guard.py') }}", freeze]
+    argv: [python3, '-c', "{{ lookup('file',desk_repo_root+'/roles/desk_ui/files/ui_guard.py') }}", freeze]
   register: network_before
   changed_when: false
   no_log: true
@@ -45,7 +45,7 @@
     - {path: /var/lib/desk-network/data/db, mode: '0700'}
 - name: Load existing ignored Network credentials
   ansible.builtin.set_fact:
-    network_credentials: "{{ lookup('file',playbook_dir+'/secret/network/credentials.json') | from_json }}"
+    network_credentials: "{{ lookup('file',desk_repo_root+'/secret/network/credentials.json') | from_json }}"
   no_log: true
 - name: Install checkpoint worker before its parent
   ansible.builtin.include_tasks: checkpoint_worker.yml
@@ -142,7 +142,7 @@
   register: network_policy
 - name: Install private peer certificate and key
   ansible.builtin.copy:
-    src: '{{ playbook_dir }}/secret/network/{{ item }}'
+    src: '{{ desk_repo_root }}/secret/network/{{ item }}'
     dest: '/etc/desk-network/{{ item }}'
     mode: '0600'
   loop: [peer.crt, peer.key]
@@ -165,7 +165,7 @@
   no_log: true
 - name: Check for a retained initial checkpoint on controller
   ansible.builtin.stat:
-    path: '{{ playbook_dir }}/secret/network/seed/head.json'
+    path: '{{ desk_repo_root }}/secret/network/seed/head.json'
   delegate_to: localhost
   become: false
   run_once: true
@@ -179,7 +179,7 @@
 - name: Retain the initial manifest in ignored controller storage
   ansible.builtin.fetch:
     src: /var/lib/desk-network-seed/head.json
-    dest: '{{ playbook_dir }}/secret/network/seed/head.json'
+    dest: '{{ desk_repo_root }}/secret/network/seed/head.json'
     flat: true
   delegate_to: deskb1x
   run_once: true
@@ -187,12 +187,12 @@
   no_log: true
 - name: Read retained initial checkpoint identity
   ansible.builtin.set_fact:
-    network_seed_head: "{{ lookup('file',playbook_dir+'/secret/network/seed/head.json') | from_json }}"
+    network_seed_head: "{{ lookup('file',desk_repo_root+'/secret/network/seed/head.json') | from_json }}"
   no_log: true
 - name: Retain initial compressed checkpoint in ignored controller storage
   ansible.builtin.fetch:
     src: '/var/lib/desk-network-seed/{{ network_seed_head.digest }}.gz'
-    dest: '{{ playbook_dir }}/secret/network/seed/{{ network_seed_head.digest }}.gz'
+    dest: '{{ desk_repo_root }}/secret/network/seed/{{ network_seed_head.digest }}.gz'
     flat: true
   delegate_to: deskb1x
   run_once: true
@@ -200,7 +200,7 @@
   no_log: true
 - name: Keep controller checkpoint private
   ansible.builtin.file:
-    path: '{{ playbook_dir }}/secret/network/seed/{{ item }}'
+    path: '{{ desk_repo_root }}/secret/network/seed/{{ item }}'
     mode: '0600'
   loop: ['head.json','{{ network_seed_head.digest }}.gz']
   delegate_to: localhost
@@ -209,7 +209,7 @@
   no_log: true
 - name: Seed a new replica without overwriting existing history
   ansible.builtin.copy:
-    src: '{{ playbook_dir }}/secret/network/seed/{{ item }}'
+    src: '{{ desk_repo_root }}/secret/network/seed/{{ item }}'
     dest: '/var/lib/desk-network/state/{{ item }}'
     mode: '0600'
     force: false
@@ -245,6 +245,6 @@
     network_restart: '{{ network_checkpoint_artifacts.changed or network_helpers.changed or network_warm_helpers.changed or network_config.changed or network_policy.changed or network_unit.changed or network_startup_hook.changed or network_language.changed or network_tls.changed or network_opcache_module.changed or network_opcache_config.changed }}'
 - name: Require protected voice DNS and VIP state to remain unchanged
   ansible.builtin.command:
-    argv: [python3, '-c', "{{ lookup('file',playbook_dir+'/roles/desk_ui/files/ui_guard.py') }}", guard]
+    argv: [python3, '-c', "{{ lookup('file',desk_repo_root+'/roles/desk_ui/files/ui_guard.py') }}", guard]
     stdin: '{{ network_before.stdout }}'
   changed_when: false

@@ -68,7 +68,7 @@ in `/etc/desk-camera/recording-policy/observations.json` (warm reader) and
 copied into `.storage/desk_camera_observation_authority` by the stopped-Core hook,
 then included in the ordinary certified checkpoint.
 
-`camera-observations.yml --tags workers` installs one controller/worker at a time,
+`playbooks/camera/camera-observations.yml --tags workers` installs one controller/worker at a time,
 waits for voters and warm readiness, enables read-only shadow observations, and
 validates all cameras from each node. During this short validation stage both
 Core and the shadow reader can poll. `--tags core` first revalidates observations,

@@ -34,13 +34,13 @@ kernel requires a reviewed module build and coordinated update of the pins.
 
 ## Ansible ownership
 
-`wifi-driver.yml` runs the role serially. `site.yml` includes it after initial
+`playbooks/cluster/wifi-driver.yml` runs the role serially. `site.yml` includes it after initial
 network/access setup and before cluster services. Standalone ingress and DNS VIP
 activation also require the fixed module to be selected **and running**.
 
 ```sh
-ansible-playbook -i inventory.ini wifi-driver.yml --check
-ansible-playbook -i inventory.ini wifi-driver.yml
+ansible-playbook -i inventory.ini playbooks/cluster/wifi-driver.yml --check
+ansible-playbook -i inventory.ini playbooks/cluster/wifi-driver.yml
 ```
 
 The role validates board/kernel/stock checksum, adopts a matching deployed
@@ -52,7 +52,7 @@ Matching reruns perform no reboot, module reload or service restart.
 For a newly flashed, unconfigured box, explicitly allow serial activation:
 
 ```sh
-ansible-playbook -i inventory.ini wifi-driver.yml --limit deskb1x \
+ansible-playbook -i inventory.ini playbooks/cluster/wifi-driver.yml --limit deskb1x \
   -e desk_wifi_driver_reboot=true
 ```
 
@@ -79,5 +79,5 @@ Offline regression checks:
 
 ```sh
 python3 -m unittest discover -s roles/desk_wifi_driver/tests
-ansible-playbook -i inventory.ini wifi-driver.yml --syntax-check
+ansible-playbook -i inventory.ini playbooks/cluster/wifi-driver.yml --syntax-check
 ```

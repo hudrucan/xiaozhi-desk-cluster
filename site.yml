@@ -14,7 +14,7 @@
 
 # Select the reviewed Wi-Fi module before any cluster VIP can be activated.
 - name: Manage the Desk Box Wi-Fi driver
-  ansible.builtin.import_playbook: wifi-driver.yml
+  ansible.builtin.import_playbook: playbooks/cluster/wifi-driver.yml
   tags: [wifi-driver]
 
 - name: Harden Desk Cluster SSH
@@ -105,6 +105,6 @@
 
 # Ingress is intentionally part of default full-site convergence; the tag selects it separately.
 - name: Deploy and verify the management ingress foundation
-  ansible.builtin.import_playbook: ingress.yml
+  ansible.builtin.import_playbook: playbooks/ui/ingress.yml
   tags:
     - ingress

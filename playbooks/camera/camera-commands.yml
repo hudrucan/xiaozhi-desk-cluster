@@ -1,0 +1,312 @@
+---
+# Owner commands: install workers, certify the Core guard, then enable writes.
+# No physical camera action is issued by this playbook.
+- name: Freeze protected services and validate command canary prerequisites
+  hosts: deskboxes
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  tags: [workers, core, activate]
+  tasks:
+    - ansible.builtin.set_fact:
+        commands_disabling: '{{ desk_camera_commands_disable | default(false) | bool }}'
+        commands_selected: "{{ [] if (desk_camera_commands_disable | default(false) | bool) else (desk_camera_command_workloads | default(['tapo_c222_163'])) }}"
+    - ansible.builtin.assert:
+        that:
+          - ansible_play_hosts_all | sort == ['deskb1x','deskb2x','deskb3x']
+          - commands_selected is sequence and commands_selected is not string
+          - commands_disabling or commands_selected | length > 0
+          - not commands_disabling or ('core' in ansible_run_tags or 'all' in ansible_run_tags)
+          - commands_selected | unique | list | length == commands_selected | length
+          - commands_selected | difference(['tapo_c222_160','tapo_c222_161','tapo_c222_163']) | length == 0
+    - ansible.builtin.command:
+        argv: [python3, '-c', "{{ lookup('file',desk_repo_root+'/roles/desk_ui/files/ui_guard.py') }}", freeze]
+      register: commands_guard
+      changed_when: false
+      no_log: true
+    - ansible.builtin.uri:
+        url: 'http://{{ cluster_ip }}:20223/status'
+        use_proxy: false
+      register: commands_before
+    - ansible.builtin.assert:
+        that:
+          - commands_before.json.sync == 'synced'
+          - commands_before.json.voter_ready
+          - groups['deskboxes'] | map('extract',hostvars,'commands_before') | map(attribute='json') | selectattr('ready','equalto',true) | list | length == 1
+    - ansible.builtin.command:
+        argv:
+          - python3
+          - -c
+          - |
+            import json,pathlib,socket,sys
+            sys.path.insert(0,'/usr/local/libexec/desk-camera')
+            from observation_contract import policy
+            selected=set(json.loads(sys.argv[1]));disabling=json.loads(sys.argv[2])
+            assert selected<=policy('/etc/desk-camera/recording-policy/observations.json')
+            for p in ('/etc/desk-camera/recording-policy/commands.json','/etc/desk-camera/command-core-policy.json'):
+                assert disabling or policy(p)<=selected, 'Forward rollout cannot remove command authority'
+            with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as s:
+                s.settimeout(3);s.connect('/run/desk-camera-thumbnails/worker.sock')
+                s.sendall(b'{"action":"status","id":"00000000000000000000000000000000"}\n')
+                v=json.loads(s.makefile('rb').readline())['value']
+                assert not v['busy'] and not v['media']['busy']
+                assert disabling or not v.get('commands',{}).get('busy',False)
+          - '{{ commands_selected | to_json }}'
+          - '{{ commands_disabling | to_json }}'
+      changed_when: false
+
+- name: Disable write admission and drain attempts before removing the Core guard
+  hosts: deskboxes
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  tags: [workers, core, activate]
+  tasks:
+    - ansible.builtin.copy:
+        content: '{"version":1,"workloads":[]}'
+        dest: /etc/desk-camera/recording-policy/commands.json
+        mode: '0600'
+        backup: true
+      when: commands_disabling
+    - ansible.builtin.command:
+        argv:
+          - python3
+          - -c
+          - |
+            import json,socket
+            with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as s:
+                s.settimeout(3);s.connect('/run/desk-camera-thumbnails/worker.sock')
+                s.sendall(b'{"action":"status","id":"00000000000000000000000000000000"}\n')
+                assert not json.loads(s.makefile('rb').readline())['value'].get('commands',{}).get('busy',False)
+      when: commands_disabling
+      register: commands_drained
+      until: commands_drained.rc == 0
+      retries: 20
+      delay: 2
+      changed_when: false
+
+- name: Install compatible bounded command workers on one node at a time
+  hosts: deskboxes
+  become: true
+  gather_facts: false
+  serial: 1
+  any_errors_fatal: true
+  tags: [workers]
+  tasks:
+    - ansible.builtin.file:
+        path: /var/lib/desk-camera/commands
+        state: directory
+        mode: '0700'
+    - ansible.builtin.copy:
+        content: '{"version":1,"workloads":[]}'
+        dest: /etc/desk-camera/recording-policy/commands.json
+        mode: '0600'
+        force: false
+    - ansible.builtin.copy:
+        src: "{{ desk_repo_root }}/roles/desk_camera/files/{{ item }}"
+        dest: '/usr/local/libexec/desk-camera/{{ item }}'
+        mode: '0600'
+        backup: true
+        validate: /usr/bin/python3 -c "import ast,sys; ast.parse(open(sys.argv[1]).read())" %s
+      loop: [controller.py, transport.py, media_rpc.py, thumbnail_worker.py, observation_contract.py, observation_worker.py, command_contract.py, command_worker.py]
+      register: commands_sources
+    - ansible.builtin.copy:
+        src: "{{ desk_repo_root }}/roles/desk_camera/files/thumbnail.service"
+        dest: /etc/systemd/system/desk-camera-thumbnails.service
+        mode: '0644'
+        backup: true
+      register: commands_unit
+    - ansible.builtin.systemd_service:
+        name: desk-camera
+        state: restarted
+        daemon_reload: true
+      when: commands_sources.changed or commands_unit.changed
+    - ansible.builtin.uri:
+        url: 'http://{{ cluster_ip }}:20226/status'
+        use_proxy: false
+      register: commands_voter
+      until: commands_voter.json.voter_ready | default(false) and commands_voter.json.transport.connected | default(false)
+      retries: 35
+      delay: 2
+    - ansible.builtin.command:
+        argv:
+          - python3
+          - -c
+          - |
+            import hashlib,json,pathlib,socket,sys
+            sys.path.insert(0,'/usr/local/libexec/desk-camera')
+            from command_worker import SDK_HASHES
+            for name,digest in SDK_HASHES.items():
+                assert hashlib.sha256((pathlib.Path('/var/lib/desk-camera/deps/pytapo')/name).read_bytes()).hexdigest()==digest
+            with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as s:
+                s.settimeout(3);s.connect('/run/desk-camera-thumbnails/worker.sock')
+                s.sendall(b'{"action":"status","id":"00000000000000000000000000000000"}\n')
+                v=json.loads(s.makefile('rb').readline())['value']['commands']
+                assert (v['storage_healthy'] and v['clock_healthy'] or json.loads(sys.argv[1])) and not v['busy']
+          - '{{ commands_disabling | to_json }}'
+      register: commands_warm
+      until: commands_warm.rc == 0
+      retries: 35
+      delay: 2
+      changed_when: false
+
+- name: Check the command bridge without admitting any device write
+  hosts: deskboxes
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  tags: [workers, core, activate]
+  tasks:
+    - ansible.builtin.stat:
+        path: '/usr/local/libexec/desk-camera/{{ item }}'
+        checksum_algorithm: sha256
+      loop: [controller.py, transport.py, media_rpc.py, thumbnail_worker.py, observation_contract.py, observation_worker.py, command_contract.py, command_worker.py]
+      register: commands_hashes
+    - ansible.builtin.assert:
+        that:
+          - item.stat.checksum | default('') == lookup('file',desk_repo_root+'/roles/desk_camera/files/'+item.item,rstrip=False) | hash('sha256')
+      loop: '{{ commands_hashes.results }}'
+      loop_control:
+        label: '{{ item.item }}'
+    - ansible.builtin.stat:
+        path: /etc/systemd/system/desk-camera-thumbnails.service
+        checksum_algorithm: sha256
+      register: commands_unit_hash
+    - ansible.builtin.assert:
+        that:
+          - commands_unit_hash.stat.checksum | default('') == lookup('file',desk_repo_root+'/roles/desk_camera/files/thumbnail.service',rstrip=False) | hash('sha256')
+    - ansible.builtin.command:
+        argv:
+          - python3
+          - -c
+          - |
+            import json,socket,sys
+            req=dict(version=1,workload='tapo_c222_163',generation='0'*32,request_id='0'*32,operation='result')
+            value=dict(action='command',workload=req['workload'],node=sys.argv[1],request=req)
+            with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as s:
+                s.settimeout(4);s.connect('/run/desk-camera/bridge.sock');s.sendall(json.dumps(value).encode()+b'\n')
+                out=json.loads(s.makefile('rb').readline())
+                assert out['ok'] and out['value']['reason']=='unknown_request'
+          - '{{ inventory_hostname }}'
+      changed_when: false
+
+- name: Stage command selection and early native adapter
+  hosts: deskboxes
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  tags: [core]
+  tasks:
+    - ansible.builtin.copy:
+        content: '{{ {"version":1,"workloads":commands_selected} | to_json }}'
+        dest: /etc/desk-camera/command-core-policy.json
+        mode: '0600'
+        backup: true
+    - ansible.builtin.copy:
+        src: "{{ desk_repo_root }}/roles/desk_homeassistant/files/{{ item }}"
+        dest: '/usr/local/libexec/desk-homeassistant/{{ item }}'
+        mode: '0700'
+        backup: true
+        validate: /usr/bin/python3 -c "import ast,sys; ast.parse(open(sys.argv[1]).read())" %s
+      loop: [ui_bridge.py, component_config.py, recording_bootstrap.py]
+    - ansible.builtin.copy:
+        src: "{{ desk_repo_root }}/roles/desk_homeassistant/files/desk_cluster/{{ item }}"
+        dest: '/usr/local/libexec/desk-homeassistant/desk_cluster/{{ item }}'
+        mode: '0644'
+        backup: true
+        validate: /usr/bin/python3 -c "import ast,sys; ast.parse(open(sys.argv[1]).read())" %s
+      loop: [__init__.py, observation_remote.py, command_remote.py]
+    - ansible.builtin.uri:
+        url: 'http://{{ cluster_ip }}:20223/status'
+        use_proxy: false
+      register: commands_cutover
+    - ansible.builtin.assert:
+        that:
+          - commands_cutover.json.sync == 'synced' and commands_cutover.json.voter_ready
+          - groups['deskboxes'] | map('extract',hostvars,'commands_cutover') | map(attribute='json') | selectattr('ready','equalto',true) | list | length == 1
+    - ansible.builtin.group_by:
+        key: "commands_{{ 'core' if commands_cutover.json.ready else 'standby' }}"
+
+- name: Load the command bridge on standby agents first
+  hosts: commands_standby
+  become: true
+  gather_facts: false
+  serial: 1
+  any_errors_fatal: true
+  tags: [core]
+  tasks:
+    - ansible.builtin.systemd_service:
+        name: desk-homeassistant
+        state: restarted
+    - ansible.builtin.uri:
+        url: 'http://{{ cluster_ip }}:20223/status'
+        use_proxy: false
+      register: commands_standby_ready
+      until: commands_standby_ready.json.voter_ready | default(false) and commands_standby_ready.json.sync | default('') == 'synced'
+      retries: 35
+      delay: 2
+
+- name: Certify command guard and preserve current config through clean handoff
+  hosts: commands_core
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  tags: [core]
+  tasks:
+    - ansible.builtin.command:
+        argv: [/opt/desk-homeassistant/bin/python, /usr/local/libexec/desk-homeassistant/agent.py, --action, handoff]
+    - ansible.builtin.systemd_service:
+        name: desk-homeassistant
+        state: restarted
+
+- name: Require certified command guard before enabling owner writes
+  hosts: deskboxes
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  tags: [core, activate]
+  tasks:
+    - ansible.builtin.command:
+        argv:
+          - python3
+          - -c
+          - |
+            import json,pathlib,sys,urllib.request
+            selected=set(json.loads(sys.argv[1]));o=urllib.request.build_opener(urllib.request.ProxyHandler({}))
+            ips=['10.10.10.'+str(i) for i in (11,12,13)]
+            states=[json.load(o.open('http://'+ip+':20223/status',timeout=3)) for ip in ips]
+            assert sum(s['ready'] for s in states)==1 and all(s['sync']=='synced' and s['voter_ready'] for s in states)
+            assert len({s['checkpoint_revision'] for s in states})==1
+            ip,s=next((ip,s) for ip,s in zip(ips,states) if s['ready']);assert s['error'] is None
+            ready=json.load(o.open('http://'+ip+':18123/api/desk_cluster/ready',timeout=3))
+            for key in ('recording_authority','observation_authority','command_authority'):
+                assert ready[key]['guarded'] and ready[key]['before_native_setup']
+            assert ready['ready'] and set(ready['command_authority']['workloads'])==selected
+            local=json.loads(pathlib.Path('/etc/desk-camera/command-core-policy.json').read_bytes())
+            assert set(local['workloads'])==selected
+            print('Early command guard and certified recovery 3/3: PASS')
+          - '{{ commands_selected | to_json }}'
+      register: commands_certified
+      until: commands_certified.rc == 0
+      retries: 90
+      delay: 3
+      changed_when: false
+    - ansible.builtin.copy:
+        content: '{{ {"version":1,"workloads":commands_selected} | to_json }}'
+        dest: /etc/desk-camera/recording-policy/commands.json
+        mode: '0600'
+        backup: true
+      when: "'activate' in ansible_run_tags or 'all' in ansible_run_tags"
+
+- name: Verify protected services and DNS after command staging
+  hosts: deskboxes
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  tags: [workers, core, activate]
+  tasks:
+    - ansible.builtin.command:
+        argv: [python3, '-c', "{{ lookup('file',desk_repo_root+'/roles/desk_ui/files/ui_guard.py') }}", guard]
+        stdin: '{{ commands_guard.stdout }}'
+      changed_when: false
+      no_log: true

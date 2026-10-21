@@ -81,7 +81,7 @@ Small offline checks before any rollout:
 python3 -m unittest discover -s roles/desk_node_control/tests
 python3 -m unittest discover -s roles/desk_dashboard/tests
 GO111MODULE=off go test ./roles/desk_dashboard/files
-ansible-playbook -i inventory.ini dns-health.yml --syntax-check
+ansible-playbook -i inventory.ini playbooks/dns/dns-health.yml --syntax-check
 # Server repository: use its existing venv; fake NATS/providers.
 cd ../xiaozhi-esp32-server/main/xiaozhi-server
 for suite in worker_asr worker_llm worker_llm_stream worker_tts_segments voice_transport; do
@@ -89,22 +89,22 @@ for suite in worker_asr worker_llm worker_llm_stream worker_tts_segments voice_t
 done
 ```
 
-Deploy compatible runtime source serially with `maintenance-source.yml` and
+Deploy compatible runtime source serially with `playbooks/xiaozhi/source/maintenance-source.yml` and
 explicit immutable `xiaozhi_maintenance_server_revision` /
 `xiaozhi_maintenance_gateway_revision` values. Then apply metadata-only
-`dns-health.yml`, boot-local `dns-maintenance.yml`, and finally
-`desk-dashboard.yml`. The metadata/gate plays preserve the live forwarding,
+`playbooks/dns/dns-health.yml`, boot-local `playbooks/dns/dns-maintenance.yml`, and finally
+`playbooks/dashboard/desk-dashboard.yml`. The metadata/gate plays preserve the live forwarding,
 filter, resolver and VIP configuration. Maintenance remains disabled until the
 runtime support and installed DNS health gate are present on all three nodes.
 Do not deploy a new controller/page before runtime support and DNS gates.
 
 ```sh
-ansible-playbook -i inventory.ini maintenance-source.yml \
+ansible-playbook -i inventory.ini playbooks/xiaozhi/source/maintenance-source.yml \
   -e xiaozhi_maintenance_server_revision=<reviewed-server-SHA> \
   -e xiaozhi_maintenance_gateway_revision=<reviewed-gateway-SHA>
-ansible-playbook -i inventory.ini dns-health.yml
-ansible-playbook -i inventory.ini dns-maintenance.yml
-ansible-playbook -i inventory.ini desk-dashboard.yml
+ansible-playbook -i inventory.ini playbooks/dns/dns-health.yml
+ansible-playbook -i inventory.ini playbooks/dns/dns-maintenance.yml
+ansible-playbook -i inventory.ini playbooks/dashboard/desk-dashboard.yml
 ```
 
 Node operation status appears immediately below the node cards, with a 14 px

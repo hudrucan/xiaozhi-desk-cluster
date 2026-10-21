@@ -6,7 +6,7 @@ import yaml
 
 root = Path(__file__).resolve().parents[3]
 role = root / 'roles/desk_monitoring'
-for path in list(role.rglob('*.yml')) + [root / 'monitoring.yml',root / 'monitoring-sync.yml']:
+for path in list(role.rglob('*.yml')) + [root / 'playbooks/monitoring/monitoring.yml',root / 'playbooks/monitoring/monitoring-sync.yml']:
     yaml.safe_load(path.read_text())
 for path in role.rglob('*.py'):
     ast.parse(path.read_text(), filename=str(path))

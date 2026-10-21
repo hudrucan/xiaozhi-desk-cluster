@@ -1,0 +1,82 @@
+---
+# Explicitly requested LAN administration without passwords; not part of site.yml.
+- name: Freeze existing runtimes and policy before unified UI changes
+  hosts: desk_monitoring
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  tasks:
+    - ansible.builtin.include_role:
+        name: desk_ui
+        tasks_from: preflight
+        public: true
+    - name: Require common installed VIP snapshots
+      ansible.builtin.assert:
+        that:
+          - groups['desk_monitoring'] | map('extract', hostvars, 'desk_monitoring_vip') | unique | list | length == 1
+          - groups['desk_monitoring'] | map('extract', hostvars, 'desk_dns_vip') | unique | list | length == 1
+      run_once: true
+    - name: Quiesce policy pulls while local UI auth changes serially
+      when: not ansible_check_mode
+      block:
+        - ansible.builtin.systemd_service:
+            name: "{{ item }}"
+            state: stopped
+          loop: [desk-dns-sync.timer, desk-dns-sync.service]
+      rescue:
+        - ansible.builtin.include_tasks: roles/desk_ui/tasks/recover.yml
+- name: Update AdGuard local auth and independent Beszel hubs one node at a time
+  hosts: desk_monitoring
+  become: true
+  gather_facts: false
+  serial: 1
+  any_errors_fatal: true
+  tasks:
+    - name: Apply auth changes with reconciliation cleanup on failure
+      block:
+        - ansible.builtin.include_role:
+            name: desk_ui
+            tasks_from: auth
+          when: inventory_hostname in (desk_ui_auth_nodes | default(groups['desk_monitoring']))
+      rescue:
+        - ansible.builtin.include_tasks: roles/desk_ui/tasks/recover.yml
+- name: Expose all three UIs on the existing Settings VIP
+  hosts: desk_monitoring
+  become: true
+  gather_facts: false
+  serial: 1
+  any_errors_fatal: true
+  tasks:
+    - name: Apply proxy changes with reconciliation cleanup on failure
+      block:
+        - ansible.builtin.include_role:
+            name: desk_ui
+            tasks_from: proxy
+      rescue:
+        - ansible.builtin.include_tasks: roles/desk_ui/tasks/recover.yml
+- name: Resume protected DNS reconciliation and verify isolation
+  hosts: desk_monitoring
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  tasks:
+    - name: Resume periodic pulls even if the immediate reconciliation needs retry
+      ansible.builtin.systemd_service:
+        name: desk-dns-sync.timer
+        state: started
+      when: not ansible_check_mode
+    - name: Require a successful guarded policy pull
+      ansible.builtin.systemd_service:
+        name: desk-dns-sync.service
+        state: started
+      register: desk_ui_pull
+      until: desk_ui_pull is succeeded
+      retries: 3
+      delay: 3
+      when: not ansible_check_mode
+    - name: Require preserved runtimes and DNS policy after all UI changes
+      ansible.builtin.command:
+        argv: [/usr/bin/python3, '-c', "{{ lookup('ansible.builtin.file', desk_repo_root + '/roles/desk_ui/files/ui_guard.py') }}", guard]
+        stdin: "{{ desk_ui_snapshot | to_json }}"
+      changed_when: false
+      check_mode: false

@@ -84,8 +84,8 @@ For a clean-stop checkpoint or planned handoff from this repository:
 
 ```sh
 cd /Users/hudrucan/Personals/repos/xiaozhi-desk-cluster
-ansible-playbook -i inventory.ini homeassistant-checkpoint.yml
-ansible-playbook -i inventory.ini homeassistant-checkpoint.yml -e desk_homeassistant_operation=handoff
+ansible-playbook -i inventory.ini playbooks/homeassistant/homeassistant-checkpoint.yml
+ansible-playbook -i inventory.ini playbooks/homeassistant/homeassistant-checkpoint.yml -e desk_homeassistant_operation=handoff
 ```
 
 The command-line maintenance operation can interrupt UI connections while Core restarts.
@@ -95,7 +95,7 @@ Maintenance/reboot waits for a ready successor with matching certified revisions
 
 ## Files and services
 
-- `homeassistant.yml`: staged three-node preparation, serial controller activation,
+- `playbooks/homeassistant/homeassistant.yml`: staged three-node preparation, serial controller activation,
   native readiness gate, and additive validated ingress listener.
 - `roles/desk_homeassistant/files/agent.py`: placement (score weights shared with
   Network election, see `DESK_NETWORK.md`), ownership, checkpoints,
@@ -146,7 +146,7 @@ other access entries and filtering policy are preserved. The conditional DNS
 role templates retain this prerequisite on future rebuilds. Rollouts update DNS
 serially before freezing the normal protected-service baseline.
 
-A score-only change to `agent.py` can be installed with `network-helpers.yml`, which
+A score-only change to `agent.py` can be installed with `playbooks/network/network-helpers.yml`, which
 restarts standby controllers only. The ready owner keeps the old score until its
 next planned handoff, because restarting it restarts Core.
 
@@ -170,7 +170,7 @@ Reference: https://www.home-assistant.io/integrations/bluetooth/#additional-deta
 
 ## Online sync deployment
 
-`homeassistant-online-sync.yml` stages the focused upgrade on all three nodes,
+`playbooks/homeassistant/homeassistant-online-sync.yml` stages the focused upgrade on all three nodes,
 refreshes standby controllers first, then preserves current changes using the
 existing clean checkpoint/handoff for the one required integration installation
 restart. Future normal deployments also install the owned component on stopped

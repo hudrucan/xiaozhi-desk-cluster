@@ -16,7 +16,7 @@
         dashboard_members: "{{ dashboard_members + [{'id': item, 'private': hostvars[item].cluster_ip, 'management': hostvars[item].ansible_host}] }}"
       loop: "{{ groups['deskboxes'] | sort }}"
     - name: Build the cached dashboard collector
-      ansible.builtin.import_tasks: "{{ playbook_dir }}/roles/desk_dashboard/tasks/build.yml"
+      ansible.builtin.import_tasks: build.yml
     - name: Create public dashboard metadata directory
       ansible.builtin.file:
         path: /etc/desk-dashboard

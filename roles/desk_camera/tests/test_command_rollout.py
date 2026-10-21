@@ -10,7 +10,7 @@ import jinja2
 import yaml
 
 REPO=pathlib.Path(__file__).resolve().parents[3]
-BOOK=yaml.safe_load((REPO/'camera-commands.yml').read_text())
+BOOK=yaml.safe_load((REPO/'playbooks/camera/camera-commands.yml').read_text())
 FREEZE=next(t['ansible.builtin.command'] for p in BOOK for t in p.get('tasks',[]) if t.get('register')=='commands_guard')
 GUARD=BOOK[-1]['tasks'][0]['ansible.builtin.command']
 BASE={'units':{'nats-server':{'MainPID':'123','ActiveState':'active'}},'dns_policy':'a'*64}
@@ -19,7 +19,7 @@ def render(value,**scope):
     def lookup(kind,path):
         if kind!='file':raise ValueError('Unexpected lookup')
         return pathlib.Path(path).read_text().rstrip()
-    return jinja2.Template(value).render(playbook_dir=str(REPO),lookup=lookup,**scope)
+    return jinja2.Template(value).render(desk_repo_root=str(REPO),lookup=lookup,**scope)
 
 def invoke(spec,state,**scope):
     args=[render(v,**scope) for v in spec['argv']]

@@ -1,0 +1,122 @@
+---
+- name: Prepare scoped NATS workers without changing Network ownership
+  hosts: deskboxes
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  tasks:
+    - name: Require all three nodes
+      ansible.builtin.assert:
+        that:
+          - ansible_play_hosts_all | sort == ['deskb1x', 'deskb2x', 'deskb3x']
+    - name: Read current Network state
+      ansible.builtin.uri:
+        url: 'http://{{ cluster_ip }}:20213/network/desk/status'
+        use_proxy: false
+        timeout: 3
+      register: scan_before
+    - name: Require one active owner and synced ready voters
+      ansible.builtin.assert:
+        that:
+          - "[hostvars['deskb1x'].scan_before.json.state, hostvars['deskb2x'].scan_before.json.state, hostvars['deskb3x'].scan_before.json.state] | select('equalto','active') | list | length == 1"
+          - scan_before.json.state in ['active','standby']
+          - scan_before.json.sync == 'synced'
+          - scan_before.json.voter_ready | bool
+    - name: Record original owner and standby groups
+      ansible.builtin.group_by:
+        key: "network_scan_{{ 'owner' if scan_before.json.state == 'active' else 'standby' }}"
+      changed_when: false
+    - name: Freeze protected services
+      ansible.builtin.command:
+        argv: [python3, '-c', "{{ lookup('file',desk_repo_root+'/roles/desk_ui/files/ui_guard.py') }}", freeze]
+      register: scan_protected
+      no_log: true
+      changed_when: false
+    - name: Prepare scoped worker runtime and reload only NATS authorization
+      ansible.builtin.include_tasks: "{{ desk_repo_root }}/roles/desk_network/tasks/distributed.yml"
+    - name: Install updated HA and native scan adapters
+      ansible.builtin.copy:
+        src: "{{ desk_repo_root }}/roles/desk_network/files/{{ item }}"
+        dest: '/usr/local/libexec/desk-network/{{ item }}'
+        mode: '0755'
+        validate: /usr/bin/python3 -c "import ast,sys; ast.parse(open(sys.argv[1]).read())" %s
+      loop: [checkpoint_source.py, peer_http.py, ha.py, mdns.py, arp.py, discovery.py, bootstrap.py]
+      register: scan_controller
+    - name: Install native scan progress UI
+      ansible.builtin.copy:
+        src: "{{ desk_repo_root }}/roles/desk_network/files/scan-ui.js"
+        dest: /usr/local/libexec/desk-network/scan-ui.js
+        mode: '0644'
+    - name: Install native distributed scan policy
+      ansible.builtin.copy:
+        src: "{{ desk_repo_root }}/roles/desk_network/files/policy.json"
+        dest: /etc/desk-network/policy.json
+        mode: '0644'
+      register: scan_policy
+    - name: Enable distributed dispatch without changing existing cluster credentials
+      ansible.builtin.command:
+        argv:
+          - python3
+          - -c
+          - "import json,pathlib,os; p=pathlib.Path('/etc/desk-network/config.json'); c=json.loads(p.read_text()); changed=c.get('scan_distributed') is not True; c['scan_distributed']=True; t=p.with_suffix('.tmp'); t.write_text(json.dumps(c)) if changed else None; os.chmod(t,0o600) if changed else None; os.replace(t,p) if changed else None; print('changed' if changed else 'unchanged')"
+      register: scan_config
+      changed_when: scan_config.stdout == 'changed'
+      no_log: true
+    - name: Record changed controller state
+      ansible.builtin.set_fact:
+        scan_restart: '{{ scan_helpers.changed or scan_controller.changed or scan_policy.changed or scan_config.changed }}'
+
+- name: Refresh cold voters one at a time
+  hosts: network_scan_standby
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  serial: 1
+  tasks:
+    - name: Refresh changed Network standby
+      ansible.builtin.systemd_service:
+        name: desk-network
+        state: restarted
+      when: scan_restart | bool
+    - name: Wait for voter quarantine to expire
+      ansible.builtin.uri:
+        url: 'http://{{ cluster_ip }}:20213/network/desk/status'
+        use_proxy: false
+        timeout: 3
+      register: scan_voter
+      until: scan_voter.json.voter_ready | default(false)
+      retries: 20
+      delay: 2
+      changed_when: false
+
+- name: Refresh original owner after both voters recover
+  hosts: network_scan_owner
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  tasks:
+    - name: Refresh changed Network owner
+      ansible.builtin.systemd_service:
+        name: desk-network
+        state: restarted
+      when: scan_restart | bool
+    - name: Wait for one native-ready Network owner
+      ansible.builtin.command:
+        argv: [python3, /usr/local/libexec/desk-network/verify_ready.py]
+      register: scan_ready
+      until: scan_ready.rc == 0
+      retries: 70
+      delay: 3
+      changed_when: false
+
+- name: Verify existing services and VIP configuration are unchanged
+  hosts: deskboxes
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  tasks:
+    - name: Check protected services
+      ansible.builtin.command:
+        argv: [python3, '-c', "{{ lookup('file',desk_repo_root+'/roles/desk_ui/files/ui_guard.py') }}", guard]
+        stdin: '{{ scan_protected.stdout }}'
+      changed_when: false

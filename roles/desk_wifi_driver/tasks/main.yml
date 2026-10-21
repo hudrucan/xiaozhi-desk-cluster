@@ -98,7 +98,7 @@
     - name: Require explicit activation before proceeding to cluster services
       ansible.builtin.assert:
         that: (desk_wifi_driver_before.stdout | from_json).runtime_ready or desk_wifi_driver_reboot
-        fail_msg: Module staged, but stock is still running. On a fresh node rerun wifi-driver.yml with desk_wifi_driver_reboot=true. For a live cluster use the controlled HA reboot workflow, then rerun. No hot-reload is performed.
+        fail_msg: Module staged, but stock is still running. On a fresh node rerun playbooks/cluster/wifi-driver.yml with desk_wifi_driver_reboot=true. For a live cluster use the controlled HA reboot workflow, then rerun. No hot-reload is performed.
 
     - name: Recheck fresh-node activation immediately before reboot
       ansible.builtin.command:

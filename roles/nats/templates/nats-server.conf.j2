@@ -12,7 +12,7 @@ lame_duck_grace_period: "5s"
 authorization {
   users: [
 {% if desk_homeassistant_enabled | default(false) %}
-{% set ha = lookup('file',playbook_dir+'/secret/homeassistant/nats.json') | from_json %}
+{% set ha = lookup('file',desk_repo_root+'/secret/homeassistant/nats.json') | from_json %}
     # BEGIN DESK HOME ASSISTANT USERS
 {% for node, credential in ha.items() %}
     {{ dict(credential, permissions={'publish':{'allow':['desk.homeassistant.control.*','desk.homeassistant.reply.'+node+'.>']},'subscribe':{'allow':['desk.homeassistant.control.'+node,'desk.homeassistant.reply.'+node+'.>']},'allow_responses':{'max':1,'expires':'3s'}}) | to_json }}
@@ -20,7 +20,7 @@ authorization {
     # END DESK HOME ASSISTANT USERS
 {% endif %}
 {% if desk_network_scan_enabled | default(false) %}
-{% set scan = lookup('file',playbook_dir+'/secret/network/scan-nats.json') | from_json %}
+{% set scan = lookup('file',desk_repo_root+'/secret/network/scan-nats.json') | from_json %}
     # BEGIN DESK NETWORK SCAN USERS
 {% for node, credential in scan.coordinators.items() %}
     {{ dict(credential, permissions={'publish':{'allow':['desk.network.scan.*','desk.network.status.*']},'subscribe':{'allow':['desk.network.reply.'+node+'.>']}}) | to_json }}

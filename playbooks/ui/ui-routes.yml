@@ -1,0 +1,89 @@
+---
+- name: Rename public Xiaozhi UI and align service names
+  hosts: deskboxes
+  become: true
+  gather_facts: false
+  serial: 1
+  any_errors_fatal: true
+  tasks:
+    - name: Freeze protected runtime, configuration and DNS policy
+      ansible.builtin.command:
+        argv: [/usr/bin/python3, '-c', "{{ lookup('ansible.builtin.file',desk_repo_root + '/roles/desk_ui/files/ui_guard.py') }}", freeze]
+      register: route_before
+      changed_when: false
+      no_log: true
+
+    - name: Read existing bootstrap response metadata
+      ansible.builtin.uri:
+        url: "http://{{ cluster_ip }}:8004/xiaozhi/ota/"
+        use_proxy: false
+        timeout: 5
+        status_code: [200, 400]
+      register: bootstrap_before
+      changed_when: false
+      no_log: true
+
+    - name: Install optional dashboard metadata before the root page
+      ansible.builtin.include_role:
+        name: desk_dashboard
+
+    - name: Install the consistently named landing page
+      ansible.builtin.template:
+        src: "{{ desk_repo_root }}/roles/desk_ui/templates/index.html.j2"
+        dest: /etc/desk-ui/index.html
+        mode: '0644'
+      register: landing
+
+    - name: Install the atomic complete proxy candidate helper
+      ansible.builtin.copy:
+        src: "{{ desk_repo_root }}/roles/desk_monitoring/files/install_proxy.py"
+        dest: /usr/local/libexec/desk-monitoring/install-proxy.py
+        mode: '0755'
+
+    - name: Validate HTTP and MQTT together and gracefully reload only if changed
+      ansible.builtin.command:
+        argv: "{{ ['/usr/bin/python3','/usr/local/libexec/desk-monitoring/install-proxy.py','--backend','/etc/desk-monitoring/backend.cfg','--dns-backend','/etc/desk-ui/backend.cfg'] + (['--reload-page'] if landing.changed else []) }}"
+      register: route_reload
+      changed_when: route_reload.stdout == 'changed'
+
+    - name: Verify protected runtime, DNS policy and configuration are unchanged
+      ansible.builtin.command:
+        argv: [/usr/bin/python3, '-c', "{{ lookup('ansible.builtin.file',desk_repo_root + '/roles/desk_ui/files/ui_guard.py') }}", guard]
+        stdin: "{{ route_before.stdout }}"
+      changed_when: false
+
+- name: Verify the shared VIP after every node has the canonical UI route
+  hosts: deskboxes
+  become: true
+  gather_facts: false
+  run_once: true
+  tasks:
+    - name: Require the canonical public Xiaozhi page
+      ansible.builtin.uri:
+        url: "http://{{ (route_before.stdout | from_json).vip }}/xiaozhi/"
+        use_proxy: false
+        timeout: 10
+        status_code: 200
+      changed_when: false
+
+    - name: Require legacy page bookmarks to redirect to Xiaozhi
+      ansible.builtin.uri:
+        url: "http://{{ (route_before.stdout | from_json).vip }}/settings/"
+        use_proxy: false
+        follow_redirects: none
+        status_code: 302
+      register: legacy_redirect
+      failed_when: legacy_redirect.location not in ['/xiaozhi/', 'http://' + (route_before.stdout | from_json).vip + '/xiaozhi/']
+      changed_when: false
+
+    - name: Require the public bootstrap response to retain native semantics
+      ansible.builtin.uri:
+        url: "http://{{ (route_before.stdout | from_json).vip }}/xiaozhi/ota/"
+        use_proxy: false
+        timeout: 5
+        status_code: "{{ bootstrap_before.status }}"
+      register: bootstrap_after
+      failed_when: bootstrap_after.content_type != bootstrap_before.content_type
+      changed_when: false
+      no_log: true
+

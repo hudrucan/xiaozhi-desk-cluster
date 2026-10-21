@@ -64,7 +64,7 @@
 
     - name: Install the pinned VIP trust certificate and private key
       ansible.builtin.copy:
-        src: "{{ playbook_dir }}/secret/desk-dns-sync.{{ item }}"
+        src: "{{ desk_repo_root }}/secret/desk-dns-sync.{{ item }}"
         dest: "/etc/desk-dns/sync/tls.{{ item }}"
         owner: root
         group: desk-dns-sync

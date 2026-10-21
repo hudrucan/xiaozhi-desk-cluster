@@ -2,10 +2,10 @@
 - block:
     - ansible.builtin.command:
         argv: [/usr/bin/python3, '-', activate, "{{ server_sha }}", "{{ runtime_unit }}"]
-        stdin: "{{ lookup('ansible.builtin.file', 'roles/xiaozhi_vision/files/source_rollout.py') }}"
+        stdin: "{{ lookup('ansible.builtin.file', desk_repo_root + '/roles/xiaozhi_vision/files/source_rollout.py') }}"
     - ansible.builtin.command:
         argv: [/usr/bin/python3, '-', ready, "{{ server_sha }}", "{{ runtime_unit }}"]
-        stdin: "{{ lookup('ansible.builtin.file', 'roles/xiaozhi_vision/files/source_rollout.py') }}"
+        stdin: "{{ lookup('ansible.builtin.file', desk_repo_root + '/roles/xiaozhi_vision/files/source_rollout.py') }}"
       register: runtime_ready
       until: runtime_ready.rc == 0 and (runtime_ready.stdout | from_json).ready
       retries: 50
@@ -14,5 +14,5 @@
   rescue:
     - ansible.builtin.command:
         argv: [/usr/bin/python3, '-', rollback, "{{ server_sha }}", "{{ runtime_unit }}"]
-        stdin: "{{ lookup('ansible.builtin.file', 'roles/xiaozhi_vision/files/source_rollout.py') }}"
+        stdin: "{{ lookup('ansible.builtin.file', desk_repo_root + '/roles/xiaozhi_vision/files/source_rollout.py') }}"
     - ansible.builtin.fail: {msg: Runtime readiness failed and prior source was restored}

@@ -5,7 +5,7 @@
       - ansible_play_hosts_all | sort == ['deskb1x','deskb2x','deskb3x']
 - name: Preserve existing protected service baseline
   ansible.builtin.command:
-    argv: [python3, '-c', "{{ lookup('file',playbook_dir+'/roles/desk_ui/files/ui_guard.py') }}", freeze]
+    argv: [python3, '-c', "{{ lookup('file',desk_repo_root+'/roles/desk_ui/files/ui_guard.py') }}", freeze]
   register: camera_guard
   changed_when: false
   no_log: true
@@ -14,7 +14,7 @@
     state: directory
     mode: '0700'
   loop: [/etc/desk-camera, /etc/desk-camera/recording-policy, /var/lib/desk-camera, /var/lib/desk-camera/deps, /var/lib/desk-camera/commands, /var/lib/desk-camera/playback, /var/lib/desk-camera/cache/hot, /var/lib/desk-camera/cache/cold, /usr/local/libexec/desk-camera/components]
-- name: Seed inactive worker authority only; cutover uses camera-recording-owner.yml
+- name: Seed inactive worker authority only; cutover uses playbooks/camera/camera-recording-owner.yml
   ansible.builtin.copy:
     content: '{"version":1,"workloads":[]}'
     dest: /etc/desk-camera/recording-policy/owner.json
@@ -26,7 +26,7 @@
     dest: /etc/desk-camera/recording-core-policy.json
     force: false
     mode: '0600'
-- name: Seed read-only observation policy on new nodes; active changes use camera-observations.yml
+- name: Seed read-only observation policy on new nodes; active changes use playbooks/camera/camera-observations.yml
   ansible.builtin.copy:
     content: '{{ {"version":1,"workloads":desk_camera_observation_workloads | default([])} | to_json }}'
     dest: '{{ item }}'
@@ -46,7 +46,7 @@
     force: false
     mode: '0600'
 - ansible.builtin.copy:
-    src: '{{ playbook_dir }}/secret/camera/{{ inventory_hostname }}.json'
+    src: '{{ desk_repo_root }}/secret/camera/{{ inventory_hostname }}.json'
     dest: /etc/desk-camera/config.json
     mode: '0600'
   no_log: true
@@ -58,17 +58,17 @@
   changed_when: camera_progressive.stdout == 'changed'
   no_log: true
 - ansible.builtin.copy:
-    src: '{{ playbook_dir }}/secret/camera/{{ item }}'
+    src: '{{ desk_repo_root }}/secret/camera/{{ item }}'
     dest: '/etc/desk-camera/{{ item }}'
     mode: '0600'
   loop: [nats-users.json, proxy.cfg, core-migration.json, playback.json]
   no_log: true
   register: camera_private
 - ansible.builtin.copy:
-    src: '{{ playbook_dir }}/secret/camera/core-additions.json'
+    src: '{{ desk_repo_root }}/secret/camera/core-additions.json'
     dest: /etc/desk-camera/core-additions.json
     mode: '0600'
-  when: lookup('fileglob', playbook_dir+'/secret/camera/core-additions.json') | length > 0
+  when: lookup('fileglob', desk_repo_root+'/secret/camera/core-additions.json') | length > 0
   no_log: true
 - ansible.builtin.copy:
     src: '{{ item }}'
@@ -138,7 +138,7 @@
   delay: 2
 - name: Verify protected services remain available
   ansible.builtin.command:
-    argv: [python3, '-c', "{{ lookup('file',playbook_dir+'/roles/desk_ui/files/ui_guard.py') }}", guard]
+    argv: [python3, '-c', "{{ lookup('file',desk_repo_root+'/roles/desk_ui/files/ui_guard.py') }}", guard]
     stdin: '{{ camera_guard.stdout }}'
   changed_when: false
   no_log: true

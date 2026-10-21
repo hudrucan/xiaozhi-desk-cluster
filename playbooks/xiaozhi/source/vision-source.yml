@@ -1,0 +1,68 @@
+---
+- name: Freeze existing dependencies and runtime bundles on every node
+  hosts: deskboxes
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  tasks:
+    - name: Require an explicit committed and pushed source SHA
+      ansible.builtin.assert:
+        that: xiaozhi_vision_revision | default('') is match('^[0-9a-f]{40}$')
+    - name: Freeze direct runtime layout and prove SDK option compatibility
+      ansible.builtin.command:
+        argv: [/usr/bin/python3, '-', preflight, "{{ xiaozhi_vision_revision }}", "{{ item }}"]
+        stdin: "{{ lookup('ansible.builtin.file', desk_repo_root + '/roles/xiaozhi_vision/files/source_rollout.py') }}"
+      loop: [xiaozhi-worker, xiaozhi-control-plane, xiaozhi-core]
+      register: vision_frozen
+      when: not ansible_check_mode
+      changed_when: false
+    - name: Require one existing desired revision on all services and nodes
+      ansible.builtin.assert:
+        that: >-
+          (item.stdout | from_json).revision ==
+          (hostvars[groups['deskboxes'] | sort | first].vision_frozen.results[0].stdout | from_json).revision
+      loop: "{{ vision_frozen.results }}"
+      when: not ansible_check_mode
+    - name: Stage only reviewed source and require unchanged requirements
+      ansible.builtin.command:
+        argv: [/usr/bin/python3, '-', stage, "{{ xiaozhi_vision_revision }}", "{{ item }}"]
+        stdin: "{{ lookup('ansible.builtin.file', desk_repo_root + '/roles/xiaozhi_vision/files/source_rollout.py') }}"
+      loop: [xiaozhi-worker, xiaozhi-control-plane, xiaozhi-core]
+      when: not ansible_check_mode
+      changed_when: true
+
+- name: Activate all compatible workers first
+  hosts: deskboxes
+  become: true
+  gather_facts: false
+  serial: 1
+  any_errors_fatal: true
+  tasks:
+    - ansible.builtin.include_role:
+        name: xiaozhi_vision
+        tasks_from: activate
+      vars: {vision_unit: xiaozhi-worker}
+
+- name: Activate all HTTP relays before core budget changes
+  hosts: deskboxes
+  become: true
+  gather_facts: false
+  serial: 1
+  any_errors_fatal: true
+  tasks:
+    - ansible.builtin.include_role:
+        name: xiaozhi_vision
+        tasks_from: activate
+      vars: {vision_unit: xiaozhi-control-plane}
+
+- name: Activate the camera-aware cores last
+  hosts: deskboxes
+  become: true
+  gather_facts: false
+  serial: 1
+  any_errors_fatal: true
+  tasks:
+    - ansible.builtin.include_role:
+        name: xiaozhi_vision
+        tasks_from: activate
+      vars: {vision_unit: xiaozhi-core}

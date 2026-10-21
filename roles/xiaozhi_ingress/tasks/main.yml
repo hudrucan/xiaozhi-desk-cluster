@@ -7,7 +7,7 @@
       - xiaozhi_ingress_management is defined
       - ansible_facts.os_family == 'Debian'
       - ansible_facts.architecture in ['aarch64', 'arm64']
-    fail_msg: Run ingress.yml with all three nodes, on Debian ARM64.
+    fail_msg: Run playbooks/ui/ingress.yml with all three nodes, on Debian ARM64.
 
 - name: Evaluate public configuration candidates in check mode
   ansible.builtin.set_fact:
@@ -78,7 +78,7 @@
 
     - name: Prepare the optional native Home Assistant reconnect page
       ansible.builtin.copy:
-        src: '{{ playbook_dir }}/roles/desk_homeassistant/files/starting.html'
+        src: '{{ desk_repo_root }}/roles/desk_homeassistant/files/starting.html'
         dest: /etc/haproxy/desk-homeassistant-starting.html
         mode: '0644'
       when: desk_homeassistant_enabled | default(false) | bool

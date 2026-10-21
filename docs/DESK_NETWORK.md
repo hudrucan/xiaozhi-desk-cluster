@@ -16,8 +16,8 @@ Build the local ARM64 release artifact as described in [Rust checkpoint worker](
 
 ```sh
 python3 scripts/create-network-secret.py
-ansible-playbook -i inventory.ini network.yml --syntax-check
-ansible-playbook -i inventory.ini network.yml
+ansible-playbook -i inventory.ini playbooks/network/network.yml --syntax-check
+ansible-playbook -i inventory.ini playbooks/network/network.yml
 ```
 
 Initial import can retain existing device data with a
@@ -28,8 +28,8 @@ an existing replica head with the initial seed. The first migration requires
 `/var/lib/desk-netalertx-trial/data` on node 1. Later deployments reuse the saved
 seed and each node catches up to the latest certified checkpoint.
 
-For helper/checkpoint changes use `network-helpers.yml --skip-tags homeassistant`.
-Use `network.yml` for the complete deployment.
+For helper/checkpoint changes use `playbooks/network/network-helpers.yml --skip-tags homeassistant`.
+Use `playbooks/network/network.yml` for the complete deployment.
 
 The official ARM64 26.10.0 image is digest-pinned. Podman is packaged, daemonless
 and has no automatic image update/restart jobs. The systemd controller starts
@@ -142,10 +142,10 @@ checkpoints. Lookup results never create devices or mark them online.
 
 
 For an existing installation, deploy the resolver with
-`ansible-playbook -i inventory.ini network-mdns.yml`. This stages all replicas,
+`ansible-playbook -i inventory.ini playbooks/network/network-mdns.yml`. This stages all replicas,
 refreshes cold standby voters one at a time, refreshes the original owner last,
 and waits for one native-ready owner. Only Network is restarted; its UI can
-briefly show the recovery page during promotion/bootstrap. Full `network.yml`
+briefly show the recovery page during promotion/bootstrap. Full `playbooks/network/network.yml`
 installations include the same adapter and policy.
 
 Offline resolver tests use dnspython from `roles/desk_network/tests/requirements.txt`
@@ -156,8 +156,8 @@ fixtures and temporary SQLite files; they do not contact LAN devices or the mode
 
 Enable `desk_network_scan_enabled` and create ignored credentials once with
 `python3 scripts/create-network-scan-secret.py`. Deploy existing nodes using
-`ansible-playbook -i inventory.ini network-distributed.yml`; new installations
-use the same worker tasks from `network.yml`. The NATS role template retains
+`ansible-playbook -i inventory.ini playbooks/network/network-distributed.yml`; new installations
+use the same worker tasks from `playbooks/network/network.yml`. The NATS role template retains
 these users when reapplied. Existing Xiaozhi users, credentials and routes are
 preserved. The narrow rollout validates the existing broker config and reloads
 authorization with SIGHUP; it does not restart NATS.
@@ -220,9 +220,9 @@ loopback NATS broker, fake credentials and fake resolver. It tests real directed
 request/reply and rejects worker/coordinator access to foreign subjects. It does
 not connect to the production broker or perform a LAN scan.
 
-Use `network-scan-workers.yml` for worker-only refreshes; it preserves mounted
+Use `playbooks/network/network-scan-workers.yml` for worker-only refreshes; it preserves mounted
 runtime directories and does not restart the native UI. Mount/policy changes
-require `network-distributed.yml` or the full deployment.
+require `playbooks/network/network-distributed.yml` or the full deployment.
 
 ## Scan progress and inventory freshness
 
@@ -288,7 +288,7 @@ existing majority/expiry rules; planned handoff does not bypass voter TTLs.
 Warm-ready replicas have a candidate preference; existing maintenance/admission
 checks still apply. A cold start or controller restart must preload again.
 
-Shared `desk_network_warm_nodes` selects all three deskboxes. `network-warm.yml`
+Shared `desk_network_warm_nodes` selects all three deskboxes. `playbooks/network/network-warm.yml`
 prepares standby nodes serially, then refreshes the original owner, with readiness,
 voter quarantine and protected-service gates. RAM imports are lost on container
 restart or power loss. Warm promotion still includes restore, application setup,
@@ -373,8 +373,8 @@ ordinary connection/disconnection reports without deleting event history or
 changing device presence, New Device or Device Down semantics. Avoid disabling
 all event reports globally merely to quiet a few randomized phone identities.
 
-Use `network-helpers.yml` for helper/checkpoint changes. Camera controller
-metadata caching has a separate `camera-helpers.yml` rolling update, which leaves
+Use `playbooks/network/network-helpers.yml` for helper/checkpoint changes. Camera controller
+metadata caching has a separate `playbooks/camera/camera-helpers.yml` rolling update, which leaves
 relay definitions and Home Assistant Core unchanged. Its existing
 `PartOf=desk-camera.service` relationship also restarts the thumbnail/playback
 SDK worker; the helper waits for that worker to finish preloading. It checks
@@ -406,7 +406,7 @@ playbook install binary and bridge together under
 `/usr/local/libexec/desk-network/rust` before their caller.
 
 ```sh
-ansible-playbook -i inventory.ini network-helpers.yml --skip-tags homeassistant
+ansible-playbook -i inventory.ini playbooks/network/network-helpers.yml --skip-tags homeassistant
 ```
 
 This entrypoint requires all three nodes, uses warm drain and serial controller

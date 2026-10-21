@@ -1,0 +1,45 @@
+---
+# Opt-in transport core only; does not start app.py or distributed providers.
+- name: Validate all transport core inputs before changing any node
+  hosts: xiaozhi_mqtt_gateways
+  become: true
+  gather_facts: true
+  gather_subset: [min]
+  any_errors_fatal: true
+  vars_files: [../../../vars/vault.yml]
+  tasks:
+    - name: Preflight every core without mutation
+      ansible.builtin.include_role:
+        name: xiaozhi_core
+        tasks_from: preflight
+    - name: Require matching core source and port on all nodes
+      ansible.builtin.assert:
+        that: hostvars[item].xiaozhi_core_rollout == xiaozhi_core_rollout
+      loop: "{{ groups['xiaozhi_mqtt_gateways'] | sort }}"
+      run_once: true
+    - name: Require the same authentication key on all core nodes
+      ansible.builtin.assert:
+        that: hostvars[item].xiaozhi_core_auth_fingerprint == xiaozhi_core_auth_fingerprint
+        # Compare credential fingerprints privately, never publish connection values.
+        quiet: true
+      loop: "{{ groups['xiaozhi_mqtt_gateways'] | sort }}"
+      run_once: true
+      no_log: true
+
+    - name: Require matching optional worker RPC configuration on all nodes
+      ansible.builtin.assert:
+        that: hostvars[item].xiaozhi_core_rpc_fingerprint == xiaozhi_core_rpc_fingerprint
+        quiet: true
+      loop: "{{ groups['xiaozhi_mqtt_gateways'] | sort }}"
+      run_once: true
+      no_log: true
+
+- name: Deploy symmetric transport cores
+  hosts: xiaozhi_mqtt_gateways
+  become: true
+  gather_facts: true
+  gather_subset: [min]
+  serial: 1
+  any_errors_fatal: true
+  vars_files: [../../../vars/vault.yml]
+  roles: [xiaozhi_core]

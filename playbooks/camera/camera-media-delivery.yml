@@ -1,0 +1,200 @@
+---
+# After playbooks/camera/camera-recording-owner.yml: controller ingress first, then Core.
+# A controller restart revokes viewer capabilities, so require idle media.
+- name: Require certified recovery and idle media before delivery maintenance
+  hosts: deskboxes
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  tasks:
+    - ansible.builtin.assert:
+        that:
+          - ansible_play_hosts_all | sort == ['deskb1x','deskb2x','deskb3x']
+    - name: Freeze unrelated production services
+      ansible.builtin.command:
+        argv: [python3, '-c', "{{ lookup('file',desk_repo_root+'/roles/desk_ui/files/ui_guard.py') }}", freeze]
+      register: delivery_guard
+      changed_when: false
+      no_log: true
+    - name: Capture Core readiness
+      ansible.builtin.uri:
+        url: 'http://{{ cluster_ip }}:20223/status'
+        use_proxy: false
+      register: delivery_before
+    - ansible.builtin.assert:
+        that:
+          - delivery_before.json.sync == 'synced'
+          - delivery_before.json.voter_ready
+          - not delivery_before.json.ready or (delivery_before.json.error == None and delivery_before.json.pending_disk_changes == false)
+          - groups['deskboxes'] | map('extract',hostvars,'delivery_before') | map(attribute='json') | selectattr('ready','equalto',true) | list | length == 1
+    - name: Require idle workers and matching owner authority
+      ansible.builtin.command:
+        argv:
+          - python3
+          - -c
+          - |
+            import json,pathlib,socket
+            with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as s:
+                s.settimeout(3);s.connect('/run/desk-camera-thumbnails/worker.sock')
+                s.sendall(b'{"action":"status","id":"00000000000000000000000000000000"}\n')
+                v=json.loads(s.makefile('rb').readline())
+                assert v['ok'] and not v['value']['busy'] and not v['value']['media']['busy'], 'Media busy'
+            a=json.loads(pathlib.Path('/etc/desk-camera/recording-policy/owner.json').read_bytes())
+            b=json.loads(pathlib.Path('/etc/desk-camera/recording-core-policy.json').read_bytes())
+            assert a==b and set(a['workloads'])=={'tapo_c222_160','tapo_c222_163'}
+      changed_when: false
+
+- name: Install independent delivery on one controller at a time
+  hosts: deskboxes
+  become: true
+  gather_facts: false
+  serial: 1
+  any_errors_fatal: true
+  tasks:
+    - name: Install controller and its delivery helper with rollback copies
+      ansible.builtin.copy:
+        src: "{{ desk_repo_root }}/roles/desk_camera/files/{{ item }}"
+        dest: '/usr/local/libexec/desk-camera/{{ item }}'
+        mode: '0600'
+        backup: true
+        validate: /usr/bin/python3 -c "import ast,sys; ast.parse(open(sys.argv[1]).read())" %s
+      loop: [media_delivery.py, controller.py]
+      register: delivery_sources
+    - ansible.builtin.systemd_service:
+        name: desk-camera
+        state: restarted
+      when: delivery_sources.changed
+    - name: Wait for camera voter and transport
+      ansible.builtin.uri:
+        url: 'http://{{ cluster_ip }}:20226/status'
+        use_proxy: false
+      register: delivery_voter
+      until: delivery_voter.json.voter_ready | default(false) and delivery_voter.json.transport.connected | default(false)
+      retries: 35
+      delay: 2
+    - name: Wait for warm SDK runtime
+      ansible.builtin.command:
+        argv:
+          - python3
+          - -c
+          - |
+            import socket,json
+            with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as s:
+                s.settimeout(3);s.connect('/run/desk-camera-thumbnails/worker.sock')
+                s.sendall(b'{"action":"status","id":"00000000000000000000000000000000"}\n')
+                v=json.loads(s.makefile('rb').readline())
+                assert v['ok'] and 'media' in v['value']
+      register: delivery_warm
+      until: delivery_warm.rc == 0
+      retries: 40
+      delay: 2
+      changed_when: false
+
+- name: Load direct ingress before issuing browser capabilities
+  hosts: deskboxes
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  tasks:
+    - ansible.builtin.template:
+        src: "{{ desk_repo_root }}/roles/desk_homeassistant/templates/proxy.cfg.j2"
+        dest: /etc/desk-homeassistant/proxy.cfg
+        mode: '0644'
+        backup: true
+    - name: Validate combined HAProxy configuration and reload only its HA fragment
+      ansible.builtin.command:
+        argv: [python3, /usr/local/libexec/desk-homeassistant/install_proxy.py]
+      register: delivery_ingress
+      changed_when: "'changed' in delivery_ingress.stdout and 'unchanged' not in delivery_ingress.stdout"
+    - name: Stage the root bridge
+      ansible.builtin.copy:
+        src: "{{ desk_repo_root }}/roles/desk_homeassistant/files/ui_bridge.py"
+        dest: /usr/local/libexec/desk-homeassistant/ui_bridge.py
+        mode: '0700'
+        backup: true
+        validate: /usr/bin/python3 -c "import ast,sys; ast.parse(open(sys.argv[1]).read())" %s
+    - name: Stage the owned Core viewer lifetime
+      ansible.builtin.copy:
+        src: "{{ desk_repo_root }}/roles/desk_homeassistant/files/desk_cluster/{{ item }}"
+        dest: '/usr/local/libexec/desk-homeassistant/desk_cluster/{{ item }}'
+        mode: '0644'
+        backup: true
+        validate: /usr/bin/python3 -c "import ast,sys; ast.parse(open(sys.argv[1]).read())" %s
+      loop: [__init__.py, recording_sessions.py]
+    - ansible.builtin.copy:
+        src: "{{ desk_repo_root }}/roles/desk_homeassistant/files/desk_cluster/camera-card.js"
+        dest: /usr/local/libexec/desk-homeassistant/desk_cluster/camera-card.js
+        mode: '0644'
+        backup: true
+    - ansible.builtin.group_by:
+        key: "delivery_{{ 'core' if delivery_before.json.ready else 'standby' }}"
+
+- name: Load the bridge on standby agents first
+  hosts: delivery_standby
+  become: true
+  gather_facts: false
+  serial: 1
+  any_errors_fatal: true
+  tasks:
+    - ansible.builtin.systemd_service:
+        name: desk-homeassistant
+        state: restarted
+    - ansible.builtin.uri:
+        url: 'http://{{ cluster_ip }}:20223/status'
+        use_proxy: false
+      register: delivery_standby_ready
+      until: delivery_standby_ready.json.voter_ready | default(false) and delivery_standby_ready.json.sync | default('') == 'synced'
+      retries: 35
+      delay: 2
+
+- name: Certify viewer changes through a clean idle Core handoff
+  hosts: delivery_core
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  tasks:
+    - ansible.builtin.command:
+        argv: [/opt/desk-homeassistant/bin/python, /usr/local/libexec/desk-homeassistant/agent.py, --action, handoff]
+    - ansible.builtin.systemd_service:
+        name: desk-homeassistant
+        state: restarted
+
+- name: Verify certified recovery and isolation
+  hosts: deskboxes
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  tasks:
+    - name: Require one guarded Core and unique camera owners
+      ansible.builtin.command:
+        argv:
+          - python3
+          - -c
+          - |
+            import json,urllib.request
+            o=urllib.request.build_opener(urllib.request.ProxyHandler({}))
+            def get(ip,port,path='/status'):return json.load(o.open('http://'+ip+':'+str(port)+path,timeout=3))
+            ips=['10.10.10.'+str(i) for i in (11,12,13)]
+            states=[get(ip,20223) for ip in ips]
+            assert sum(v['ready'] for v in states)==1 and len({v['checkpoint_revision'] for v in states})==1
+            assert all(v['sync']=='synced' and v['voter_ready'] for v in states)
+            ip,v=next((ip,v) for ip,v in zip(ips,states) if v['ready'])
+            assert v['error'] is None and v['pending_disk_changes'] is False
+            assert get(ip,18123,'/api/desk_cluster/ready')['recording_authority']['before_native_setup']
+            assert b'function delivery(result,scope)' in o.open('http://'+ip+':18123/desk-cluster-assets/camera-card.js').read()
+            cams=[get(ip,20226) for ip in ips]
+            assert all(v['voter_ready'] and v['transport']['connected'] for v in cams)
+            for w in ('tapo_c222_160','tapo_c222_161','tapo_c222_163'):
+                assert sum(c['local_ready'] for v in cams for c in v['cameras'] if c['workload']==w)==1
+            print('Independent viewer client, guarded Core, recovery 3/3, unique camera owners: PASS')
+      register: delivery_certified
+      until: delivery_certified.rc == 0
+      retries: 90
+      delay: 3
+      changed_when: false
+      run_once: true
+    - ansible.builtin.command:
+        argv: [python3, '-c', "{{ lookup('file',desk_repo_root+'/roles/desk_ui/files/ui_guard.py') }}", guard]
+        stdin: '{{ delivery_guard.stdout }}'
+      changed_when: false
+      no_log: true

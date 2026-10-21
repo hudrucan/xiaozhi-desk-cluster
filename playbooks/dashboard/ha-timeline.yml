@@ -1,0 +1,95 @@
+---
+- name: Update bounded HA timeline metadata without executing node operations
+  hosts: deskboxes
+  become: true
+  gather_facts: false
+  serial: 1
+  any_errors_fatal: true
+  tasks:
+    - name: Require explicitly enabled existing node controller
+      ansible.builtin.assert:
+        that: desk_node_control_enabled | default(false) | bool
+    - name: Require no active operation before restarting the metadata controller
+      ansible.builtin.uri:
+        url: "http://{{ cluster_ip }}:{{ desk_node_control_port | default(8011) }}/api/cluster/operations"
+        timeout: 20
+        use_proxy: false
+      register: existing_operation
+      until: existing_operation.status == 200 and (existing_operation.json.operation is not none and existing_operation.json.operation.state == 'rejoined' or existing_operation.json.operation is none and existing_operation.json.idle_confirmed | default(false))
+      retries: 6
+      delay: 3
+      changed_when: false
+    - ansible.builtin.assert:
+        that:
+          - existing_operation.json.operation is none or existing_operation.json.operation.state == 'rejoined'
+          - existing_operation.json.operation is not none or existing_operation.json.idle_confirmed | default(false)
+    - name: Freeze protected runtime and policy
+      ansible.builtin.command:
+        argv: [/usr/bin/python3, '-c', "{{ lookup('ansible.builtin.file', desk_repo_root + '/roles/desk_ui/files/ui_guard.py') }}", freeze]
+      register: protected_before
+      changed_when: false
+      no_log: true
+    - name: Stage a RAM-only rollback copy
+      ansible.builtin.tempfile:
+        state: directory
+        path: /run
+        prefix: desk-ha-timeline-
+      register: rollback
+    - ansible.builtin.copy:
+        src: /usr/local/libexec/desk-node-control/node-control.py
+        dest: "{{ rollback.path }}/node-control.py"
+        remote_src: true
+        mode: '0755'
+    - block:
+        - name: Install only the HA metadata additions
+          ansible.builtin.copy:
+            src: "{{ desk_repo_root }}/roles/desk_node_control/files/node_control.py"
+            dest: /usr/local/libexec/desk-node-control/node-control.py
+            mode: '0755'
+            validate: /usr/bin/python3 -c "import ast,sys; ast.parse(open(sys.argv[1]).read())" %s
+          register: source
+        - ansible.builtin.systemd_service:
+            name: desk-node-control
+            state: "{{ 'restarted' if source.changed else 'started' }}"
+        - name: Require the existing action controller health
+          ansible.builtin.uri:
+            url: "http://{{ cluster_ip }}:{{ desk_node_control_port | default(8011) }}/health"
+            use_proxy: false
+            timeout: 4
+          register: ready
+          until: ready.status == 200
+          retries: 15
+          delay: 2
+          changed_when: false
+        - name: Require bounded history with no action scheduled
+          ansible.builtin.uri:
+            url: "http://{{ cluster_ip }}:{{ desk_node_control_port | default(8011) }}/api/cluster/operations"
+            use_proxy: false
+            timeout: 20
+          register: candidate
+          changed_when: false
+        - ansible.builtin.assert:
+            that:
+              - candidate.json.history is defined
+              - candidate.json.history | length <= 4
+              - candidate.json.operation is none or candidate.json.operation.state == 'rejoined'
+        - name: Verify voice DNS VIP services and policies are unchanged
+          ansible.builtin.command:
+            argv: [/usr/bin/python3, '-c', "{{ lookup('ansible.builtin.file', desk_repo_root + '/roles/desk_ui/files/ui_guard.py') }}", guard]
+            stdin: "{{ protected_before.stdout }}"
+          changed_when: false
+      rescue:
+        - ansible.builtin.systemd_service: {name: desk-node-control, state: stopped}
+        - ansible.builtin.copy:
+            src: "{{ rollback.path }}/node-control.py"
+            dest: /usr/local/libexec/desk-node-control/node-control.py
+            remote_src: true
+            mode: '0755'
+        - name: Remove only additive display metadata for legacy state-reader compatibility
+          ansible.builtin.command:
+            argv: [/usr/bin/python3, '-c', "import json,os; from pathlib import Path; p=Path('/var/lib/desk-node-control/state.json'); d=json.loads(p.read_text()) if p.exists() else None; d.pop('history',None) if d is not None else None; t=p.with_suffix('.rollback'); t.write_text(json.dumps(d)) if d is not None else None; os.chmod(t,0o600) if d is not None else None; os.replace(t,p) if d is not None else None"]
+        - ansible.builtin.systemd_service: {name: desk-node-control, state: restarted}
+        - ansible.builtin.fail:
+            msg: HA metadata rollout failed; original controller restored. No node operation was requested.
+      always:
+        - ansible.builtin.file: {path: "{{ rollback.path }}", state: absent}

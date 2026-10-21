@@ -1,0 +1,92 @@
+---
+- name: Stage manual online sync without changing other cluster services
+  hosts: deskboxes
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  tasks:
+    - name: Freeze protected services
+      ansible.builtin.command:
+        argv: [python3, '-c', "{{ lookup('file',desk_repo_root+'/roles/desk_ui/files/ui_guard.py') }}", freeze]
+      register: online_sync_protected
+      changed_when: false
+      no_log: true
+    - name: Identify the current ready owner
+      ansible.builtin.uri:
+        url: 'http://{{ cluster_ip }}:20223/status'
+        use_proxy: false
+      register: online_sync_before
+    - name: Require a healthy starting point
+      ansible.builtin.assert:
+        that:
+          - online_sync_before.json.sync == 'synced'
+          - online_sync_before.json.error == None
+          - online_sync_before.json.state == 'standby' or online_sync_before.json.ready
+    - name: Retain the original helper source once for rollback
+      ansible.builtin.command:
+        argv: [cp, -a, /usr/local/libexec/desk-homeassistant, /var/lib/desk-homeassistant/online-sync-upgrade-backup]
+        creates: /var/lib/desk-homeassistant/online-sync-upgrade-backup
+    - name: Stage online helpers
+      ansible.builtin.copy:
+        src: "{{ desk_repo_root }}/roles/desk_homeassistant/files/{{ item }}"
+        dest: '/usr/local/libexec/desk-homeassistant/{{ item }}'
+        mode: '0700'
+      loop: [agent.py, snapshot.py, runtime.py, ui_bridge.py, component_config.py, recording_bootstrap.py]
+    - name: Stage the native themed Cluster panel
+      ansible.builtin.copy:
+        src: "{{ desk_repo_root }}/roles/desk_homeassistant/files/desk_cluster/"
+        dest: /usr/local/libexec/desk-homeassistant/desk_cluster/
+        mode: '0644'
+        directory_mode: '0755'
+    - ansible.builtin.group_by:
+        key: "online_sync_{{ 'owner' if online_sync_before.json.ready else 'standby' }}"
+
+- name: Refresh standby controllers first
+  hosts: online_sync_standby
+  become: true
+  gather_facts: false
+  serial: 1
+  any_errors_fatal: true
+  tasks:
+    - ansible.builtin.systemd_service:
+        name: desk-homeassistant
+        state: restarted
+    - ansible.builtin.uri:
+        url: 'http://{{ cluster_ip }}:20223/status'
+        use_proxy: false
+      register: online_sync_standby_ready
+      until: online_sync_standby_ready.json.voter_ready and online_sync_standby_ready.json.sync == 'synced'
+      retries: 25
+      delay: 2
+
+- name: Preserve current config before the one required Core restart
+  hosts: online_sync_owner
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  tasks:
+    - name: Clean checkpoint and planned handoff
+      ansible.builtin.command:
+        argv: [/opt/desk-homeassistant/bin/python, /usr/local/libexec/desk-homeassistant/agent.py, --action, handoff]
+    - ansible.builtin.systemd_service:
+        name: desk-homeassistant
+        state: restarted
+
+- name: Verify native readiness and protected services
+  hosts: deskboxes
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  tasks:
+    - ansible.builtin.command:
+        argv: [python3, '-c', "import urllib.request,json; o=urllib.request.build_opener(urllib.request.ProxyHandler({})); s=[json.load(o.open('http://10.10.10.'+str(i)+':20223/status',timeout=3)) for i in (11,12,13)]; assert sum(v['ready'] for v in s)==1; assert len({v['checkpoint_revision'] for v in s})==1; assert all(v['sync']=='synced' for v in s); print('One ready Core, certified recovery 3/3')"]
+      register: online_sync_ready
+      until: online_sync_ready.rc == 0
+      retries: 75
+      delay: 3
+      changed_when: false
+    - ansible.builtin.command:
+        argv: [python3, '-c', "{{ lookup('file',desk_repo_root+'/roles/desk_ui/files/ui_guard.py') }}", guard]
+        stdin: '{{ online_sync_protected.stdout }}'
+      changed_when: false
+      no_log: true

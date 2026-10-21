@@ -31,8 +31,8 @@ metadata/filter/backend validation remains in deployment verification.
 For the current installed cluster, use:
 
 ```bash
-ansible-playbook -i inventory.ini healthchecks.yml --check
-ansible-playbook -i inventory.ini healthchecks.yml
+ansible-playbook -i inventory.ini playbooks/cluster/healthchecks.yml --check
+ansible-playbook -i inventory.ini playbooks/cluster/healthchecks.yml
 ```
 
 The dedicated playbook installs the helper everywhere, checks live readiness and
@@ -42,7 +42,7 @@ and sends SIGHUP serially to active processes. Inactive instances stay inactive.
 Per-node guards retain VIP ownership, protected service PIDs and non-VRRP
 configuration. A failed candidate/guard restores that attempt's exact original
 configs and reloads active instances. Legacy DNS config and ingress module backups
-are retained on the nodes. The normal `ingress.yml`, `dns.yml` and `dns-ipv6.yml`
+are retained on the nodes. The normal `playbooks/ui/ingress.yml`, `playbooks/dns/dns.yml` and `playbooks/dns/dns-ipv6.yml`
 install the helper before rendering native commands when the flag is enabled;
 disabling the flag renders the original Python commands in those normal playbooks.
 

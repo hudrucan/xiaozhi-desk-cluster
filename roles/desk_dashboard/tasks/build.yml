@@ -1,7 +1,7 @@
 ---
 - name: Resolve the source-addressed native dashboard artifact
   ansible.builtin.set_fact:
-    dashboard_artifact: "/private/tmp/desk-dashboard-build/{{ lookup('ansible.builtin.file', playbook_dir + '/roles/desk_dashboard/files/dashboard.go') | hash('sha256') }}/desk-dashboard"
+    dashboard_artifact: "/private/tmp/desk-dashboard-build/{{ lookup('ansible.builtin.file', desk_repo_root + '/roles/desk_dashboard/files/dashboard.go') | hash('sha256') }}/desk-dashboard"
 - name: Create the controller artifact cache
   ansible.builtin.file:
     path: "{{ dashboard_artifact | dirname }}"
@@ -11,7 +11,7 @@
   become: false
 - name: Build the standard-library-only ARM64 dashboard on the controller
   ansible.builtin.command:
-    argv: [go, build, -trimpath, -ldflags, '-s -w -buildid=', -o, "{{ dashboard_artifact }}", "{{ playbook_dir }}/roles/desk_dashboard/files/dashboard.go"]
+    argv: [go, build, -trimpath, -ldflags, '-s -w -buildid=', -o, "{{ dashboard_artifact }}", "{{ desk_repo_root }}/roles/desk_dashboard/files/dashboard.go"]
     creates: "{{ dashboard_artifact }}"
   environment:
     GOOS: linux

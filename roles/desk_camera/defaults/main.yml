@@ -9,5 +9,5 @@ desk_camera_progressive: true
 # Opt-in owner-side status polling; cutover is camera-observations.yml.
 desk_camera_observation_workloads: []
 
-# Selected native PTZ/preset/privacy methods; only camera-commands.yml activates writes.
+# Selected native PTZ/preset/privacy methods; only playbooks/camera/camera-commands.yml activates writes.
 desk_camera_command_workloads: []

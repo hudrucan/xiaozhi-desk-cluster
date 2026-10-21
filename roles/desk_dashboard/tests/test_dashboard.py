@@ -64,7 +64,7 @@ class DashboardTests(unittest.TestCase):
     def test_yaml_and_python_sources_parse(self):
         for path in ROOT.joinpath('roles/desk_dashboard').rglob('*.yml'):
             yaml.safe_load(path.read_text())
-        yaml.safe_load(ROOT.joinpath('desk-dashboard.yml').read_text())
+        yaml.safe_load(ROOT.joinpath('playbooks/dashboard/desk-dashboard.yml').read_text())
         for path in [ROOT/'roles/desk_monitoring/files/install_proxy.py', ROOT/'roles/desk_ui/files/ui_guard.py']:
             ast.parse(path.read_text())
 

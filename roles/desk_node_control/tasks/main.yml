@@ -4,14 +4,14 @@
   block:
     - name: Create ignored controller action-key directory
       ansible.builtin.file:
-        path: "{{ playbook_dir }}/secret"
+        path: "{{ desk_repo_root }}/secret"
         state: directory
         mode: '0700'
       delegate_to: localhost
       become: false
     - name: Resolve a dedicated shared peer action key
       ansible.builtin.set_fact:
-        node_control_key: "{{ lookup('ansible.builtin.password', playbook_dir + '/secret/desk-node-control.key', length=64, chars=['hexdigits']) }}"
+        node_control_key: "{{ lookup('ansible.builtin.password', desk_repo_root + '/secret/desk-node-control.key', length=64, chars=['hexdigits']) }}"
       no_log: true
     - name: Use the applied ingress VIP as the allowed public origin
       ansible.builtin.command:

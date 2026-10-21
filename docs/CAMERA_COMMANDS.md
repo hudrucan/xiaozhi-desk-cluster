@@ -93,12 +93,12 @@ attempts, not camera-enforced exactly-once physical execution or partition fenci
 
 ## Deployment and rollback
 
-`camera-commands.yml` defaults to **Guess only** (`tapo_c222_163`). It requires
+`playbooks/camera/camera-commands.yml` defaults to **Guess only** (`tapo_c222_163`). It requires
 owner observations and synced three-node recovery, and issues no physical
 camera command itself. With idle media:
 
 ```bash
-ansible-playbook -i inventory.ini camera-commands.yml
+ansible-playbook -i inventory.ini playbooks/camera/camera-commands.yml
 ```
 
 The ordered stages can also be run separately with `--tags workers`, then
@@ -115,7 +115,7 @@ Core guard. Generic role defaults remain empty. Forward
 rollout rejects authority removal; use the ordered rollback instead:
 
 ```bash
-ansible-playbook -i inventory.ini camera-commands.yml \
+ansible-playbook -i inventory.ini playbooks/camera/camera-commands.yml \
   -e desk_camera_commands_disable=true
 ```
 
