@@ -1,5 +1,6 @@
 ---
-# Fast-path rollout for desk-network Python helpers and checkpoint slice only.
+# Fast-path rollout for Desk Network helpers and checkpoint workers.
+# Use --skip-tags homeassistant for a Desk Network-only deployment.
 # Use this instead of network.yml when the only changes are in:
 #   roles/desk_network/files/{ha.py,checkpoint_budget.py,...}
 #   roles/desk_homeassistant/files/agent.py   (election score only)
@@ -30,17 +31,20 @@
       changed_when: false
       no_log: true
 
+    - name: Install checkpoint worker before its parent
+      ansible.builtin.include_tasks: roles/desk_network/tasks/checkpoint_worker.yml
+
     - name: Install bounded lease, snapshot and checkpoint helpers
       ansible.builtin.copy:
         src: 'roles/desk_network/files/{{ item }}'
         dest: '/usr/local/libexec/desk-network/{{ item }}'
         mode: '0755'
-        backup: true
         validate: /usr/bin/python3 -c "import ast,sys; ast.parse(open(sys.argv[1]).read())" %s
       loop: [checkpoint_source.py, peer_http.py, checkpoint_budget.py, bootstrap.py, discovery.py, api_read_cache.py, warm_runtime.py, ha.py]
       register: network_helpers_files
 
     - name: Install Home Assistant election agent (score weights)
+      tags: homeassistant
       ansible.builtin.copy:
         src: roles/desk_homeassistant/files/agent.py
         dest: /usr/local/libexec/desk-homeassistant/agent.py
@@ -55,14 +59,21 @@
         mode: '0644'
       register: network_helpers_slice
 
+    - name: Install controller cgroup cleanup contract
+      ansible.builtin.template:
+        src: roles/desk_network/templates/desk-network.service.j2
+        dest: /etc/systemd/system/desk-network.service
+        mode: '0644'
+      register: network_helpers_unit
+
     - name: Reload systemd if slice changed
       ansible.builtin.systemd_service:
         daemon_reload: true
-      when: network_helpers_slice.changed
+      when: network_helpers_slice.changed or network_helpers_unit.changed
 
     - name: Remember whether a rolling restart is needed
       ansible.builtin.set_fact:
-        network_helpers_restart: '{{ network_helpers_files.changed or network_helpers_slice.changed }}'
+        network_helpers_restart: '{{ network_checkpoint_artifacts.changed or network_helpers_files.changed or network_helpers_slice.changed or network_helpers_unit.changed }}'
 
     - name: Verify protected services unchanged
       ansible.builtin.command:
@@ -77,6 +88,48 @@
   any_errors_fatal: true
   serial: 1
   tasks:
+    - name: Read state before the serial controller refresh
+      ansible.builtin.uri:
+        url: 'http://{{ cluster_ip }}:20213/network/desk/status'
+        use_proxy: false
+        timeout: 3
+      register: network_helpers_state
+      when: network_helpers_restart | default(false)
+
+    - name: Request the existing checkpoint and warm owner handoff
+      ansible.builtin.file:
+        path: /run/desk-network/warm-drain
+        state: touch
+        mode: '0600'
+      when:
+        - network_helpers_restart | default(false)
+        - network_helpers_state.json.state == 'active'
+
+    - name: Wait for owner to hand off before restarting it
+      ansible.builtin.uri:
+        url: 'http://{{ cluster_ip }}:20213/network/desk/status'
+        use_proxy: false
+        timeout: 3
+      register: network_helpers_drained
+      until: network_helpers_drained.json.state | default('') == 'standby' and network_helpers_drained.json.sync | default('') == 'synced'
+      retries: 40
+      delay: 2
+      when:
+        - network_helpers_restart | default(false)
+        - network_helpers_state.json.state == 'active'
+
+    - name: Require the replacement owner before restarting a drained replica
+      ansible.builtin.command:
+        argv: [python3, /usr/local/libexec/desk-network/verify_ready.py]
+      register: network_helpers_handoff
+      until: network_helpers_handoff.rc == 0
+      retries: 40
+      delay: 3
+      changed_when: false
+      when:
+        - network_helpers_restart | default(false)
+        - network_helpers_state.json.state == 'active'
+
     - name: Restart controller only if files changed
       ansible.builtin.systemd_service:
         name: desk-network
@@ -89,13 +142,14 @@
         use_proxy: false
         timeout: 3
       register: network_helpers_voter
-      until: network_helpers_voter.json.voter_ready | default(false)
-      retries: 20
-      delay: 2
+      until: network_helpers_voter.json.voter_ready | default(false) and network_helpers_voter.json.sync | default('') == 'synced' and network_helpers_voter.json.warm_state | default('') in ['inactive', 'active']
+      retries: 65
+      delay: 3
       changed_when: false
       when: hostvars[inventory_hostname].network_helpers_restart | default(false)
 
 - name: Restart Home Assistant agent on standby nodes only
+  tags: homeassistant
   hosts: deskboxes
   become: true
   gather_facts: false
@@ -146,4 +200,12 @@
       retries: 50
       delay: 3
       until: network_helpers_ready.rc == 0
+      changed_when: false
+
+    - name: Recheck protected services on every replica after rolling restarts
+      ansible.builtin.command:
+        argv: [python3, '-c', "{{ lookup('file',playbook_dir+'/roles/desk_ui/files/ui_guard.py') }}", guard]
+        stdin: '{{ hostvars[item].network_helpers_before.stdout }}'
+      delegate_to: '{{ item }}'
+      loop: '{{ groups["deskboxes"] }}'
       changed_when: false

@@ -1,0 +1,20 @@
+{
+  "python": "3.14.7",
+  "sqlite": "3.53.4",
+  "cases": {
+    "legacy": {
+      "sha256": "878757a7219637b0ebbff3b0a446a132c20b0f76c31f63c2fd9627c6695c4225",
+      "size": 325,
+      "database_sha256": "0bb80f7df24c4f1e4c5b30f2956be1db2ecf5ce403caea3a5863c5050ad79484",
+      "configuration": "QVJQU0NBTl9SVU5fU0NIRD0nKi81ICogKiAqIConCg==",
+      "workflows": null
+    },
+    "workflows": {
+      "sha256": "33a36e26b2848ac0c9c9f469c0013451f873c0cce6a0a800acacd920fcc472bc",
+      "size": 365,
+      "database_sha256": "0bb80f7df24c4f1e4c5b30f2956be1db2ecf5ce403caea3a5863c5050ad79484",
+      "configuration": "IyBmaXh0dXJlClRJTUVaT05FPSdVVEMnCg==",
+      "workflows": "W3sibmFtZSI6ImZpeHR1cmUiLCJlbmFibGVkIjoiTm8ifV0="
+    }
+  }
+}

@@ -1,5 +1,6 @@
 """Bound checkpoint CPU independently of the lease/fencing controller."""
 import pathlib
+import re
 import secrets
 import shutil
 import subprocess
@@ -29,12 +30,57 @@ SLICE = 'desk-network-checkpoint.slice'
 _WORKER_MEMORY_MAX = '384M'
 
 
+class WorkerNotStopped(RuntimeError):
+    """Retain private scratch until worker termination can be confirmed."""
+
+
+def stop_worker(unit):
+    if not re.fullmatch(r'desk-network-checkpoint-[0-9a-f]{24}\.service', unit):
+        raise WorkerNotStopped('Invalid checkpoint unit marker')
+    def state():
+        result = subprocess.run(['/usr/bin/systemctl', 'show', unit,
+                                 '-p', 'LoadState', '-p', 'ActiveState', '-p', 'ControlGroup'],
+                                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                text=True, timeout=5, check=False)
+        values = dict(line.split('=', 1) for line in result.stdout.splitlines() if '=' in line)
+        if values.get('LoadState') == 'not-found':
+            return values
+        if result.returncode or values.get('LoadState') != 'loaded':
+            raise WorkerNotStopped('Checkpoint unit state unavailable')
+        return values
+    try:
+        before = state()
+        if before['LoadState'] == 'not-found':
+            return
+        subprocess.run(['/usr/bin/systemctl', 'stop', unit], stdout=subprocess.DEVNULL,
+                       stderr=subprocess.DEVNULL, timeout=5, check=False)
+        after = state()
+        if after['LoadState'] != 'not-found' and after.get('ActiveState') not in ('inactive', 'failed'):
+            raise WorkerNotStopped('Checkpoint unit still active')
+        for group in {before.get('ControlGroup', ''), after.get('ControlGroup', '')} - {''}:
+            events = pathlib.Path('/sys/fs/cgroup') / group.lstrip('/') / 'cgroup.events'
+            try:
+                values = dict(line.split() for line in events.read_text().splitlines())
+            except FileNotFoundError:
+                continue  # The entire worker cgroup has been removed.
+            if values.get('populated') != '0':
+                raise WorkerNotStopped('Checkpoint cgroup still populated')
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        raise WorkerNotStopped('Checkpoint worker termination unconfirmed') from None
+
+
 def execute(command, blob=None):
     # macOS is a source/test host, never a supported production cluster node.
     if sys.platform != 'linux':
         return subprocess.run(command, input=blob, stdout=subprocess.PIPE,
                               stderr=subprocess.PIPE, check=True, timeout=TIMEOUT)
     unit = 'desk-network-checkpoint-' + secrets.token_hex(12) + '.service'
+    if '--run' in command:
+        private = pathlib.Path(command[command.index('--run') + 1])
+        # Publish before launching; parent-crash recovery never loses the unit ID.
+        pending = private / 'worker.unit.tmp'
+        pending.write_text(unit)
+        pending.replace(private / 'worker.unit')
     runner = ['/usr/bin/systemd-run', '--quiet', '--pipe', '--wait', '--collect',
               '--unit=' + unit, '--slice=' + SLICE,
               '--property=BindsTo=desk-network.service',
@@ -47,36 +93,34 @@ def execute(command, blob=None):
     try:
         return subprocess.run(runner, input=blob, stdout=subprocess.PIPE,
                               stderr=subprocess.PIPE, check=True, timeout=TIMEOUT)
-    except BaseException:
-        # Killing systemd-run alone must not leave the worker consuming CPU.
+    finally:
+        # Covers success, worker failure, runner timeout and caller interruption.
+        # A failed confirmation tells the parent to retain scratch for recovery.
         try:
-            subprocess.run(['/usr/bin/systemctl', 'stop', unit],
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                           timeout=5, check=False)
-        except (OSError, subprocess.TimeoutExpired):
-            pass  # RuntimeMaxSec/BindsTo remain the independent final fence.
-        raise
+            stop_worker(unit)
+        except BaseException as error:
+            if isinstance(error, WorkerNotStopped):
+                raise
+            raise WorkerNotStopped('Checkpoint worker termination unconfirmed') from None
 
 
 def sweep_stale_sqlite(run_dir, min_age_seconds=0.0):
-    """One-time startup sweep for sqlite-*.db files left by the old codebase.
+    """Recover marked workers before serving requests, plus legacy SQLite orphans.
 
-    The current snapshot_worker() gives every worker its own isolated scratch
-    directory (ckpt-<hex>/) and shutil.rmtree()s it after the subprocess exits,
-    so no sqlite-*.db files can ever be orphaned under the new code.
-
-    This function is kept only to clean up files that were orphaned by OOM-killed
-    workers running the *previous* version (mtime-based approach) and that may
-    still be present in the run-dir after an in-place upgrade.  It should be
-    called once at process startup, before any worker runs, to purge anything
-    left over, and is otherwise a no-op on a clean node.  Orphaned ckpt-*
-    scratch dirs (service SIGKILLed mid-rmtree) are removed the same way.
+    A marker survives parent death; stop/confirm its unit before removing files.
+    Unmarked directories predate this contract or died before launching a worker.
+    Systemd must finish stopping the old controller cgroup (including pending
+    launchers) before restarting it; its service uses KillMode=control-group.
+    Never run this sweep concurrently with new checkpoint requests.
     """
     run = pathlib.Path(run_dir)
     now = time.time()
     for d in run.glob('ckpt-*'):
         if d.is_dir():
-            shutil.rmtree(d, ignore_errors=True)
+            marker = d / 'worker.unit'
+            if marker.exists():
+                stop_worker(marker.read_text())
+            shutil.rmtree(d)
     for pattern in ('sqlite-*.db', 'sqlite-*.db-journal',
                     'sqlite-*.db-wal', 'sqlite-*.db-shm'):
         for p in run.glob(pattern):

@@ -1,0 +1,19 @@
+---
+- name: Keep private Rust checkpoint executables beside Python helpers
+  ansible.builtin.file:
+    path: /usr/local/libexec/desk-network/rust
+    state: directory
+    mode: '0700'
+- name: Install the matched ARM64 worker and policy bridge
+  ansible.builtin.copy:
+    src: '{{ playbook_dir }}/tools/desk-checkpoint/{{ item.src }}'
+    dest: '/usr/local/libexec/desk-network/rust/{{ item.name }}'
+    mode: '{{ item.mode }}'
+  loop:
+    - {src: target/aarch64-unknown-linux-gnu/release/desk-checkpoint, name: desk-checkpoint, mode: '0700'}
+    - {src: bridge.py, name: bridge.py, mode: '0600'}
+  register: network_checkpoint_artifacts
+- name: Remove retired Python checkpoint rollback
+  ansible.builtin.file:
+    path: /var/lib/desk-network/checkpoint-python
+    state: absent

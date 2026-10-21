@@ -47,6 +47,8 @@
   ansible.builtin.set_fact:
     network_credentials: "{{ lookup('file',playbook_dir+'/secret/network/credentials.json') | from_json }}"
   no_log: true
+- name: Install checkpoint worker before its parent
+  ansible.builtin.include_tasks: checkpoint_worker.yml
 - name: Install bounded lease, snapshot and prefix helpers
   ansible.builtin.copy:
     src: '{{ item }}'
@@ -240,7 +242,7 @@
   changed_when: false
 - name: Remember whether the controller requires a rolling refresh
   ansible.builtin.set_fact:
-    network_restart: '{{ network_helpers.changed or network_warm_helpers.changed or network_config.changed or network_policy.changed or network_unit.changed or network_startup_hook.changed or network_language.changed or network_tls.changed or network_opcache_module.changed or network_opcache_config.changed }}'
+    network_restart: '{{ network_checkpoint_artifacts.changed or network_helpers.changed or network_warm_helpers.changed or network_config.changed or network_policy.changed or network_unit.changed or network_startup_hook.changed or network_language.changed or network_tls.changed or network_opcache_module.changed or network_opcache_config.changed }}'
 - name: Require protected voice DNS and VIP state to remain unchanged
   ansible.builtin.command:
     argv: [python3, '-c', "{{ lookup('file',playbook_dir+'/roles/desk_ui/files/ui_guard.py') }}", guard]

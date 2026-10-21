@@ -10,6 +10,7 @@ ExecStopPost=/usr/bin/python3 /usr/local/libexec/desk-network/ha.py --stop
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=12
+KillMode=control-group
 RuntimeDirectory=desk-network
 RuntimeDirectoryMode=0755
 UMask=0077

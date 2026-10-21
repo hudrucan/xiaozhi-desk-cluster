@@ -18,8 +18,12 @@ node readiness. See [distributed scans](#owner-routed-distributed-lan-scans-over
 [bounded proxy/restore](#bounded-proxy-and-isolated-restore-correction-2026-10-18).
 The dated sections retain measurements, failure analysis and rollback evidence;
 their earlier limits/placements do not override current source and configuration.
+Checkpoint create/validate/restore now use Rust on all three nodes; see
+[the worker contract and rollout evidence](#rust-checkpoint-worker).
 
 ## Deployment
+
+Build the local ARM64 release artifact as described in [Rust checkpoint worker](#rust-checkpoint-worker) before either deployment playbook.
 
 ```sh
 python3 scripts/create-network-secret.py
@@ -1276,3 +1280,98 @@ validation and is not an idle benchmark. Restarts also release earlier retained
 RAM, so the RSS comparison does not isolate the fix's effect. Actual settings
 Save/value changes, live overload tests, rollback and long-term OOM resolution
 remain **NOT RUN**; the read-only CTE checked the checkpoint path without a Save.
+
+## Rust checkpoint worker
+
+Rust handles create/validate/restore on all three nodes, through the existing
+50% CPU / 384 MiB checkpoint budget. Lease/quorum/fencing and replication protocol
+are unchanged. SQLite online backup/WAL, integrity checks, byte/digest
+compatibility, Python policy/workflow semantics, ownership and fsync/atomic
+replacement are preserved. Limits: 16 MiB compressed, 128 MiB expanded, 64 MiB DB,
+1 MiB each configuration/workflows. Credentials remain in private bounded stdin.
+
+Parent-owned 0700 scratch covers all three operations. The unit marker is
+published before launch; cleanup requires confirmed cgroup termination; startup
+recovers marked orphans before serving peers. Uncertain termination fails closed.
+The controller uses `KillMode=control-group`, including pending launchers.
+Same-directory restore temps outside runtime scratch still require cleanup/replay
+with writers stopped; restore atomicity is per file, not a cross-file transaction.
+
+### Build and deployment
+
+Cross-build the locked release on the development host with
+[`build-arm64.sh`](../tools/desk-checkpoint/build-arm64.sh), `DESK_ZIG` and
+`DESK_ARM64_LIBS`. No node toolchain is installed. Use target Python's SQLite/zlib,
+since bundled SQLite can change backup bytes. All nodes verified ARM64/glibc 2.36,
+Python 3.11.2, SQLite 3.40.1 and zlib 1.2.13, with identical library hashes.
+
+- Worker SHA-256: `14e1b6b9aadd2466c4e70a722be5769f90bf01f78268bc09b8f36710a90eea57`.
+- Bridge SHA-256: `9bb81400969966083a58ebdce427b5486c96bdde371e9b22a610ce31f7860743`.
+
+Both the full role and helper deployment install binary/bridge together in the
+private `/usr/local/libexec/desk-network/rust` directory before their parent.
+For a Desk Network-only deployment:
+
+```sh
+ansible-playbook -i inventory.ini network-helpers.yml --skip-tags homeassistant
+```
+
+The helper playbook uses existing warm drain, waits for a replacement native-ready
+owner, refreshes controllers serially, and waits for warm readiness, sync and
+voter quarantine. Protected-service checks surround the rollout. Skipping the
+Home Assistant tag prevents deployment/restart of that agent.
+
+The production Python checkpoint CLI and restore implementation have been retired.
+Python worker references live only in tests; seed/bootstrap helpers remain because
+`seed.py` still uses them. The HA controller and Rust policy bridge remain Python.
+Worker rollback directories and old Desk Network backup copies were removed on
+all nodes at the user's request; deployment no longer creates worker rollback
+copies or Ansible helper backups. Checkpoint/state data and credentials are kept.
+
+### Verified rollout, 2026-10-21
+
+**Rust remains active on all three nodes; no rollback was needed.** Final state:
+deskb1x native-ready owner; deskb2x/deskb3x synced inactive warm standbys; all voters
+ready. Certified revision `[90,"deskb2x",1]` and digest matched on all replicas:
+`9b56d4d09fe4926e7b62209b4b269de1c20252a8b1bfdeef30d829f270e73275`.
+Live DB `quick_check`, ownership 20211:20211 and modes 0700/0600 passed; no scratch
+remained. Actual Rust create → peer validation/certification → promotion restore
+completed. Handoff 1→2 reached native-ready in 39.9 s. SIGKILL of owner controller
+2 caused failover to 1 in 38.0 s, all replicas recovered in 71.0 s. No multiple
+ready owners were observed in one-second samples. Node 2's one automatic restart
+was intentional. Protected-service guards and HA/camera/VPN/NATS/DNS/Xiaozhi
+service state/PID comparisons passed; no production worker/controller OOM or
+checkpoint error was observed.
+
+| Actual Rust operation | n | Wall p50 / max, s | CPU p50, s | RSS max, MiB | Cgroup peak, MiB |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Create | 3 | 3.114 / 3.194 | 1.594 | 9.8 | 31.4 |
+| Validate | 12 | 0.844 / 0.946 | ≈0.368 | 2.7 | 15.1 |
+| Restore | 7 | 4.288 / 4.598 | 2.029 | 25.6 | 31.4 |
+
+These are operational samples across changing checkpoints/roles, not matched
+benchmark or production p95 estimates. Wall/CPU totals use systemd journal;
+validate CPU, RSS and cgroup counters were sampled every 250 ms (possible missed
+final/transient peaks). Cgroup includes charged tmpfs scratch. Sampled CPU
+user/system medians: create 1.310/0.231 s, validate 0.292/0.068 s, restore
+1.667/0.354 s; median throttling 1.514/0.284/2.396 s under the unchanged quota.
+I/O counters were retained outside the repository. All observers were stopped;
+no synthetic performance matrix was rerun.
+
+Reuse of valid prior comparisons for the identical binary: 20 matched 1 MiB
+restores gave Python/Rust p95 2.729/2.352 s (-377 ms, -13.8%). The 25 MiB full
+follow-up stopped at 19 samples/engine: p95 23.960/15.946 s, median CPU -34.3%,
+peak RSS about -82%. These historical isolated results do not establish long-term
+production behavior. The original regression was removed by combining two
+restore helpers into one bounded policy/workflow helper, preserving validation.
+
+Verification after Python-worker retirement: 201 local tests, 183 passed/18 skipped (12 existing TLS dependency
+skips; 6 Linux/systemd tests separately passed on RK3528). The latter cover all
+operations with timeout/SIGKILL, parent-orphan and pending-launcher recovery, plus
+three intentional 64 MiB fixture-cgroup OOMs followed by successful workers.
+Worker faults used isolated fixture data/cgroups; controller SIGKILL was the
+separate live failover test. Prior 14-test ARM64
+compatibility evidence remains applicable to unchanged binary/helper/libraries.
+Required golden fixtures remain under `tests/fixtures/checkpoint`; raw benchmark
+dumps, redundant history, temporary test data and build intermediates were
+removed from the repository. Long-term soak remains unproven by this test window.

@@ -1,9 +1,10 @@
-"""Actual restore subprocess, private stdin and parent allocation bounds."""
+"""Test-only Python restore CLI, private stdin and parent allocation bounds."""
 from contextlib import closing
 import pathlib,sqlite3,subprocess,sys,tempfile,tracemalloc,unittest
 from unittest.mock import patch
 sys.path.insert(0,str(pathlib.Path(__file__).resolve().parents[1]/'files'))
 import ha
+import python_worker_reference as reference
 
 class RestoreTests(unittest.TestCase):
  def setUp(self):
@@ -15,7 +16,9 @@ class RestoreTests(unittest.TestCase):
    # Test host has no production uid20211. Only chown is stubbed in the child;
    # stdin parsing, CLI, decompression, validation and atomic writes run intact.
    wrapper='import os,sys,runpy;sys.path.insert(0,os.path.dirname(sys.argv[1]));os.chown=lambda *a:None;sys.argv=sys.argv[1:];runpy.run_path(sys.argv[0],run_name="__main__")'
-   return subprocess.run([command[0],'-c',wrapper,*command[1:]],input=blob,stdout=subprocess.PIPE,stderr=subprocess.PIPE,check=True,timeout=20)
+   cmd=[sys.executable,'-c',wrapper,reference.__file__,'--snapshot-worker','restore']
+   for flag in ('--run','--data'):cmd += [flag,command[command.index(flag)+1]]
+   return subprocess.run(cmd,input=blob,stdout=subprocess.PIPE,stderr=subprocess.PIPE,check=True,timeout=20)
   p=patch.object(ha.checkpoint_budget,'execute',side_effect=child);p.start();self.addCleanup(p.stop)
  def blob(self,size=1):
   path=self.root/'source.db'

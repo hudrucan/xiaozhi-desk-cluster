@@ -79,8 +79,9 @@ class Lease:
  def status(self):
   with self.lock:return {'promised':self.term,'holder':self.holder if self.until>self.clock() else None,'remaining':max(0,self.until-self.clock())}
 class Store:
- def __init__(self,root,key,members):
+ def __init__(self,root,key,members,*,run=None):
   self.root=pathlib.Path(root);self.root.mkdir(parents=True,exist_ok=True);self.key=key;self.members=members;self.lock=threading.RLock()
+  self.run=pathlib.Path(run) if run is not None else self.root
   self.head=json.loads((self.root/'head.json').read_text()) if (self.root/'head.json').exists() else None
  def receipt(self,node,meta):
   value={'node':node,'revision':meta['revision'],'digest':meta['digest']}
@@ -104,7 +105,7 @@ class Store:
   with self.lock:
    if self.head and meta['revision']<self.head['revision']:raise Unavailable('Checkpoint superseded')
    # A cheap bounded envelope check; SQLite integrity is checked before promotion.
-   snapshot_worker('validate',blob=blob)
+   snapshot_worker('validate',run=self.run,blob=blob)
    path=self.root/(meta['digest']+'.gz')
    if not path.exists():atomic(path,blob)
    return self.receipt(node,meta)
@@ -130,26 +131,28 @@ def unpack(blob):
  return db,conf,workflows
 def snapshot_worker(action,*,data=None,run=None,blob=None):
  # JSON/base64/SQLite scratch allocations must not accumulate in the lease/UI
- # threads' allocator arenas. A short-lived interpreter releases all of them.
- cmd=[sys.executable,str(pathlib.Path(__file__).resolve()),'--snapshot-worker',action]
- worker_dir=None
- if action in ('create','restore'):
-  # Give each worker its own isolated scratch directory.
-  # subprocess.run() (inside execute()) is synchronous: it only returns after
-  # the worker process has fully exited — whether by normal exit, RuntimeMaxSec
-  # timeout, or OOM-SIGKILL.  The rmtree in finally therefore always runs after
-  # the worker is confirmed dead, with no surviving handles to any file.
-  # No age check or mtime heuristic is needed.
-  worker_dir=pathlib.Path(run)/('ckpt-'+secrets.token_hex(8))
-  worker_dir.mkdir(mode=0o700,parents=True,exist_ok=False)
-  cmd += ['--data',str(data),'--run',str(worker_dir)]
+ # threads' allocator arenas. A short-lived worker releases all of them.
+ cmd=['/usr/local/libexec/desk-network/rust/desk-checkpoint','--snapshot-worker',action,'--bridge','/usr/local/libexec/desk-network/rust/bridge.py','--ha',str(pathlib.Path(__file__).resolve()),'--python',sys.executable]
+ # Production callers share the controller runtime root for startup recovery.
+ # Keep the temporary-directory fallback for standalone/source-host callers.
+ if run is None:
+  import tempfile
+  run=tempfile.gettempdir()
+ worker_dir=pathlib.Path(run)/('ckpt-'+secrets.token_hex(8))
+ worker_dir.mkdir(mode=0o700,parents=True,exist_ok=False)
+ cmd += ['--run',str(worker_dir)]
+ if action in ('create','restore'):cmd += ['--data',str(data)]
+ stopped=True
  try:
   result=checkpoint_budget.execute(cmd,blob)
   if len(result.stdout)>LIMIT:raise Unavailable('Checkpoint exceeds byte limit')
   return result.stdout
+ except checkpoint_budget.WorkerNotStopped:
+  stopped=False
+  raise
  finally:
-  if worker_dir is not None:
-   shutil.rmtree(worker_dir,ignore_errors=True)
+  # Preserve the unit marker for startup recovery if termination is uncertain.
+  if stopped:shutil.rmtree(worker_dir)
 def restore_worker(blob,data,run,token):
  # Keep credentials off argv/environment; the bounded worker consumes one
  # private JSON line followed by the original compressed checkpoint bytes.
@@ -247,23 +250,10 @@ def checkpoint(data,run):
   if dbpath.stat().st_size>DBLIMIT:raise Unavailable('Database exceeds checkpoint limit')
   blob=checkpoint_blob(dbpath,conf,workflows);unpack(blob);return blob
  finally:dbpath.unlink(missing_ok=True)
-def restore(blob,data,run,token):
- db,conf,workflows=unpack(blob);data=pathlib.Path(data);check=pathlib.Path(run)/'restore-check.db';atomic(check,db)
- try:
-  with closing(sqlite3.connect(check)) as c:
-   if c.execute('PRAGMA quick_check').fetchone()[0]!='ok':raise Unavailable('Database integrity check failed')
- finally:check.unlink(missing_ok=True)
- for suffix in ('-wal','-shm'):(data/('db/app.db'+suffix)).unlink(missing_ok=True)
- atomic(data/'db/app.db',db);atomic(data/'config/app.conf',apply_policy(conf,token))
- workflow_path=data/'config/workflows.json'
- if workflows is None:workflow_path.unlink(missing_ok=True)
- else:atomic(workflow_path,workflows);os.chown(workflow_path,20211,20211)
- for p in (data,data/'db',data/'config',data/'db/app.db',data/'config/app.conf'):
-  os.chown(p,20211,20211);os.chmod(p,0o700 if p.is_dir() else 0o600)
 class Cluster:
  def __init__(self,c):
   self.c=c;self.key=base64.b64decode(c['key']);self.node=c['node'];self.members=c['members'];self.root=pathlib.Path('/var/lib/desk-network');self.run=pathlib.Path('/run/desk-network');self.run.mkdir(exist_ok=True)
-  self.store=Store(self.root/'state',self.key,self.members);self.lease=Lease(self.root/'state/vote.json')
+  self.store=Store(self.root/'state',self.key,self.members,run=self.run);self.lease=Lease(self.root/'state/vote.json')
   self.term=None;self.until=0.;self.running=False;self.ready=False;self.starting=False;self.sync_state='synced';self.last_snapshot=0.;self.last_health=0.;self.last_local=0.;self.local={};self.sequence=0;self._snap_backoff=0.;self._rebalance_retry=0.;self._rebalance=None;self.pid=None;self.cooldown=0.;self.container_started=0.;self.boot_ready_seconds=None;self.unhealthy_since=0.
   self.warm=self.c.get("warm_standby") is True;self.generation=None;self.promotion_started=0.;self.promotion_seconds=None;self.warm_path=self.run/"warm"
   self.budget=bootstrap.Budget(clock);self.oplock=threading.RLock();self.snaplock=threading.Lock();self.pool=concurrent.futures.ThreadPoolExecutor(max_workers=8);self.stop=threading.Event();self.nonces={};self.authlock=threading.Lock();self.scan_lock=threading.Lock();self.scan_queued_at=0.;self.scan_cache={};self.scan_cache_at=0.
@@ -495,10 +485,6 @@ class Cluster:
   return {'node':self.node,'state':'active' if self.owned() and self.ready else 'starting' if self.owned() else 'standby','protocol':'desk-network-v1','lease_term':list(self.term) if self.owned() else None,'observed_at':time.time(),'voter_ready':clock()>=self.lease.quarantine,'revision':self.store.head['revision'] if self.store.head else None,'sync':self.sync_state,'subnet':'192.168.1.0/24','scan_minutes':minutes,'scan_schedule':schedule,'boot_ready_seconds':self.boot_ready_seconds,'bootstrap_budget':'boosted' if self.budget.fd is not None else 'steady','standby_mode':'warm' if self.warm else 'cold','warm_state':self.warm_state().get('state') if self.warm else None,'preload_seconds':self.warm_state().get('preload_seconds') if self.warm else None,'promotion_seconds':self.promotion_seconds}
  def run_loop(self):
   self.kill_container(force=True);threading.Thread(target=self.fence,daemon=True).start()
-  # Clean up any sqlite-*.db files left by OOM-killed workers from the previous
-  # codebase (before per-worker scratch dirs).  No worker is running at this
-  # point, so min_age_seconds=0 is safe.
-  checkpoint_budget.sweep_stale_sqlite(self.run,min_age_seconds=0)
   while not self.stop.is_set():
    try:
     self.refresh_local();heads=self.fanout('status')
@@ -815,22 +801,7 @@ class Server(http.server.ThreadingHTTPServer):
   s,a=super().get_request();s.settimeout(25);return s,a
  def verify_request(self,r,a):return a[0] in set(self.cluster.members.values())|{'127.0.0.1'}
 def main():
- parser=argparse.ArgumentParser();parser.add_argument('--snapshot-worker',choices=('create','validate','restore'));parser.add_argument('--data');parser.add_argument('--run');parser.add_argument('--config',default='/etc/desk-network/config.json');parser.add_argument('--stop',action='store_true');args=parser.parse_args()
- if args.snapshot_worker:
-  if args.snapshot_worker=='create':
-   if not args.data or not args.run:parser.error('Checkpoint paths required')
-   blob=checkpoint(args.data,args.run)
-   if len(blob)>LIMIT:raise Unavailable('Checkpoint exceeds byte limit')
-   sys.stdout.buffer.write(blob)
-  elif args.snapshot_worker=='restore':
-   if not args.data or not args.run:parser.error('Restore paths required')
-   header=sys.stdin.buffer.readline(4097)
-   if len(header)>4096 or not header.endswith(b'\n'):raise Unavailable('Restore envelope')
-   value=json.loads(header)
-   if set(value)!={'token'} or not isinstance(value['token'],str) or not 0<len(value['token'])<=2048:raise Unavailable('Restore credentials')
-   restore(read_bounded(sys.stdin.buffer,LIMIT),args.data,args.run,value['token'])
-  else:unpack(read_bounded(sys.stdin.buffer,LIMIT))
-  return
+ parser=argparse.ArgumentParser();parser.add_argument('--config',default='/etc/desk-network/config.json');parser.add_argument('--stop',action='store_true');args=parser.parse_args()
  if args.stop:
   try:
    info=json.loads(subprocess.check_output(['podman','inspect',NAME],stderr=subprocess.DEVNULL,timeout=1))[0];pid=info['State']['Pid']
@@ -840,6 +811,8 @@ def main():
   except Exception:pass
   return
  c=Cluster(json.loads(pathlib.Path(args.config).read_text()));logging.basicConfig(level=logging.INFO,format='%(message)s')
+ # Recover old workers before HTTP can accept a new stage/validate request.
+ checkpoint_budget.sweep_stale_sqlite(c.run,min_age_seconds=0)
  peer=Server((c.members[c.node],20215),Peer);peer.cluster=c;ctx=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER);ctx.load_cert_chain(c.c['certificate'],c.c['tls_key']);peer.tls_context=ctx
  ui=Server((c.members[c.node],20213),UI);ui.cluster=c
  for server in (peer,ui):threading.Thread(target=server.serve_forever,daemon=True).start()

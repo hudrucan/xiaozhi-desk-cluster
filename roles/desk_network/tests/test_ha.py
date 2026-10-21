@@ -2,11 +2,17 @@ from unittest.mock import MagicMock,patch
 import io,threading,tracemalloc
 import re,subprocess,shutil,base64,gzip,hashlib,importlib.util,json,pathlib,sqlite3,tempfile,unittest
 spec=importlib.util.spec_from_file_location('ha',str(pathlib.Path(__file__).resolve().parents[1]/'files/ha.py'));ha=importlib.util.module_from_spec(spec);spec.loader.exec_module(ha)
+import python_worker_reference as reference
 class Checks(unittest.TestCase):
  def setUp(self):
-  # Existing protocol fixtures exercise child isolation on non-systemd CI hosts.
-  # The production systemd runner/failure paths have separate budget tests.
-  runner=patch.object(ha.checkpoint_budget,'execute',side_effect=lambda command,blob=None:subprocess.run(command,input=blob,stdout=subprocess.PIPE,stderr=subprocess.PIPE,check=True,timeout=60))
+  # Keep the Python CLI/protocol reference usable without a Rust build.
+  # Rust and the real systemd parent have separate compatibility/failure tests.
+  def child(command,blob=None):
+   cmd=[ha.sys.executable,reference.__file__,'--snapshot-worker',command[command.index('--snapshot-worker')+1]]
+   for flag in ('--run','--data'):
+    if flag in command:cmd += [flag,command[command.index(flag)+1]]
+   return subprocess.run(cmd,input=blob,stdout=subprocess.PIPE,stderr=subprocess.PIPE,check=True,timeout=60)
+  runner=patch.object(ha.checkpoint_budget,'execute',side_effect=child)
   runner.start();self.addCleanup(runner.stop)
  def test_native_api_namespace_reaches_authenticated_loopback_service(self):
   self.assertEqual(ha.native_route('10.10.10.11','/server/device/aa:bb:cc:dd:ee:ff?period=1'),('127.0.0.1',20212,'/device/aa:bb:cc:dd:ee:ff?period=1'))
@@ -171,7 +177,7 @@ class Checks(unittest.TestCase):
    def opened(*args,**kwargs):
     c=connect(*args,**kwargs);handles.append(c);return c
    with patch.object(ha.sqlite3,'connect',side_effect=opened),patch.object(ha.os,'chown'):
-    ha.restore(blob,root/'target',root/'restore','test-token')
+    reference.restore(blob,root/'target',root/'restore','test-token')
    self.assertEqual(len(handles),1)
    with self.assertRaises(sqlite3.ProgrammingError):handles[0].execute('select 1')
  def test_policy_survives_conf_from_old_owner(self):
@@ -191,7 +197,7 @@ class Checks(unittest.TestCase):
    with (data/'config/app.conf').open('ab') as f:f.write(b"ARPSCAN_RUN_SCHD='*/1 * * * *'\n")
    blob=ha.checkpoint(data,root/'ram');db.close();store=ha.Store(root/'store',b'test',['a','b','c']);meta={'revision':[1,'a',1],'digest':ha.sha(blob)}
    meta['certificate']=[store.stage(meta,blob,'a'),store.receipt('b',meta)];store.commit(meta)
-   with patch.object(ha.os,'chown'):ha.restore(store.blob(store.head['digest']),root/'promoted',root/'restore','test-token')
+   with patch.object(ha.os,'chown'):reference.restore(store.blob(store.head['digest']),root/'promoted',root/'restore','test-token')
    self.assertEqual(ha.scan_schedule((root/'promoted/config/app.conf').read_bytes()),('*/1 * * * *',1))
  def test_managed_changes_are_rejected_before_native_save(self):
   def payload(key,value):return ha.urllib.parse.urlencode({'function':'savesettings','settings':json.dumps([['General',key,'string',value]])}).encode()
