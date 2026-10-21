@@ -1,0 +1,20 @@
+---
+- name: Build the cached pinned Beszel hub with native UI feedback
+  ansible.builtin.command:
+    argv: ["{{ ansible_playbook_python }}", "{{ playbook_dir }}/scripts/build-beszel-ui.py"]
+  delegate_to: localhost
+  become: false
+  run_once: true
+  register: desk_monitoring_ui_build
+  changed_when: false
+  check_mode: false
+
+- name: Install the patched hub alongside the untouched official binary
+  ansible.builtin.copy:
+    src: "{{ desk_monitoring_ui_build.stdout | trim }}"
+    dest: "/opt/desk-monitoring/{{ desk_monitoring_version }}/beszel-desk-ui"
+    owner: root
+    group: root
+    mode: '0755'
+    backup: true
+  register: desk_monitoring_ui_binary

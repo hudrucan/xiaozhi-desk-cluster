@@ -321,6 +321,13 @@ def mutation(value, collection, identity, method, body):
     if method not in ('POST','PATCH','DELETE'):
         raise Failure(405, 'Unsupported configuration mutation method')
     body = {k:v for k,v in body.items() if k not in ('id','created','updated')}
+    if collection == 'systems':
+        # Native Add/Edit System submits these read-only installation fields.
+        # Beszel ignores them here; its next request saves the fingerprint token.
+        body = {k:v for k,v in body.items() if k not in ('pkey', 'tkn')}
+        # The form sends one user ID; PocketBase reads a multi-relation as a list.
+        if isinstance(body.get('users'), str):
+            body['users'] = [body['users']] if body['users'] else []
     if collection=='fingerprints' and 'fingerprint' in body:
         if body.pop('fingerprint') != '': raise Failure(400,'Fingerprint values are native runtime data')
         body['_fingerprint_reset']=secrets.token_hex(16)

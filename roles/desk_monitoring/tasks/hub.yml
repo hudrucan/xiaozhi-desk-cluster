@@ -39,6 +39,7 @@
         remote_src: true
         creates: "/opt/desk-monitoring/{{ desk_monitoring_version }}/{{ item }}"
       loop: [beszel, beszel-agent]
+    - ansible.builtin.include_tasks: build-ui.yml
     - name: Install restricted local bootstrap helper
       ansible.builtin.copy:
         src: bootstrap.py
@@ -65,7 +66,7 @@
     - name: Start or update only the monitoring hub
       ansible.builtin.systemd_service:
         name: beszel-hub
-        state: "{{ 'restarted' if desk_monitoring_hub_units.changed else 'started' }}"
+        state: "{{ 'restarted' if desk_monitoring_hub_units.changed or desk_monitoring_ui_binary.changed else 'started' }}"
         enabled: true
         daemon_reload: true
     - name: Wait for the private hub API before account bootstrap

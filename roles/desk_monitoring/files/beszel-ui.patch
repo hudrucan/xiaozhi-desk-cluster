@@ -1,0 +1,304 @@
+--- a/internal/site/src/components/add-system.tsx
++++ b/internal/site/src/components/add-system.tsx
+@@ -1,7 +1,7 @@
+ import { Trans, useLingui } from "@lingui/react/macro"
+ import { useStore } from "@nanostores/react"
+ import { getPagePath } from "@nanostores/router"
+-import { ChevronDownIcon, ExternalLinkIcon } from "lucide-react"
++import { ChevronDownIcon, ExternalLinkIcon, LoaderCircleIcon } from "lucide-react"
+ import { memo, useEffect, useRef, useState } from "react"
+ import { Button } from "@/components/ui/button"
+ import {
+@@ -14,10 +14,12 @@
+ } from "@/components/ui/dialog"
+ import { Input } from "@/components/ui/input"
+ import { Label } from "@/components/ui/label"
++import { toast } from "@/components/ui/use-toast"
+ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+ import { isReadOnlyUser, pb } from "@/lib/api"
+ import { SystemStatus } from "@/lib/enums"
+-import { $publicKey } from "@/lib/stores"
++import { $allSystemsById, $publicKey } from "@/lib/stores"
++import { update as updateSystem } from "@/lib/systemsManager"
+ import { cn, generateToken, tokenMap, useBrowserStorage } from "@/lib/utils"
+ import type { SystemRecord } from "@/types"
+ import {
+@@ -71,6 +73,10 @@
+ 	const isUnixSocket = hostValue.startsWith("/")
+ 	const [tab, setTab] = useBrowserStorage("as-tab", "docker")
+ 	const [token, setToken] = useState(system?.token ?? "")
++	const [saving, setSaving] = useState(false)
++	const [saveError, setSaveError] = useState("")
++	const submitting = useRef(false)
++	const createdSystem = useRef<SystemRecord | null>(null)
+ 
+ 	useEffect(() => {
+ 		;(async () => {
+@@ -93,34 +99,64 @@
+ 
+ 	async function handleSubmit(e: SubmitEvent) {
+ 		e.preventDefault()
++		if (submitting.current) return
+ 		const formData = new FormData(e.target as HTMLFormElement)
+ 		const data = Object.fromEntries(formData) as Record<string, any>
+ 		data.users = pb.authStore.record!.id
++		submitting.current = true
++		setSaving(true)
++		setSaveError("")
+ 		try {
+-			setOpen(false)
++			let saved: SystemRecord
+ 			if (system) {
+-				await pb.collection("systems").update(system.id, { ...data, status: SystemStatus.Pending })
++				saved = await pb.collection("systems").update<SystemRecord>(system.id, { ...data, status: SystemStatus.Pending })
+ 			} else {
+-				const createdSystem = await pb.collection("systems").create(data)
+-				await pb.collection("fingerprints").create({
+-					system: createdSystem.id,
+-					token,
++				// Keep the successful create when a later save fails, so Retry cannot create a duplicate.
++				createdSystem.current ||= await pb.collection("systems").create<SystemRecord>(data)
++				saved = createdSystem.current
++				const prints = await pb.collection("fingerprints").getList(1, 1, {
++					filter: pb.filter("system = {:id}", { id: saved.id }),
+ 				})
++				if (prints.items.length) {
++					await pb.collection("fingerprints").update(prints.items[0].id, { token })
++				} else {
++					await pb.collection("fingerprints").create({ system: saved.id, token })
++				}
+ 				// Reset the current token after successful system
+ 				// creation so next system gets a new token
+ 				nextSystemToken = null
+ 			}
++			// Do not wait for the first metrics sample or another realtime event.
++			updateSystem(system ? saved : ($allSystemsById.get()[saved.id] ?? saved))
++			toast({
++				title: system ? t`System saved` : t`System added`,
++				description: t`Configuration saved. Agent connection status is shown in the dashboard.`,
++			})
++			createdSystem.current = null
++			setOpen(false)
+ 			navigate(basePath)
+-		} catch (e) {
+-			console.error(e)
++		} catch (error) {
++			setSaveError(error instanceof Error ? error.message : t`Could not save the system. Please try again.`)
++		} finally {
++			submitting.current = false
++			setSaving(false)
+ 		}
+ 	}
+ 
+ 	return (
+ 		<DialogContent
+ 			className="w-[90%] sm:w-auto sm:ns-dialog max-w-full rounded-lg"
++			closeDisabled={saving}
++			onClickCapture={(e) => {
++				if (saving && (e.target as HTMLElement).closest("a")) {
++					e.preventDefault()
++					e.stopPropagation()
++				}
++			}}
++			onEscapeKeyDown={(e) => { if (saving) e.preventDefault() }}
++			onInteractOutside={(e) => { if (saving) e.preventDefault() }}
+ 			onCloseAutoFocus={() => {
+-				setHostValue(system?.host ?? "")
++					setHostValue(system?.host ?? createdSystem.current?.host ?? "")
+ 			}}
+ 		>
+ 			<Tabs defaultValue={tab} onValueChange={setTab}>
+@@ -171,14 +207,16 @@
+ 							</Link>
+ 							.
+ 						</Trans>
++						<span className="block mt-2">Linux command trusts all three cluster hubs (systemd).</span>
+ 					</DialogDescription>
+ 				</TabsContent>
+-				<form onSubmit={handleSubmit as any}>
+-					<div className="grid xs:grid-cols-[auto_1fr] gap-y-3 gap-x-4 items-center mt-1 mb-4">
++				<form onSubmit={handleSubmit as any} aria-busy={saving}>
++					<fieldset disabled={saving} className="contents">
++					<fieldset disabled={!!createdSystem.current} className="grid xs:grid-cols-[auto_1fr] gap-y-3 gap-x-4 items-center mt-1 mb-4">
+ 						<Label htmlFor="name" className="xs:text-end">
+ 							<Trans>Name</Trans>
+ 						</Label>
+-						<Input id="name" name="name" defaultValue={system?.name} required />
++						<Input id="name" name="name" defaultValue={system?.name ?? createdSystem.current?.name} required />
+ 						<Label htmlFor="host" className="xs:text-end">
+ 							<Trans>Host / IP</Trans>
+ 						</Label>
+@@ -198,7 +236,7 @@
+ 							ref={port}
+ 							name="port"
+ 							id="port"
+-							defaultValue={system?.port || "45876"}
++							defaultValue={system?.port || createdSystem.current?.port || "45876"}
+ 							required={!isUnixSocket}
+ 							className={cn(isUnixSocket && "hidden")}
+ 						/>
+@@ -210,7 +248,9 @@
+ 							<Trans>Token</Trans>
+ 						</Label>
+ 						<InputCopy value={token} id="tkn" name="tkn" />
+-					</div>
++					</fieldset>
++					{saveError && <p role="alert" className="text-sm text-destructive">{saveError}{createdSystem.current && <> {t`The system was created. Retry to finish setup.`}</>}</p>}
++					<p role="status" aria-live="polite" className="text-sm text-muted-foreground">{saving && t`Saving and syncing…`}</p>
+ 					<DialogFooter className="flex justify-end gap-x-2 gap-y-3 flex-col mt-5">
+ 						{/* Docker */}
+ 						<TabsContent value="docker" className="contents">
+@@ -252,7 +292,7 @@
+ 									{
+ 										text: t({ message: "FreeBSD command", context: "Button to copy install command" }),
+ 										onClick: async () =>
+-											copyLinuxCommand(isUnixSocket ? hostValue : port.current?.value, publicKey, token),
++											copyLinuxCommand(isUnixSocket ? hostValue : port.current?.value, publicKey, token, false, false),
+ 										icons: [FreeBsdIcon],
+ 									},
+ 									{
+@@ -264,14 +304,15 @@
+ 							/>
+ 						</TabsContent>
+ 						{/* Save */}
+-						<Button>
+-							{system ? (
++						<Button type="submit" disabled={saving}>
++							{saving ? <><LoaderCircleIcon className="me-2 size-4 animate-spin" aria-hidden="true" />{t`Saving…`}</> : createdSystem.current ? t`Retry` : system ? (
+ 								<Trans>Save System</Trans>
+ 							) : (
+ 								<Trans>Add System</Trans>
+ 							)}
+ 						</Button>
+ 					</DialogFooter>
++					</fieldset>
+ 				</form>
+ 			</Tabs>
+ 		</DialogContent>
+--- a/internal/site/src/components/ui/dialog.tsx
++++ b/internal/site/src/components/ui/dialog.tsx
+@@ -31,8 +31,8 @@
+ 
+ const DialogContent = React.forwardRef<
+ 	React.ElementRef<typeof DialogPrimitive.Content>,
+-	React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content>
+->(({ className, children, ...props }, ref) => (
++	React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content> & { closeDisabled?: boolean }
++>(({ className, children, closeDisabled, ...props }, ref) => (
+ 	<DialogPortal>
+ 		<DialogOverlay />
+ 		<DialogPrimitive.Content
+@@ -45,6 +45,7 @@
+ 		>
+ 			{children}
+ 			<DialogPrimitive.Close
++				disabled={closeDisabled}
+ 				className={cn(
+ 					"absolute end-3 top-3 rounded-sm opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-hidden focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:pointer-events-none data-[state=open]:bg-accent data-[state=open]:text-muted-foreground",
+ 					dialogIconButtonClassName
+--- a/internal/site/src/lib/systemsManager.ts
++++ b/internal/site/src/lib/systemsManager.ts
+@@ -115,7 +115,9 @@
+ 
+ /** Makes sure the system has valid info object and throws if not */
+ function validateSystemInfo(system: SystemRecord) {
+-	if (!("cpu" in system.info)) {
++	// New and unreachable agents still need a visible dashboard row.
++	system.info ??= {} as SystemRecord["info"]
++	if (system.status === SystemStatus.Up && !("cpu" in system.info)) {
+ 		throw new Error(`${system.name} has no CPU info`)
+ 	}
+ }
+--- a/internal/site/src/components/install-dropdowns.tsx
++++ b/internal/site/src/components/install-dropdowns.tsx
+@@ -1,5 +1,8 @@
+ import { i18n } from "@lingui/core"
+ import { memo } from "react"
++import { toast } from "@/components/ui/use-toast"
++import { pb } from "@/lib/api"
++import { clusterLinuxCommand } from "@/lib/agent-install"
+ import { copyToClipboard, getHubURL } from "@/lib/utils"
+ import { DropdownMenuContent, DropdownMenuItem } from "./ui/dropdown-menu"
+ 
+@@ -47,7 +50,16 @@
+ 	)
+ }
+ 
+-export function copyLinuxCommand(port = "45876", publicKey: string, token: string, brew = false) {
++export async function copyLinuxCommand(port = "45876", publicKey: string, token: string, brew = false, cluster = true) {
++	if (!brew && cluster) {
++		try {
++			const info = await pb.send<{ agentKeys?: string[] }>("/api/beszel/info", { requestKey: null })
++			copyToClipboard(clusterLinuxCommand(port, publicKey, token, getHubURL(), info.agentKeys ?? [], (i18n.locale + navigator.language).includes("zh-CN")))
++		} catch (error) {
++			toast({ variant: "destructive", title: "Could not copy installation command", description: error instanceof Error ? error.message : "Refresh the page and try again." })
++		}
++		return
++	}
+ 	let cmd = `curl -sL ${getScriptUrl(
+ 		brew ? "/brew" : ""
+ 	)} -o /tmp/install-agent.sh && chmod +x /tmp/install-agent.sh && /tmp/install-agent.sh -p ${port} -k "${publicKey}" -t "${token}" -url "${getHubURL()}"`
+--- /dev/null
++++ b/internal/site/src/lib/agent-install.ts
+@@ -0,0 +1,28 @@
++const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`
++
++/** Linux/systemd setup: keep installer credentials, then trust every cluster hub. */
++export function clusterLinuxCommand(port: string, publicKey: string, token: string, hubURL: string, keys: string[], chinaMirrors = false) {
++	if (keys.length !== 3 || new Set(keys).size !== 3 || !keys.includes(publicKey) || keys.some(key => !/^ssh-ed25519 [A-Za-z0-9+/]+={0,2}$/.test(key))) {
++		throw new Error("Three valid cluster public keys are required. Refresh the page and try again.")
++	}
++	return `(
++set -eu
++command -v systemctl >/dev/null || { printf '%s\\n' 'This command requires Linux with systemd.' >&2; exit 1; }
++if [ "$(id -u)" -eq 0 ]; then
++  beszel_root() { "$@"; }
++else
++  beszel_root() { sudo "$@"; }
++fi
++curl -fsSL https://get.beszel.dev -o /tmp/install-agent.sh
++beszel_root bash /tmp/install-agent.sh -p ${quote(port)} -k ${quote(publicKey)} -t ${quote(token)} -url ${quote(hubURL)}${chinaMirrors ? " --china-mirrors" : ""}
++beszel_root install -d -m 0755 /etc/beszel-agent /etc/systemd/system/beszel-agent.service.d
++printf '%s\\n' ${keys.map(quote).join(" ")} | beszel_root tee /etc/beszel-agent/hub-keys.pub >/dev/null
++beszel_root chmod 0644 /etc/beszel-agent/hub-keys.pub
++printf '%s\\n' '[Service]' 'Environment="KEY="' 'Environment="BESZEL_AGENT_KEY="' 'Environment="KEY_FILE=/etc/beszel-agent/hub-keys.pub"' 'Environment="BESZEL_AGENT_KEY_FILE=/etc/beszel-agent/hub-keys.pub"' | beszel_root tee /etc/systemd/system/beszel-agent.service.d/cluster-keys.conf >/dev/null
++beszel_root chmod 0644 /etc/systemd/system/beszel-agent.service.d/cluster-keys.conf
++beszel_root systemctl daemon-reload
++beszel_root systemctl restart beszel-agent
++beszel_root systemctl is-active --quiet beszel-agent
++printf '%s\\n' 'Beszel agent configured to trust all 3 cluster hubs.'
++)`
++}
+--- a/internal/hub/api.go
++++ b/internal/hub/api.go
+@@ -7,6 +7,7 @@
+ 	"net"
+ 	"net/http"
+ 	"net/netip"
++	"os"
+ 	"regexp"
+ 	"strings"
+ 	"time"
+@@ -220,14 +221,19 @@
+ // getInfo returns data needed by authenticated users, such as the public key and current version
+ func (h *Hub) getInfo(e *core.RequestEvent) error {
+ 	type infoResponse struct {
+-		Key         string `json:"key"`
+-		Version     string `json:"v"`
+-		CheckUpdate bool   `json:"cu"`
++		Key         string   `json:"key"`
++		Version     string   `json:"v"`
++		CheckUpdate bool     `json:"cu"`
++		AgentKeys   []string `json:"agentKeys,omitempty"`
+ 	}
+ 	info := infoResponse{
+ 		Key:     h.pubKey,
+ 		Version: beszel.Version,
+ 	}
++	// Use the same public trust file as the cluster-managed agents.
++	if keys, err := os.ReadFile("/etc/desk-monitoring/hub-keys.pub"); err == nil {
++		info.AgentKeys = strings.Split(strings.TrimSpace(string(keys)), "\n")
++	}
+ 	if optIn, _ := utils.GetEnv("CHECK_UPDATES"); optIn == "true" {
+ 		info.CheckUpdate = true
+ 	}

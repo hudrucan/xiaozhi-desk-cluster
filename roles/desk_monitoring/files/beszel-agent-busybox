@@ -1,0 +1,47 @@
+#!/bin/sh
+# BusyBox/SysV startup for the binary agent; persistent state lives off the root overlay.
+ROOT=/usr/data/desk-monitoring
+BINARY=$ROOT/beszel-agent
+PIDFILE=/run/beszel-agent.pid
+
+status() {
+    start-stop-daemon -K -t -q -p "$PIDFILE" -x "$BINARY"
+}
+
+case "${1:-}" in
+    start)
+        [ -x "$BINARY" ] && [ -r "$ROOT/agent.env" ] || exit 1
+        if status; then
+            echo 'Beszel agent is already running'
+            exit 0
+        fi
+        set -a
+        . "$ROOT/agent.env"
+        set +a
+        start-stop-daemon -S -o -b -m -N 15 -p "$PIDFILE" -x "$BINARY" > /tmp/beszel-agent.log 2>&1 || exit 1
+        sleep 1
+        status
+        ;;
+    stop)
+        start-stop-daemon -K -q -o -p "$PIDFILE" -x "$BINARY" || exit 1
+        for attempt in 1 2 3 4 5; do
+            if ! status; then
+                rm -f "$PIDFILE"
+                exit 0
+            fi
+            sleep 1
+        done
+        echo 'Beszel agent has not stopped; retaining its pidfile' >&2
+        exit 1
+        ;;
+    restart|reload)
+        "$0" stop && "$0" start
+        ;;
+    status)
+        status
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|restart|reload|status}" >&2
+        exit 1
+        ;;
+esac

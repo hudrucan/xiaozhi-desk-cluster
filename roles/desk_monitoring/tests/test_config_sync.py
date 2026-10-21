@@ -39,6 +39,8 @@ class Hub:
     if request['method']=='DELETE':self.rows[name].pop(identity,None);continue
     item=copy.deepcopy(request['body']);password=item.pop('password',None);item.pop('passwordConfirm',None)
     if password:self.passwords[(name,identity)]=password
+    if name=='systems' and isinstance(item.get('users'),str):
+     item['users']=[item['users']] if item['users'] else []
     if name=='network_monitors':
      # Reproduce Beszel's native create/update hook changing the supplied ID.
      complete={**self.rows[name].get(identity,{}),**item}
@@ -143,6 +145,29 @@ class ConfigTests(unittest.TestCase):
   local_id=cluster.journal.state['mapping']['_superusers']['bbbbbbbbbbbbbbb']
   intent=cluster.intent('/api/collections/pbc_admin123/records/'+local_id,'PATCH',{'emailVisibility':True},'token',actor={'collectionName':'_superusers','id':local_id})
   self.assertEqual(intent['collection'],'_superusers');self.assertEqual(intent['identity'],'bbbbbbbbbbbbbbb')
+ def test_native_add_and_edit_system_form_fields_do_not_enter_shared_state(self):
+  cluster=self.nodes['node1']
+  actor={'collectionName':'users','id':cluster.journal.state['mapping']['users']['aaaaaaaaaaaaaaa'],'role':'admin'}
+  body={'name':'new-device','host':'192.168.1.28','port':'45876','users':actor['id'],'pkey':'ssh-ed25519 display-only','tkn':'installation-token'}
+  intent=cluster.intent('/api/collections/systems/records','POST',body,'token',actor=actor)
+  _,ready=cluster.submit(intent);self.assertEqual(len(ready),3)
+  identity=intent['identity'];local_id=cluster.journal.state['mapping']['systems'][identity]
+  fingerprint=cluster.intent('/api/collections/fingerprints/records','POST',{'system':local_id,'token':body['tkn']},'token',actor=actor)
+  _,ready=cluster.submit(fingerprint);self.assertEqual(len(ready),3)
+  edit=cluster.intent('/api/collections/systems/records/'+local_id,'PATCH',{**body,'name':'renamed','status':'pending'},'token',actor=actor)
+  _,ready=cluster.submit(edit);self.assertEqual(len(ready),3)
+  for replica in self.nodes.values():
+   state=replica.journal.state['value']['collections']
+   self.assertEqual(state['systems'][identity]['name'],'renamed')
+   self.assertEqual(state['systems'][identity]['users'],['aaaaaaaaaaaaaaa'])
+   self.assertNotIn('pkey',state['systems'][identity]);self.assertNotIn('tkn',state['systems'][identity])
+   row=replica.hub.rows['systems'][replica.journal.state['mapping']['systems'][identity]]
+   self.assertNotIn('pkey',row);self.assertNotIn('tkn',row)
+   self.assertEqual(state['fingerprints'][fingerprint['identity']],{'system':identity,'token':body['tkn']})
+ def test_system_form_compatibility_still_rejects_other_unknown_fields(self):
+  with self.assertRaises(m.Failure) as error:
+   m.mutation(seed(),'systems','ccccccccccccccc','PATCH',{'pkey':'display-only','tkn':'display-only','unexpected':True})
+  self.assertEqual(error.exception.code,400)
  def test_peer_tls_handshake_is_bounded_before_a_worker_is_created(self):
   server=object.__new__(m.Server);server.peer=True;server.cluster=self.nodes['node1'];server.tls=MagicMock()
   connection=MagicMock();server.tls.wrap_socket.return_value=connection

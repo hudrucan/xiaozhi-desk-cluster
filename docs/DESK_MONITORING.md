@@ -2,9 +2,11 @@
 
 Open `http://<current Xiaozhi management VIP>/monitor/` (currently
 `http://192.168.1.186/monitor/`). No new public IP or VIP is assigned.
-Beszel 0.21.0 runs as checksum-pinned ARM64 binaries under systemd, without
+Beszel 0.21.0 runs as pinned ARM64 binaries under systemd, without
 Docker or vendor installation scripts. Both executable and service names use
-kebab-case.
+kebab-case. The agent uses the official checksum-pinned release. The hub is built
+from checksum-pinned upstream source with the native UI patch described below;
+the official hub binary remains available alongside it for rollback.
 
 All three nodes run one independent hub and one agent. Each hub monitors all
 three private agent endpoints. Each agent accepts only the three hubs' public
@@ -195,6 +197,67 @@ All 36 monitoring tests, template/YAML/Python validation, both playbook syntax
 checks and `git diff --check` passed. Runtime config helpers matched the tested
 source on all three nodes. Metrics never enter the encrypted config journal;
 there is no JetStream dependency.
+
+## Add/Edit System feedback and shared configuration
+
+The shared configuration boundary ignores the native form's display-only `pkey`
+and `tkn` fields on system writes. Beszel saves the connection token through its
+separate fingerprint request. Single-user relation values from the form are
+normalized to lists, matching PocketBase readback. Other unknown fields remain
+rejected. New devices still need to trust all three hubs' public SSH keys, as the
+three managed agents already do through `KEY_FILE`.
+
+In the Binary tab, **Copy Linux command** reads all three public keys from the
+selected hub's authenticated native info API. The hub reads the existing managed
+`/etc/desk-monitoring/hub-keys.pub` file; the frontend does not embed a fixed key
+list. The copied Linux/systemd command runs the official installer with the
+current system token and management VIP URL. The installer runs through the root
+helper (`sudo bash` for a non-root caller), so it does not need to re-execute the
+downloaded file through sudo or depend on its executable bit. The command then writes all three public keys
+and a systemd `KEY_FILE` override and restarts the agent. Existing single-key
+environment variables are cleared so they cannot override the trust file. If the
+three distinct keys are unavailable, Copy shows an error instead of generating
+a command that trusts only one hub. Docker, Homebrew, Windows and FreeBSD retain
+their native setup commands; the automatic three-hub setup applies to the Linux
+button. All three hubs must still be able to reach the device's agent port.
+
+The Buildroot device `itsk1c` (`192.168.1.43`) uses BusyBox init rather than
+systemd. Its verified official 0.21.0 `linux_mipsle` binary, agent data and
+three-hub trust file live in `/usr/data/desk-monitoring`. The installed
+`/etc/init.d/S99beszel-agent` comes from
+`roles/desk_monitoring/files/beszel-agent-busybox`; the existing `rcS` starts it
+on boot. Run `/etc/init.d/S99beszel-agent start`, `stop`, `restart` or `status`
+as root. Configuration is in `/usr/data/desk-monitoring/agent.env`, and startup
+output is in `/tmp/beszel-agent.log`. This setup uses SSH polling on port 45876
+without a registration token. It runs at nice level 15 with `GOMAXPROCS=1`
+and a 32 MiB Go memory target (not a hard limit); systemd, Docker image
+checks and GPU collection are disabled. The Binary tab's systemd installer does
+not install this BusyBox service.
+
+The dialog stays open while saving and shows a spinner and **Saving and syncing**.
+Inputs, repeat submissions and dismissal are disabled until the request completes.
+Errors remain visible with the entered values. If the system was created but its
+connection setup failed, **Retry** finishes setup using that record. Successful
+saves show a confirmation and update the dashboard immediately; systems awaiting
+their first metrics remain visible as Pending or Down. Saving configuration does
+not imply that an agent is reachable or that every replica has finished applying;
+the shared boundary still requires its normal write quorum.
+
+The small patch is `roles/desk_monitoring/files/beszel-ui.patch`, applied to the
+pinned 0.21.0 source by `scripts/build-beszel-ui.py`. Builds use the upstream npm
+lockfile and Go module checksums, and cache the ARM64 artifact under `/private/tmp`.
+The controller needs Python 3.12+ and Node 24+ (also used for the command tests),
+npm, patch and Go with automatic toolchain download enabled. The regular monitoring
+install preserves the patched hub. To update existing hubs without rerunning
+bootstrap or touching agent membership:
+
+```bash
+ansible-playbook -i inventory.ini monitoring-ui.yml
+```
+
+This rollout restarts one `beszel-hub` at a time, checks native health and shared
+configuration, retains rollback copies, and verifies protected services and DNS
+configuration. Existing browser sessions need a reload to load the new bundle.
 
 ## Network-monitor record identity recovery
 

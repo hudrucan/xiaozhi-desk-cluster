@@ -13,7 +13,7 @@ Environment="CHECK_UPDATES=false"
 {% if desk_monitoring_auto_login_email | default('') %}
 Environment="AUTO_LOGIN={{ desk_monitoring_auto_login_email }}"
 {% endif %}
-ExecStart=/opt/desk-monitoring/{{ desk_monitoring_version }}/beszel serve --http={{ cluster_ip }}:{{ desk_monitoring_hub_port }} --dir=/var/lib/beszel-hub
+ExecStart=/opt/desk-monitoring/{{ desk_monitoring_version }}/beszel-desk-ui serve --http={{ cluster_ip }}:{{ desk_monitoring_hub_port }} --dir=/var/lib/beszel-hub
 Restart=on-failure
 RestartSec=5
 Slice=desk-monitoring.slice
