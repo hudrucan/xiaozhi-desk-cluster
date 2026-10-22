@@ -377,6 +377,30 @@ type Event struct {
 	From    string    `json:"from,omitempty"`
 	To      string    `json:"to,omitempty"`
 }
+
+func notificationEvents(meta map[string]any, node string, now time.Time) []Event {
+	var value struct {
+		ObservedAt int64 `json:"observed_at"`
+		Events     []struct {
+			ID      string `json:"id"`
+			Time    int64  `json:"time"`
+			Message string `json:"message"`
+		} `json:"events"`
+	}
+	raw, err := json.Marshal(meta)
+	if err != nil || len(raw) > 16384 || json.Unmarshal(raw, &value) != nil || !panelFresh(time.Unix(value.ObservedAt, 0), now, 20*time.Second) || len(value.Events) > 16 {
+		return nil
+	}
+	result := []Event{}
+	for _, event := range value.Events {
+		if len(event.ID) != 12 || strings.IndexFunc(event.ID, func(c rune) bool { return !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9') }) >= 0 || len(event.Message) > 256 || !panelFresh(time.Unix(event.Time, 0), now, 6*time.Hour) {
+			continue
+		}
+		result = append(result, Event{ID: "ntfy-" + event.ID, At: time.Unix(event.Time, 0).UTC(), Node: node, Kind: "notification", Message: event.Message})
+	}
+	return result
+}
+
 type Snapshot struct {
 	Protocol     string    `json:"protocol"`
 	At           time.Time `json:"observed_at"`
@@ -751,13 +775,18 @@ func (d *Dashboard) collect(ctx context.Context) {
 		d.dnsInstance = ""
 	}
 	ip := d.member.Private
-	urls := []string{"http://" + ip + ":8007/status", "http://" + ip + ":8000/status", "http://" + ip + ":8000/diagnostics", "http://127.0.0.1:3001/control/status"}
+	urls := []string{"http://" + ip + ":8007/status", "http://" + ip + ":8000/status", "http://" + ip + ":8000/diagnostics", "http://127.0.0.1:3001/control/status", "http://127.0.0.1:2590/ready"}
 	probeClient := d.config.ClientURL != "" && time.Since(d.firmware.At) >= 15*time.Second
 	if probeClient {
 		urls = append(urls, d.config.ClientURL+"api/status/system")
 	}
 	values := parallelGets(ctx, d, urls)
 	gateway, core, voice, adguard := values[0], values[1], values[2], values[3]
+	// Probe only the public readiness bit; the collector never reads auth state.
+	n.Components["ntfy"] = "unavailable"
+	if values[4]["ready"] == true {
+		n.Components["ntfy"] = "ready"
+	}
 	if n.Admission == nil {
 		n.Admission = map[string]*bool{}
 	}
@@ -798,7 +827,7 @@ func (d *Dashboard) collect(ctx context.Context) {
 		if status.URL == "" {
 			status.State = "disabled"
 		} else {
-			value := values[4]
+			value := values[5]
 			parsed, _ := url.Parse(status.URL)
 			version, ok := value["version"].(string)
 			if ok && len(version) > 0 && len(version) <= 128 && value["ip"] == parsed.Hostname() && number(value["uptime_sec"]) != nil {
@@ -831,6 +860,7 @@ func (d *Dashboard) collect(ctx context.Context) {
 	}
 	d.mu.Lock()
 	n.Events = append([]Event{}, d.local.Events...)
+	n.Events = mergeEvents(append(n.Events, notificationEvents(readJSON("/run/desk-ntfy/events.json", 16384), d.config.Node, time.Now())...), time.Now())
 	d.local = n
 	d.mu.Unlock()
 }
@@ -1115,7 +1145,7 @@ func validateNode(n Node, m Member, now time.Time) bool {
 		}
 	}
 	for key, value := range n.Components {
-		if key != "mqtt" && key != "core" && key != "worker" && key != "dns" && key != "vpn" {
+		if key != "mqtt" && key != "core" && key != "worker" && key != "dns" && key != "vpn" && key != "ntfy" {
 			return false
 		}
 		if value != "ready" && value != "unavailable" && !(key == "vpn" && value == "unknown") {
@@ -1493,10 +1523,14 @@ func panelSnapshot(snapshot Snapshot, members []Member, now time.Time) Panel {
 		for _, key := range []string{"worker", "core", "mqtt", "dns"} {
 			n.Components[key] = "unknown"
 		}
+		n.Components["ntfy"] = "unknown"
 		for _, key := range []string{"xiaozhi", "dns", "monitoring"} {
 			n.Config[key] = PanelSync{State: "unknown"}
 		}
 		if value, ok := fresh[m.ID]; ok {
+			if s := value.Components["ntfy"]; s == "ready" || s == "unavailable" {
+				n.Components["ntfy"] = s
+			}
 			n.Online = true
 			n.CPU = panelMetric(value.CPU)
 			n.Memory = panelMetric(value.Memory)
@@ -1554,7 +1588,7 @@ func panelSnapshot(snapshot Snapshot, members []Member, now time.Time) Panel {
 				continue
 			}
 			switch event.Kind {
-			case "ownership", "configuration", "node", "service":
+			case "ownership", "configuration", "node", "service", "notification":
 			default:
 				continue
 			}

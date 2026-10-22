@@ -1,0 +1,35 @@
+[Unit]
+Description=Native ntfy-rs and quorum logical auth adapter
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=desk-ntfy
+Group=desk-ntfy
+ExecStart=/opt/desk-ntfy/desk-ntfy serve /etc/desk-ntfy/config.json
+Environment=RUST_LOG=warn
+Restart=on-failure
+RestartSec=3
+KillMode=control-group
+RuntimeDirectory=desk-ntfy
+RuntimeDirectoryMode=0755
+UMask=0077
+MemoryMax=160M
+CPUQuota=30%
+CPUWeight=10
+TasksMax=96
+Environment=TOKIO_WORKER_THREADS=2
+LimitNOFILE=1024
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/desk-ntfy /run/desk-ntfy
+InaccessiblePaths=-/etc/desk-monitoring -/etc/desk-vpn-ui -/etc/desk-network -/etc/desk-homeassistant
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

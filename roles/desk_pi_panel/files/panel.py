@@ -503,7 +503,8 @@ class Renderer:
     def overview_roles(self,n,value,live,elapsed):
         if not node_live(n,live,elapsed):return ['Unconfirmed']
         roles=[]
-        for key,label in (('xiaozhi','Xiaozhi'),('dns','DNS'),('vpn','VPN')):
+        # NTFY enters through the existing management VIP, independently of cache replicas.
+        for key,label in (('xiaozhi','Xiaozhi'),('xiaozhi','NTFY'),('dns','DNS'),('vpn','VPN')):
             if n['vip'].get(key) is True:
                 roles.append(label+(' !' if self.owner(value,key,live,elapsed)=='Conflict' else ''))
         info=n.get('network') if network_live(n,live,elapsed) else None
@@ -601,11 +602,12 @@ class Renderer:
             self.text(d,(28,179),'Owner, activity and health are unconfirmed.',12,MUTED,width=424)
             return
         if node_view=='services':
-            boxes=self.columns(d,(14,125,466,174),3)
-            for box,(label,key) in zip(boxes,(('Xiaozhi VIP','xiaozhi'),('DNS VIP','dns'),('VPN VIP','vpn'))):
+            boxes=self.columns(d,(14,125,466,174),4)
+            for box,(label,key) in zip(boxes,(('Xiaozhi VIP','xiaozhi'),('DNS VIP','dns'),('VPN VIP','vpn'),('NTFY VIP','xiaozhi'))):
                 role=vip_role(n,key)
+                if label=='NTFY VIP' and self.owner(value,key,live,elapsed)=='Conflict':role='Conflict'
                 self.text(d,(box[0]+12,131),label,12,MUTED)
-                self.text(d,(box[0]+12,150),role,14,GOLD if role=='Owner' else TEXT,True,width=126)
+                self.text(d,(box[0]+12,150),role,13,GOLD if role=='Owner' else TEXT,True,width=box[2]-box[0]-24)
             ready=n.get('vpn_ready')
             self.text(d,(26,184),'VPN eligibility',12,MUTED)
             self.right_text(d,(250,179,452,202),'Ready' if ready is True else 'Not eligible' if ready is False else 'Unconfirmed',12,GREEN if ready is True else MUTED)

@@ -1,0 +1,42 @@
+---
+- name: Read the pinned static web artifact digest
+  ansible.builtin.set_fact:
+    ntfy_web_sha256: "{{ lookup('ansible.builtin.file', desk_ntfy_package + '/web-sha256') | trim }}"
+- ansible.builtin.assert:
+    that: ntfy_web_sha256 is match('^[a-f0-9]{64}$')
+- ansible.builtin.copy:
+    src: '{{ desk_ntfy_package }}/web.tar.gz'
+    dest: /opt/desk-ntfy/web.tar.gz
+    mode: '0644'
+- ansible.builtin.stat:
+    path: /opt/desk-ntfy/web.tar.gz
+    checksum_algorithm: sha256
+  register: ntfy_web_archive
+- ansible.builtin.assert:
+    that: ntfy_web_archive.stat.checksum == ntfy_web_sha256
+- ansible.builtin.file:
+    path: '/opt/desk-ntfy/web-{{ ntfy_web_sha256 }}'
+    state: directory
+    mode: '0755'
+- name: Extract the same verified public assets on every replica
+  ansible.builtin.unarchive:
+    src: /opt/desk-ntfy/web.tar.gz
+    dest: '/opt/desk-ntfy/web-{{ ntfy_web_sha256 }}'
+    remote_src: true
+    creates: '/opt/desk-ntfy/web-{{ ntfy_web_sha256 }}/.complete'
+- name: Keep public assets root-owned rather than retaining the controller archive UID
+  ansible.builtin.file:
+    path: '/opt/desk-ntfy/web-{{ ntfy_web_sha256 }}'
+    state: directory
+    owner: root
+    group: root
+    recurse: true
+- ansible.builtin.copy:
+    content: '{{ ntfy_web_sha256 }}'
+    dest: '/opt/desk-ntfy/web-{{ ntfy_web_sha256 }}/.complete'
+    mode: '0644'
+- name: Activate the complete web release atomically without mutable application state
+  ansible.builtin.file:
+    src: '/opt/desk-ntfy/web-{{ ntfy_web_sha256 }}'
+    dest: /opt/desk-ntfy/web
+    state: link

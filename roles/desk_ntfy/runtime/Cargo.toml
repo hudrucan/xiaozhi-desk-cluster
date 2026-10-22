@@ -1,0 +1,37 @@
+[package]
+name = "desk-ntfy"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+# prepare-ntfy.sh verifies the exact upstream revision and server-boundary patch.
+ntfy_rs = { package = "ntfy-server-rs", path = "upstream", default-features = false, features = ["auth"] }
+aes-gcm = "0.10"
+anyhow = "1"
+axum = "0.7"
+axum-server = { version = "0.8", features = ["tls-rustls-no-provider"] }
+base64 = "0.22"
+bcrypt = "0.15"
+hex = "0.4"
+hmac = "0.12"
+rand = "0.8"
+rpassword = "7"
+reqwest = { version = "0.13", features = ["json"] }
+rusqlite = { version = "0.31", features = ["bundled"] }
+rustls = { version = "0.23", features = ["aws_lc_rs"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+tokio = { version = "1", features = ["full"] }
+toml = "0.8"
+tower-http = { version = "0.6", features = ["fs"] }
+
+[dev-dependencies]
+tempfile = "3"
+tower = { version = "0.5", features = ["util"] }
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true

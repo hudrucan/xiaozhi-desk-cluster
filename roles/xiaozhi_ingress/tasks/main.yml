@@ -83,6 +83,12 @@
         mode: '0644'
       when: desk_homeassistant_enabled | default(false) | bool
 
+    - name: Retain an installed ntfy boundary on full ingress reruns
+      ansible.builtin.slurp:
+        src: /etc/desk-ntfy/ingress.cfg
+      register: xiaozhi_ntfy_fragment
+      failed_when: false
+
     - name: Validate and install the HAProxy candidate
       ansible.builtin.template:
         src: haproxy.cfg.j2

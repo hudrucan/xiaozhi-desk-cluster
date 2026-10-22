@@ -1,0 +1,67 @@
+---
+- name: Recover existing replicas before making deployment changes
+  hosts: deskboxes
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  tasks:
+    - ansible.builtin.assert:
+        that: ansible_play_hosts_all | sort == groups['deskboxes'] | sort
+    - ansible.builtin.stat:
+        path: /var/lib/desk-ntfy/journal.enc
+      register: ntfy_checkpoint
+    - name: Bootstrap only when no member has an existing journal
+      ansible.builtin.set_fact:
+        ntfy_start_together: "{{ groups['deskboxes'] | map('extract',hostvars,'ntfy_checkpoint') | selectattr('stat.exists') | list | length == 0 }}"
+    - name: Start stopped journal replicas without restarting active peers
+      ansible.builtin.systemd_service:
+        name: desk-ntfy
+        state: started
+      when: ntfy_checkpoint.stat.exists
+    # This play has no serial limit: all start operations finish before any readiness wait.
+    - name: Require recovered replicas to form quorum before rolling changes
+      ansible.builtin.include_role:
+        name: desk_ntfy
+        tasks_from: ready
+      when: ntfy_checkpoint.stat.exists
+
+- name: Start every fresh replica before waiting for the bootstrap quorum
+  hosts: deskboxes
+  become: true
+  gather_facts: true
+  gather_subset: [min]
+  any_errors_fatal: true
+  tasks:
+    - ansible.builtin.include_role:
+        name: desk_ntfy
+      when: ntfy_start_together | bool
+
+- name: Upgrade existing ntfy replicas one at a time
+  hosts: deskboxes
+  become: true
+  gather_facts: true
+  gather_subset: [min]
+  serial: 1
+  any_errors_fatal: true
+  tasks:
+    - ansible.builtin.include_role:
+        name: desk_ntfy
+      when: not (ntfy_start_together | bool)
+    - ansible.builtin.include_role:
+        name: desk_ntfy
+        tasks_from: ready
+      when: not (ntfy_start_together | bool)
+
+- name: Expose only caught-up ntfy replicas through existing HAProxy
+  hosts: deskboxes
+  become: true
+  gather_facts: false
+  serial: 1
+  any_errors_fatal: true
+  tasks:
+    - ansible.builtin.include_role:
+        name: desk_ntfy
+        tasks_from: ingress
+
+- name: Update the existing read-only dashboard projection
+  ansible.builtin.import_playbook: ../dashboard/desk-dashboard.yml

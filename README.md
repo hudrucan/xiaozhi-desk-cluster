@@ -78,6 +78,7 @@ desired state.
 | **Home Assistant** · `:8123` | Native Core, manual online configuration sync, and certified recovery | [Core lifecycle](docs/HOME_ASSISTANT.md) |
 | **Cameras** · native HA UI | Live relays, selected owner-side recordings, thumbnails, and browser playback | [Capabilities & authority](docs/CAMERA_MEDIA.md) |
 | **Monitoring** · `/monitor/` | Three Beszel hubs, shared settings, and node/service telemetry | [Monitoring](docs/DESK_MONITORING.md) |
+| **NTFY** · `:2586` | Native ntfy-rs, quorum auth, static Web UI, and notifications in Pi Events | [Notifications & recovery](docs/DESK_NTFY.md) |
 | **Dashboard** · `/` | Cluster topology, freshness-aware status, and confirmed maintenance actions | [Dashboard](docs/DESK_DASHBOARD.md) · [LAN UI](docs/DESK_UI.md) |
 | **Displays** | Deskbox FD6551 indicators and a separate Raspberry Pi touchscreen client | [Node panel](docs/XIAOZHI_RUNTIME.md#fd6551-node-panel) · [Pi panel](docs/PI_PANEL.md) |
 

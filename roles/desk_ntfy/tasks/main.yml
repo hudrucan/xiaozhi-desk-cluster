@@ -1,0 +1,101 @@
+---
+- name: Require symmetric ARM64 nodes and stable WireGuard-accessible URL
+  ansible.builtin.assert:
+    that:
+      - groups['deskboxes'] | sort == ['deskb1x', 'deskb2x', 'deskb3x']
+      - ansible_architecture == 'aarch64'
+      - desk_ntfy_base_url == 'http://' + desk_ntfy_vip + ':2586'
+      - not ansible_check_mode
+    fail_msg: ntfy requires the existing three ARM64 nodes and an explicit-port management VIP URL.
+- name: Read the applied management VIP without changing election state
+  ansible.builtin.slurp:
+    src: /etc/xiaozhi-ingress.json
+  register: ntfy_ingress
+- name: Verify the ntfy URL uses the already deployed VIP
+  ansible.builtin.assert:
+    that:
+      - (ntfy_ingress.content | b64decode | from_json).vip == desk_ntfy_vip
+- name: Load the shared ignored auth identity and artifact checksum
+  ansible.builtin.set_fact:
+    ntfy_credentials: "{{ lookup('ansible.builtin.file', desk_ntfy_secrets + '/credentials.json') | from_json }}"
+    ntfy_sha256: "{{ lookup('ansible.builtin.file', desk_ntfy_package + '/sha256') | trim }}"
+    ntfy_members: {}
+  no_log: true
+- name: Build static peer membership
+  ansible.builtin.set_fact:
+    ntfy_members: "{{ ntfy_members | combine({item: hostvars[item].cluster_ip}) }}"
+  loop: "{{ groups['deskboxes'] | sort }}"
+- name: Create isolated native account
+  ansible.builtin.user:
+    name: desk-ntfy
+    system: true
+    create_home: false
+    shell: /usr/sbin/nologin
+- name: Create native package and private auth directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner | default('root') }}"
+    group: "{{ item.group | default('root') }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: /opt/desk-ntfy, mode: '0755'}
+    - {path: /etc/desk-ntfy, group: desk-ntfy, mode: '0750'}
+    - {path: /var/lib/desk-ntfy, owner: desk-ntfy, group: desk-ntfy, mode: '0700'}
+- ansible.builtin.import_tasks: web.yml
+- name: Stage the controller's native package
+  ansible.builtin.copy:
+    src: "{{ desk_ntfy_package }}/desk-ntfy"
+    dest: /opt/desk-ntfy/desk-ntfy.pending
+    mode: '0755'
+  register: ntfy_binary
+- name: Verify ARM64 Linux ELF and package digest before activation
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/python3
+      - '-c'
+      - 'import hashlib,sys; b=open(sys.argv[1],"rb").read(); assert b[:5]==b"\x7fELF\x02" and b[5]==1 and int.from_bytes(b[18:20],"little")==183; assert hashlib.sha256(b).hexdigest()==sys.argv[2]'
+      - /opt/desk-ntfy/desk-ntfy.pending
+      - "{{ ntfy_sha256 }}"
+  changed_when: false
+- name: Activate verified package atomically
+  ansible.builtin.copy:
+    src: /opt/desk-ntfy/desk-ntfy.pending
+    dest: /opt/desk-ntfy/desk-ntfy
+    remote_src: true
+    mode: '0755'
+  register: ntfy_installed
+- name: Install fixed shared seed and pinned peer trust
+  ansible.builtin.copy:
+    src: "{{ desk_ntfy_secrets }}/{{ item }}"
+    dest: "/etc/desk-ntfy/{{ item }}"
+    group: desk-ntfy
+    mode: '0640'
+  loop: [seed.enc, tls.crt, tls.key]
+  no_log: true
+  diff: false
+  register: ntfy_trust
+- name: Render private runtime and Ansible-owned TOML
+  ansible.builtin.template:
+    src: "{{ item.src }}"
+    dest: "/etc/desk-ntfy/{{ item.dest }}"
+    group: desk-ntfy
+    mode: '0640'
+  loop:
+    - {src: config.json.j2, dest: config.json}
+    - {src: server.toml.j2, dest: server.toml}
+  no_log: true
+  diff: false
+  register: ntfy_config
+- name: Install native service
+  ansible.builtin.template:
+    src: desk-ntfy.service.j2
+    dest: /etc/systemd/system/desk-ntfy.service
+    mode: '0644'
+  register: ntfy_unit
+- name: Start or update this auth replica
+  ansible.builtin.systemd_service:
+    name: desk-ntfy
+    enabled: true
+    daemon_reload: true
+    state: "{{ 'restarted' if ntfy_installed.changed or ntfy_trust.changed or ntfy_config.changed or ntfy_unit.changed else 'started' }}"

@@ -36,6 +36,26 @@ def homeassistant_fixture():
     return v
 
 class PanelTests(unittest.TestCase):
+    def test_ntfy_uses_shared_vip_role_instead_of_replica_readiness(self):
+        v=fixture();n=v['nodes'][0];n['components']['ntfy']='ready';n['vip']['xiaozhi']=True
+        for peer in v['nodes'][1:]:peer['components']['ntfy']='ready';peer['vip']['xiaozhi']=False
+        r=panel.Renderer.__new__(panel.Renderer);r.fonts={11:Mock()};r.text=Mock();r.right_text=Mock()
+        self.assertIn('NTFY',r.overview_roles(n,v,True,0))
+        for peer in v['nodes'][1:]:self.assertNotIn('NTFY',r.overview_roles(peer,v,True,0))
+        self.assertNotIn('NTFY',r.overview_roles(n,v,True,30000))
+        d=Mock();d.textlength.return_value=30
+        r.overview(d,v,True,0)
+        labels=[call.args[2] for call in r.text.call_args_list]
+        self.assertTrue(any('NTFY' in label for label in labels))
+        self.assertFalse(any('ntfy' in label or 'Ready' in label for label in labels))
+        n['vip']['xiaozhi']=False;v['nodes'][1]['vip']['xiaozhi']=True;v['owners']['xiaozhi']['node']='deskb2x'
+        self.assertNotIn('NTFY',r.overview_roles(n,v,True,0));self.assertIn('NTFY',r.overview_roles(v['nodes'][1],v,True,0))
+        n['vip']['xiaozhi']=True;v['owners']['xiaozhi']={'state':'conflict','node':None}
+        for peer in v['nodes'][:2]:self.assertIn('NTFY !',r.overview_roles(peer,v,True,0))
+        r.columns=Mock(return_value=[(14+i*110,125,120+i*110,174) for i in range(4)]);r.center_text=Mock();r.text.reset_mock()
+        r.node(d,v,True,0,0,node_view='services')
+        labels=[call.args[2] for call in r.text.call_args_list]
+        self.assertIn('NTFY VIP',labels);self.assertIn('Conflict',labels)
     def test_overview_local_clock_uses_twelve_hours_with_explicit_am_pm(self):
         for hour,minute,expected in ((0,0,'12:00 AM'),(8,36,'8:36 AM'),(12,5,'12:05 PM'),(13,7,'1:07 PM'),(23,59,'11:59 PM')):
             self.assertEqual(panel.local_clock(panel.datetime(2026,10,17,hour,minute)),expected)
@@ -168,8 +188,8 @@ class PanelTests(unittest.TestCase):
         v=network_fixture();n=v['nodes'][0]
         n['vip']={'xiaozhi':True,'dns':True,'vpn':True}
         r=panel.Renderer.__new__(panel.Renderer)
-        self.assertEqual(r.overview_roles(n,v,True,0),['Xiaozhi','DNS','VPN','Network'])
-        self.assertEqual(r.overview_roles(n,v,True,14000),['Xiaozhi','DNS','VPN'])
+        self.assertEqual(r.overview_roles(n,v,True,0),['Xiaozhi','NTFY','DNS','VPN','Network'])
+        self.assertEqual(r.overview_roles(n,v,True,14000),['Xiaozhi','NTFY','DNS','VPN'])
         self.assertEqual(r.overview_roles(n,v,True,20000),['Unconfirmed'])
         n=v['nodes'][1];n['vip']={'xiaozhi':False,'dns':False,'vpn':False}
         self.assertEqual(r.overview_roles(n,v,True,0),['Standby'])

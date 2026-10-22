@@ -1,0 +1,165 @@
+---
+# Run after ntfy bootstrap and admin issuance of the two scoped publisher tokens.
+- name: Verify existing services and scoped notification credentials
+  hosts: deskboxes
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  vars_files:
+    - ../../roles/desk_ntfy/defaults/main.yml
+  tasks:
+    - ansible.builtin.assert:
+        that:
+          - not ansible_check_mode
+          - ansible_play_hosts_all | sort == groups['deskboxes'] | sort
+    - ansible.builtin.set_fact:
+        ntfy_publishers: "{{ lookup('file',desk_ntfy_secrets+'/publishers.json') | from_json }}"
+      no_log: true
+    - ansible.builtin.assert:
+        that:
+          - ntfy_publishers.keys() | sort == ['beszel','homeassistant']
+          - ntfy_publishers.beszel is match('^[A-Za-z0-9]{32}$')
+          - ntfy_publishers.homeassistant is match('^[A-Za-z0-9]{32}$')
+          - ntfy_publishers.beszel != ntfy_publishers.homeassistant
+      no_log: true
+    - name: Authenticate each scoped token without publishing a test alert
+      ansible.builtin.uri:
+        url: '{{ desk_ntfy_base_url }}/v1/account'
+        headers:
+          Authorization: 'Bearer {{ ntfy_publishers[item] }}'
+        use_proxy: false
+        return_content: true
+        timeout: 5
+      loop: [beszel, homeassistant]
+      register: ntfy_publisher_accounts
+      no_log: true
+    - name: Require write-only service users on the shared Events topic
+      ansible.builtin.assert:
+        that:
+          - item.json.role == 'user'
+          - item.json.access | length == 1
+          - item.json.access[0].topic == 'desk-events'
+          - item.json.access[0].write | bool
+          - not (item.json.access[0].read | bool)
+      loop: '{{ ntfy_publisher_accounts.results }}'
+      no_log: true
+    - name: Confirm the installed management VIP before enabling delivery
+      ansible.builtin.slurp:
+        src: /etc/xiaozhi-ingress.json
+      register: ntfy_integration_ingress
+    - ansible.builtin.assert:
+        that: (ntfy_integration_ingress.content | b64decode | from_json).vip == desk_ntfy_vip
+    - name: Require existing Beszel sync and the active Core control plane
+      ansible.builtin.uri:
+        url: '{{ item }}'
+        use_proxy: false
+        timeout: 5
+      loop:
+        - 'http://{{ cluster_ip }}:8091/api/health'
+        - 'http://{{ cluster_ip }}:20223/status'
+
+- name: Install Beszel native delivery gating one hub at a time
+  hosts: deskboxes
+  become: true
+  gather_facts: false
+  serial: 1
+  any_errors_fatal: true
+  vars_files:
+    - ../../roles/desk_ntfy/defaults/main.yml
+  tasks:
+    - ansible.builtin.include_role:
+        name: desk_monitoring
+        tasks_from: build-ui
+    - ansible.builtin.file:
+        path: /etc/systemd/system/beszel-hub.service.d
+        state: directory
+        mode: '0755'
+    - ansible.builtin.copy:
+        content: "[Service]\nEnvironment=DESK_NOTIFICATION_VIP={{ desk_ntfy_vip }}\n"
+        dest: /etc/systemd/system/beszel-hub.service.d/ntfy.conf
+        mode: '0644'
+      register: ntfy_beszel_unit
+    - ansible.builtin.systemd_service:
+        name: beszel-hub
+        daemon_reload: true
+        state: "{{ 'restarted' if desk_monitoring_ui_binary.changed or ntfy_beszel_unit.changed else 'started' }}"
+    - ansible.builtin.uri:
+        url: 'http://{{ cluster_ip }}:8091/api/health'
+        use_proxy: false
+        timeout: 3
+      register: ntfy_beszel_ready
+      until: ntfy_beszel_ready.status == 200
+      retries: 30
+      delay: 2
+
+- name: Apply native notification settings through existing service configuration paths
+  hosts: deskboxes
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  vars_files:
+    - ../../roles/desk_ntfy/defaults/main.yml
+    - ../../roles/desk_monitoring/defaults/main.yml
+  tasks:
+    - name: Add or rotate the Beszel webhook via its existing quorum writer
+      ansible.builtin.command:
+        argv: [/usr/bin/python3, '-c', "{{ lookup('file',desk_repo_root+'/roles/desk_monitoring/files/ntfy_settings.py') }}"]
+        stdin: "{{ {'host':cluster_ip,'webhook':'ntfy://:'+ntfy_publishers.beszel+'@'+desk_ntfy_vip+':2586/desk-events?Scheme=http'} | to_json }}"
+      environment:
+        PYTHONPATH: '/usr/local/libexec/desk-monitoring:{{ desk_monitoring_crypto_directory }}'
+        PYTHONDONTWRITEBYTECODE: '1'
+      run_once: true
+      register: ntfy_beszel_settings
+      changed_when: ntfy_beszel_settings.stdout == 'changed'
+      no_log: true
+    - name: Stage the native HA package outside the live Core configuration
+      ansible.builtin.template:
+        src: ../../roles/desk_ntfy/templates/homeassistant-ntfy.yaml.j2
+        dest: /etc/desk-homeassistant/ntfy-package.yaml
+        mode: '0600'
+      no_log: true
+      diff: false
+      register: ntfy_ha_package
+    - name: Update the existing stopped-Core configuration hook
+      ansible.builtin.copy:
+        src: ../../roles/desk_homeassistant/files/component_config.py
+        dest: /usr/local/libexec/desk-homeassistant/component_config.py
+        mode: '0700'
+      register: ntfy_ha_hook
+    - name: Checkpoint only when a staged HA package or hook changed on a replica
+      ansible.builtin.set_fact:
+        ntfy_ha_changed: "{{ (groups['deskboxes'] | map('extract',hostvars,'ntfy_ha_package') | selectattr('changed') | list | length > 0) or (groups['deskboxes'] | map('extract',hostvars,'ntfy_ha_hook') | selectattr('changed') | list | length > 0) }}"
+
+- name: Certify the HA package through the existing clean checkpoint operation
+  ansible.builtin.import_playbook: ../homeassistant/homeassistant-checkpoint.yml
+  when: ntfy_ha_changed | bool
+
+- name: Wait for the updated Core and its certified configuration
+  hosts: deskboxes
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  tasks:
+    - ansible.builtin.uri:
+        url: 'http://{{ cluster_ip }}:20223/status'
+        use_proxy: false
+        timeout: 3
+      register: ntfy_ha_ready
+      until: ntfy_ha_ready.json.ready | default(false)
+      retries: 90
+      delay: 2
+      when: ntfy_ha_changed | bool and homeassistant_operation_before.json.ready
+    - ansible.builtin.set_fact:
+        ntfy_ha_revision: "{{ groups['deskboxes'] | map('extract',hostvars,'ntfy_ha_ready') | selectattr('json','defined') | map(attribute='json.checkpoint_revision') | first }}"
+      when: ntfy_ha_changed | bool
+    - ansible.builtin.uri:
+        url: 'http://{{ cluster_ip }}:20223/status'
+        use_proxy: false
+        timeout: 3
+      register: ntfy_ha_synced
+      until:
+        - ntfy_ha_synced.json.sync | default('pending') == 'synced'
+        - ntfy_ha_synced.json.checkpoint_revision | default(-1) | int >= ntfy_ha_revision | int
+      retries: 30
+      delay: 2
+      when: ntfy_ha_changed | bool

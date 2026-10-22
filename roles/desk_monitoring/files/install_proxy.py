@@ -27,7 +27,10 @@ DNS_ROUTE = r'''# BEGIN DESK DNS UI ROUTE
 '''
 
 
-def candidate(current, backend, dns_backend=None, dashboard_backend=None, vpn_backend=None, network_backend=None):
+def candidate(current, backend, dns_backend=None, dashboard_backend=None, vpn_backend=None, network_backend=None, ntfy_config=None):
+    if ntfy_config is not None:
+        current = re.sub(r'^# BEGIN DESK NTFY\n.*?^# END DESK NTFY\n', '', current, flags=re.MULTILINE | re.DOTALL)
+        current = current.rstrip() + '\n' + ntfy_config.rstrip() + '\n'
     if network_backend is None:
         retained = re.search(r'^# BEGIN DESK NETWORK BACKEND\n(.*?)^# END DESK NETWORK BACKEND\n', current, flags=re.MULTILINE | re.DOTALL)
         if retained: network_backend = retained.group(1)
@@ -85,10 +88,10 @@ def candidate(current, backend, dns_backend=None, dashboard_backend=None, vpn_ba
     return updated
 
 
-def install(backend, dns_backend=None, reload_page=False, dashboard_backend=None, vpn_backend=None, network_backend=None):
+def install(backend, dns_backend=None, reload_page=False, dashboard_backend=None, vpn_backend=None, network_backend=None, ntfy_config=None):
     path = Path('/etc/haproxy/haproxy.cfg')
     current = path.read_text()
-    updated = candidate(current, backend, dns_backend, dashboard_backend, vpn_backend, network_backend)
+    updated = candidate(current, backend, dns_backend, dashboard_backend, vpn_backend, network_backend, ntfy_config)
     if current == updated and not reload_page:
         return False
     # This cluster already runs MQTT through the same master. Never validate only HTTP.
@@ -126,9 +129,10 @@ if __name__ == '__main__':
     parser.add_argument('--dashboard-backend')
     parser.add_argument('--vpn-backend')
     parser.add_argument('--network-backend')
+    parser.add_argument('--ntfy-config')
     args = parser.parse_args()
     try:
-        changed = install(Path(args.backend).read_text(), Path(args.dns_backend).read_text() if args.dns_backend else None, args.reload_page, Path(args.dashboard_backend).read_text() if args.dashboard_backend else None, Path(args.vpn_backend).read_text() if args.vpn_backend else None, Path(args.network_backend).read_text() if args.network_backend else None)
+        changed = install(Path(args.backend).read_text(), Path(args.dns_backend).read_text() if args.dns_backend else None, args.reload_page, Path(args.dashboard_backend).read_text() if args.dashboard_backend else None, Path(args.vpn_backend).read_text() if args.vpn_backend else None, Path(args.network_backend).read_text() if args.network_backend else None, Path(args.ntfy_config).read_text() if args.ntfy_config else None)
         print('changed' if changed else 'unchanged')
     except Exception:
         raise SystemExit('Monitoring HAProxy candidate failed; existing routing retained')

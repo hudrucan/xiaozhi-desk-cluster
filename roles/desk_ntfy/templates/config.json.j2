@@ -1,0 +1,5 @@
+{{ {'node': inventory_hostname, 'members': ntfy_members, 'key': ntfy_credentials.key,
+    'certificate': '/etc/desk-ntfy/tls.crt', 'tls_key': '/etc/desk-ntfy/tls.key',
+    'seed': '/etc/desk-ntfy/seed.enc', 'journal': '/var/lib/desk-ntfy/journal.enc',
+    'database': '/var/lib/desk-ntfy/auth.db', 'events': '/run/desk-ntfy/events.json',
+    'toml': '/etc/desk-ntfy/server.toml'} | to_nice_json }}

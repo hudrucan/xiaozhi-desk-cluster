@@ -1,0 +1,72 @@
+diff --git a/src/handlers/health.rs b/src/handlers/health.rs
+index 6e2c7f1..c6b569e 100644
+--- a/src/handlers/health.rs
++++ b/src/handlers/health.rs
+@@ -18,6 +18,7 @@ pub async fn health() -> Json<Value> {
+ #[cfg(feature = "auth")]
+ pub async fn topic_auth(
+     State(state): State<AppState>,
++    axum::extract::Path(topic): axum::extract::Path<String>,
+     Extension(auth_user): Extension<AuthUser>,
+ ) -> impl IntoResponse {
+     use crate::auth::{authorize, Permission};
+@@ -30,7 +31,7 @@ pub async fn topic_auth(
+         state.effective_auth_db(),
+         &state.config,
+         &auth_user,
+-        "auth",
++        &topic,
+         Permission::Read,
+     ) {
+         Ok(_) => (StatusCode::OK, Json(json!({ "success": true }))).into_response(),
+diff --git a/src/router.rs b/src/router.rs
+index b73a3fa..c041585 100644
+--- a/src/router.rs
++++ b/src/router.rs
+@@ -12,7 +12,7 @@ use crate::handlers::metrics as metrics_handler;
+ use crate::handlers::webpush;
+ use crate::handlers::matrix;
+ use axum::{routing::{get, post, put}, Router};
+-#[cfg(feature = "auth")]
++#[cfg(all(feature = "auth", feature = "webpush"))]
+ use axum::routing::delete;
+ #[cfg(feature = "metrics")]
+ use metrics_exporter_prometheus::PrometheusHandle;
+@@ -55,20 +55,12 @@ fn build_inner(state: AppState, _metrics_handle: Option<MetricsHandle>) -> Route
+ 
+     #[cfg(feature = "auth")]
+     {
++        // Desk Cluster: native auth is read-only, including on loopback.
++        // All mutations are validated, chosen and applied by the Rust adapter.
+         protected = protected
+-            // ── self-service account ──────────────────────────────────────────
+-            .route("/v1/account",                    get(account::get_account).delete(account::delete_account))
+-            .route("/v1/account/password",           put(account::change_password))
+-            .route("/v1/account/token",              post(account::create_token))
+-            .route("/v1/account/token/:token",       delete(account::delete_token))
+-            .route("/v1/account/access",             get(account::get_access).post(account::set_access))
+-            .route("/v1/account/access/:topic",      delete(account::delete_access))
+-            // ── admin ─────────────────────────────────────────────────────────
+-            .route("/v1/admin/users",                          get(admin::list_users).post(admin::create_user))
+-            .route("/v1/admin/users/:username",                delete(admin::delete_user))
+-            .route("/v1/admin/users/:username/role",           put(admin::set_role))
+-            .route("/v1/admin/users/:username/access",         post(admin::set_access))
+-            .route("/v1/admin/users/:username/access/:topic",  delete(admin::delete_access));
++            .route("/v1/account", get(account::get_account))
++            .route("/v1/account/access", get(account::get_access))
++            .route("/v1/admin/users", get(admin::list_users));
+     }
+ 
+     #[cfg(feature = "auth")]
+@@ -89,11 +81,6 @@ fn build_inner(state: AppState, _metrics_handle: Option<MetricsHandle>) -> Route
+         // File attachment downloads (unauthenticated — opaque ID is the access control).
+         .route("/file/:id",                  get(file::serve_file));
+ 
+-    #[cfg(feature = "auth")]
+-    {
+-        unauthenticated = unauthenticated.route("/v1/account", post(account::register));
+-    }
+-
+     #[cfg(feature = "metrics")]
+     {
+         unauthenticated = unauthenticated.route("/metrics", get(metrics_handler::metrics));

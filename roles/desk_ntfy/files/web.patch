@@ -1,0 +1,39 @@
+diff --git a/web/src/app/Api.js b/web/src/app/Api.js
+--- a/web/src/app/Api.js
++++ b/web/src/app/Api.js
+@@ -33,14 +33,16 @@ class Api {
+     const user = await userManager.get(baseUrl);
+     console.log(`[Api] Publishing message to ${topicUrl(baseUrl, topic)}`);
+     const headers = {};
+-    const body = {
+-      topic,
+-      message,
+-      ...options,
+-    };
+-    await fetchOrThrow(baseUrl, {
++    // Use the same standard topic API as PublishDialog; ntfy-rs has no root JSON publish route.
++    const url = new URL(topicUrl(baseUrl, topic));
++    Object.entries(options || {}).forEach(([key, value]) => {
++      if (value !== undefined && value !== null) {
++        url.searchParams.set(key, Array.isArray(value) ? value.join(",") : String(value));
++      }
++    });
++    await fetchOrThrow(url.toString(), {
+       method: "PUT",
+-      body: JSON.stringify(body),
++      body: message,
+       headers: maybeWithAuth(headers, user),
+     });
+   }
+diff --git a/web/src/app/Connection.js b/web/src/app/Connection.js
+--- a/web/src/app/Connection.js
++++ b/web/src/app/Connection.js
+@@ -37,7 +37,7 @@ class Connection {
+     // we don't want to re-trigger the main view re-render potentially hundreds of times.
+ 
+     const wsUrl = this.wsUrl();
+-    console.log(`[Connection, ${this.shortUrl}, ${this.connectionId}] Opening connection to ${wsUrl}`);
++    console.log(`[Connection, ${this.shortUrl}, ${this.connectionId}] Opening connection`);
+ 
+     this.ws = new WebSocket(wsUrl);
+     this.ws.onopen = (event) => {

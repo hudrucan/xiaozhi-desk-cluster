@@ -1,0 +1,17 @@
+---
+- ansible.builtin.import_tasks: ready.yml
+- name: Render the fixed-port VIP and private node boundaries
+  ansible.builtin.template:
+    src: ingress.cfg.j2
+    dest: /etc/desk-ntfy/ingress.cfg
+    mode: '0644'
+- name: Install the existing complete HTTP and MQTT proxy validator
+  ansible.builtin.copy:
+    src: "{{ desk_repo_root }}/roles/desk_monitoring/files/install_proxy.py"
+    dest: /usr/local/libexec/desk-monitoring/install-proxy.py
+    mode: '0755'
+- name: Add ntfy without modifying other routes or VIP election
+  ansible.builtin.command:
+    argv: [/usr/bin/python3, /usr/local/libexec/desk-monitoring/install-proxy.py, --backend, /etc/desk-monitoring/backend.cfg, --ntfy-config, /etc/desk-ntfy/ingress.cfg]
+  register: ntfy_proxy
+  changed_when: ntfy_proxy.stdout == 'changed'

@@ -13,6 +13,57 @@ import (
 	"time"
 )
 
+func TestNotificationEventsRemainBoundedReadOnlyPanelEvents(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	meta := map[string]any{"observed_at": now.Unix(), "events": []map[string]any{{"id": "abcDEF123456", "time": now.Unix(), "message": "Door opened"}}}
+	events := notificationEvents(meta, "deskb1x", now)
+	if len(events) != 1 || events[0].Kind != "notification" || events[0].Node != "deskb1x" {
+		t.Fatal(events)
+	}
+	cluster := Event{ID: "cluster", At: now.Add(-time.Second), Node: "deskb2x", Kind: "ownership", Message: "VIP moved"}
+	merged := mergeEvents(append(events, events[0], cluster), now)
+	if len(merged) != 2 {
+		t.Fatal("notification dedup must retain cluster events", merged)
+	}
+	snapshot, members := panelFixture(now)
+	snapshot.Events = merged
+	projected := panelSnapshot(snapshot, members, now)
+	if len(projected.Events) != 2 || projected.Events[0].Kind != "notification" || projected.Events[1].Kind != "ownership" || projected.PollMS != 5000 {
+		t.Fatal("Pi event or polling contract changed", projected)
+	}
+	raw, err := json.Marshal(projected)
+	if err != nil || len(raw) > panelMaxBytes {
+		t.Fatal("Pi payload exceeds contract")
+	}
+	if len(notificationEvents(meta, "deskb1x", now.Add(21*time.Second))) != 0 {
+		t.Fatal("stale metadata retained")
+	}
+	meta["events"] = []map[string]any{{"id": "abcDEF123456", "time": now.Unix(), "message": strings.Repeat("x", 257)}}
+	if len(notificationEvents(meta, "deskb1x", now)) != 0 {
+		t.Fatal("oversize notification retained")
+	}
+}
+
+func TestNtfyHealthProjectionExpiresWithoutChangingPiEventsContract(t *testing.T) {
+	now := time.Now().UTC()
+	snapshot, members := panelFixture(now)
+	snapshot.Nodes[0].Components["ntfy"] = "ready"
+	snapshot.Nodes[1].Components["ntfy"] = "unavailable"
+	p := panelSnapshot(snapshot, members, now)
+	if p.Nodes[0].Components["ntfy"] != "ready" || p.Nodes[1].Components["ntfy"] != "unavailable" || p.Nodes[2].Components["ntfy"] != "unknown" || p.Owners["xiaozhi"].Node == nil || p.PollMS != 5000 {
+		t.Fatal("ntfy readiness, shared VIP or polling lost", p)
+	}
+	snapshot.At = now.Add(-staleAfter - time.Second)
+	p = panelSnapshot(snapshot, members, now)
+	if p.Nodes[0].Components["ntfy"] != "unknown" || p.Owners["xiaozhi"].Node != nil {
+		t.Fatal("stale ntfy readiness or VIP retained")
+	}
+	raw, err := json.Marshal(p)
+	if err != nil || len(raw) > panelMaxBytes {
+		t.Fatal("Pi payload contract exceeded")
+	}
+}
+
 func TestHostCPUExcludesGuestAndIOWait(t *testing.T) {
 	a := parseCPU("cpu 10 0 10 60 20 0 0 0 100 0\n")
 	b := parseCPU("cpu 20 0 20 120 40 0 0 0 200 0\n")

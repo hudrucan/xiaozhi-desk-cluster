@@ -145,3 +145,6 @@ backend desk_network
 {{ lookup('template', desk_repo_root + '/roles/desk_homeassistant/templates/proxy.cfg.j2') }}
 # END DESK HOME ASSISTANT
 {% endif %}
+{% if xiaozhi_ntfy_fragment is defined and xiaozhi_ntfy_fragment.content is defined %}
+{{ xiaozhi_ntfy_fragment.content | b64decode }}
+{% endif %}

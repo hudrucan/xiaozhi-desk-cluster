@@ -1,0 +1,11 @@
+---
+- name: Require this replica to catch up before continuing deployment
+  ansible.builtin.uri:
+    url: http://127.0.0.1:2590/ready
+    use_proxy: false
+    timeout: 2
+  register: ntfy_ready
+  until: ntfy_ready.status == 200
+  retries: 30
+  delay: 2
+  changed_when: false

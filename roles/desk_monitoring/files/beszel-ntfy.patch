@@ -1,0 +1,117 @@
+--- a/internal/alerts/alerts.go
++++ b/internal/alerts/alerts.go
+@@ -252,6 +252,9 @@
+ 		}
+ 	}
+ 	for _, webhook := range userAlertSettings.Webhooks {
++		if !notificationOwner(webhook) {
++			continue
++		}
+ 		if err := am.sendShoutrrrAlert(webhook, data.Title, data.Message, data.Link, data.LinkText, send); err != nil {
+ 			am.hub.Logger().Error("Failed to send shoutrrr alert", "err", err)
+ 		}
+--- /dev/null
++++ b/internal/alerts/desk_notification.go
+@@ -0,0 +1,38 @@
++package alerts
++
++import (
++	"net"
++	"net/url"
++	"os"
++)
++
++// Reuse management VIP ownership; metrics and manual notification tests stay local.
++func notificationOwner(webhook string) bool {
++	vip := os.Getenv("DESK_NOTIFICATION_VIP")
++	if vip == "" {
++		return true
++	}
++	destination, err := url.Parse(webhook)
++	if err != nil {
++		return false
++	}
++	if destination.Scheme != "ntfy" || destination.Hostname() != vip {
++		return true
++	}
++	addresses, err := net.InterfaceAddrs()
++	return err == nil && ownsNotificationVIP(vip, addresses)
++}
++
++func ownsNotificationVIP(vip string, addresses []net.Addr) bool {
++	wanted := net.ParseIP(vip)
++	if wanted == nil {
++		return false
++	}
++	for _, address := range addresses {
++		ip, _, err := net.ParseCIDR(address.String())
++		if err == nil && ip.Equal(wanted) {
++			return true
++		}
++	}
++	return false
++}
+--- /dev/null
++++ b/internal/alerts/desk_notification_test.go
+@@ -0,0 +1,61 @@
++package alerts
++
++import (
++	"github.com/nicholas-fedor/shoutrrr"
++	"net"
++	"net/http"
++	"net/http/httptest"
++	"strings"
++	"testing"
++)
++
++func TestNotificationOwnerFollowsExistingVIP(t *testing.T) {
++	vip := "192.168.1.186"
++	for owner := 0; owner < 3; owner++ {
++		sent := 0
++		for node := 0; node < 3; node++ {
++			addresses := []net.Addr{&net.IPNet{IP: net.ParseIP("10.10.10.11"), Mask: net.CIDRMask(24, 32)}}
++			if node == owner {
++				addresses = append(addresses, &net.IPNet{IP: net.ParseIP(vip), Mask: net.CIDRMask(32, 32)})
++			}
++			if ownsNotificationVIP(vip, addresses) {
++				sent++
++			}
++		}
++		if sent != 1 {
++			t.Fatalf("owner %d: %d hubs send", owner, sent)
++		}
++	}
++	if ownsNotificationVIP(vip, nil) || ownsNotificationVIP("invalid", nil) {
++		t.Fatal("must fail closed")
++	}
++	t.Setenv("DESK_NOTIFICATION_VIP", "")
++	if !notificationOwner("ntfy://:secret@192.168.1.186:2586/desk-events?Scheme=http") {
++		t.Fatal("opt-in guard changed existing deployment")
++	}
++	t.Setenv("DESK_NOTIFICATION_VIP", "192.168.1.186")
++	if notificationOwner("ntfy://:secret@192.168.1.186:2586/desk-events?Scheme=http") {
++		t.Fatal("hub without the VIP must fence automatic ntfy alerts")
++	}
++}
++
++func TestNtfyPublisherUsesNativeToken(t *testing.T) {
++	received := false
++	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		received = true
++		username, token, ok := r.BasicAuth()
++		if r.URL.Path != "/desk-events" || !ok || username != "" || token != "preserved-token" || r.Method != "POST" {
++			t.Errorf("unexpected native ntfy request: %s %s auth=%q", r.Method, r.URL.Path, r.Header.Get("Authorization"))
++		}
++		w.WriteHeader(http.StatusOK)
++		_, _ = w.Write([]byte(`{}`))
++	}))
++	defer server.Close()
++	webhook := "ntfy://:preserved-token@" + strings.TrimPrefix(server.URL, "http://") + "/desk-events?Scheme=http"
++	if err := shoutrrr.Send(webhook, "native alert"); err != nil {
++		t.Fatal(err)
++	}
++	if !received {
++		t.Fatal("native webhook did not publish")
++	}
++}

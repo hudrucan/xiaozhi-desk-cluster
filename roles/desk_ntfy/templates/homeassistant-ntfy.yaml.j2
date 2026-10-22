@@ -1,0 +1,30 @@
+rest_command:
+  desk_ntfy:
+    url: {{ (desk_ntfy_base_url + '/desk-events') | to_json }}
+    method: POST
+    headers:
+      Authorization: {{ ('Bearer ' + ntfy_publishers.homeassistant) | to_json }}
+{% raw %}
+      Title: >-
+        {{ title | default('Home Assistant', true) | string | replace('\r', ' ') | replace('\n', ' ') | truncate(128, true, '') }}
+    content_type: 'text/plain; charset=utf-8'
+    payload: >-
+      {{ message | string | truncate(1024, true, '') }}
+    timeout: 5
+
+# Only the existing single-active Core executes this native trigger.
+automation:
+  - id: desk_ntfy_persistent_notification
+    alias: Desk ntfy persistent notifications
+    triggers:
+      - trigger: persistent_notification
+        update_type: [added, updated]
+    actions:
+      - action: rest_command.desk_ntfy
+        data:
+          title: "{{ trigger.notification.title | default('Home Assistant', true) }}"
+          message: "{{ trigger.notification.message }}"
+    mode: queued
+    max: 10
+
+{% endraw %}

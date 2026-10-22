@@ -1,0 +1,15 @@
+# Managed by Ansible. Message cache and attachments are local and disposable.
+listen-http = "127.0.0.1:2587"
+base-url = {{ desk_ntfy_base_url | to_json }}
+upstream-base-url = "https://ntfy.sh"
+cache-file = "/var/lib/desk-ntfy/cache.db"
+auth-file = "/var/lib/desk-ntfy/auth.db"
+default-access = "deny-all"
+cache-duration = 21600
+message-size-limit = 4096
+# Also bounds the native HTTP body reader; attachments remain disabled.
+attachment-file-size-limit = 4096
+subscription-limit = 32
+request-limit-burst = 120
+request-limit-replenish = 1
+keepalive-interval = 30

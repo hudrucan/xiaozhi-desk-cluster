@@ -7,4 +7,5 @@ secret/
 # Local Python bytecode
 __pycache__/
 *.pyc
+roles/desk_ntfy/runtime/upstream/
 .claude/auto-context.md
