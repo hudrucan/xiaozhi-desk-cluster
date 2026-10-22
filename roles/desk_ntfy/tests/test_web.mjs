@@ -5,6 +5,34 @@ import vm from 'node:vm';
 import test from 'node:test';
 
 const source = fs.readFileSync(path.join(process.env.NTFY_WEB_SOURCE, 'web/src/app/Api.js'), 'utf8');
+const adminSource = fs.readFileSync(path.join(process.env.NTFY_WEB_SOURCE, 'web/src/components/ServerUsersApi.js'), 'utf8');
+test('server administration uses authenticated same-origin requests and never retries an ambiguous Save', async () => {
+  const requests = [];
+  let response = {ok: true, json: async () => ({revision: 7, users: [], actor: 'admin'})};
+  const context = vm.createContext({TextEncoder, AbortSignal, btoa,
+    fetch: async (...args) => { requests.push(args); if (response instanceof Error) throw response; return response; },
+  });
+  vm.runInContext(adminSource.replace('export async function', 'async function') + '\nglobalThis.request = serverUsersRequest;', context);
+  const credential = {username: 'admin', password: 'mật-khẩu'};
+  assert.equal((await context.request(credential)).revision, 7);
+  const [url, options] = requests[0];
+  assert.equal(url, '/v1/admin/users');
+  assert.equal(Buffer.from(options.headers.Authorization.slice(6), 'base64').toString(), 'admin:mật-khẩu');
+  assert.equal(options.cache, 'no-store'); assert.equal(options.credentials, 'omit'); assert.equal(options.redirect, 'error');
+  await context.request(credential, '/iphone/password', 'PUT', {password: 'new'});
+  assert.equal(requests[1][0], '/v1/admin/users/iphone/password');
+  assert.equal(requests[1][1].body, '{"password":"new"}');
+  for (const status of [401, 403, 503]) {
+    response = {ok: false, status};
+    const before = requests.length;
+    await assert.rejects(context.request(credential, '/iphone/token', 'POST', {label: 'Phone'}));
+    assert.equal(requests.length, before + 1);
+  }
+  response = new Error('connection lost');
+  const before = requests.length;
+  await assert.rejects(context.request(credential, '/iphone/token', 'POST', {}), /may have applied/);
+  assert.equal(requests.length, before + 1);
+});
 test('official quick/test publisher uses native topic API, Unicode metadata and existing credentials', async () => {
   const sent = [];
   const context = vm.createContext({URL, console: {log() {}},

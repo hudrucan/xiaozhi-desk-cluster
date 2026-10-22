@@ -6,6 +6,15 @@ files are served by the existing Rust adapter. Ansible owns TOML and static
 configuration; runtime users, password hashes, token identities and ACLs are
 replicated as logical auth state in the encrypted journal.
 
+In the Web UI, open **Server users** in the navigation (`/server-users`) and authenticate as an existing
+administrator. This manages cluster users, password resets, topic ACLs and bearer
+tokens through the Rust quorum API. Create a regular user, then grant Read on
+`desk-events` for an iPhone subscriber. Admin credentials stay in page memory;
+existing password hashes and bearer tokens are never listed. Copy newly issued
+tokens when displayed. A password change preserves identity, tokens and ACLs;
+update that password in each client separately. After an unacknowledged Save,
+refresh and inspect the state before retrying; do not automatically reissue tokens.
+
 ## Access and HA
 
 Open `http://192.168.1.186:2586/` directly or through the dashboard's NTFY card.

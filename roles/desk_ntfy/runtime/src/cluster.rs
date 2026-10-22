@@ -428,11 +428,15 @@ impl Cluster {
     ) -> Result<Value> {
         let _guard = self.serial.lock().await;
         let replies = self.refresh().await?;
+        let actor = self.administrator(actor).await?;
+        self.submit(&actor, path, method, body, replies).await
+    }
+    async fn administrator(&self, credential: &str) -> Result<String> {
         let account: Value = {
             let response = self
                 .client
                 .get("http://127.0.0.1:2587/v1/account")
-                .header("Authorization", actor)
+                .header("Authorization", credential)
                 .send()
                 .await?;
             if !response.status().is_success() {
@@ -448,7 +452,15 @@ impl Cluster {
                 .as_str()
                 .ok_or_else(|| anyhow::anyhow!("missing native identity"))?
         };
-        self.submit(actor, path, method, body, replies).await
+        Ok(actor.to_string())
+    }
+    pub async fn users(self: &Arc<Self>, credential: &str) -> Result<Value> {
+        let _guard = self.serial.lock().await;
+        self.refresh().await?;
+        let actor = self.administrator(credential).await?;
+        let head = self.status().head;
+        let auth: Auth = serde_json::from_value(head.value)?;
+        Ok(json!({"users":auth.users(),"actor":actor,"revision":head.revision}))
     }
     async fn submit(
         self: &Arc<Self>,
@@ -463,12 +475,13 @@ impl Cluster {
         let actor = actor.to_string();
         let path = path.to_string();
         let method = method.to_string();
-        let (auth, result) =
+        let (auth, mut result) =
             tokio::task::spawn_blocking(move || auth.mutate(&actor, &path, &method, body))
                 .await?
                 .map_err(|_| RequestFailure(axum::http::StatusCode::BAD_REQUEST))?;
         let wanted = serde_json::to_value(auth)?;
-        if journal::digest(&wanted) != journal::digest(&head.value) {
+        let changed = journal::digest(&wanted) != journal::digest(&head.value);
+        if changed {
             self.choose(wanted, head.revision).await?;
         } else {
             ensure!(
@@ -476,6 +489,7 @@ impl Cluster {
                 "awaiting apply ACKs"
             );
         }
+        result["revision"] = json!(head.revision + i64::from(changed));
         Ok(result)
     }
     #[cfg(test)]
@@ -699,6 +713,272 @@ mod tests {
                 );
             }
         }
+    }
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn admin_ui_lists_no_secrets_and_password_reset_preserves_quorum_identity() {
+        use axum::{
+            body::{to_bytes, Body},
+            http::{Request, StatusCode},
+            Router,
+        };
+        use base64::Engine;
+        use tower::ServiceExt;
+        async fn request(
+            app: &Router,
+            method: &str,
+            path: &str,
+            credentials: &str,
+            origin: &str,
+            body: Value,
+        ) -> (StatusCode, Value) {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method(method)
+                        .uri(path)
+                        .header("Host", "ntfy.test")
+                        .header("Origin", origin)
+                        .header(
+                            "Authorization",
+                            format!(
+                                "Basic {}",
+                                base64::engine::general_purpose::STANDARD.encode(credentials)
+                            ),
+                        )
+                        .body(Body::from(body.to_string()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            let status = response.status();
+            (
+                status,
+                serde_json::from_slice(&to_bytes(response.into_body(), 262144).await.unwrap())
+                    .unwrap(),
+            )
+        }
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+        let dir = tempfile::tempdir().unwrap();
+        let n = nodes(dir.path());
+        n[0].reconcile().await.unwrap();
+        let file: ntfy_rs::FileConfig = toml::from_str(&format!(
+            "listen-http = '127.0.0.1:2587'\nauth-file = {:?}\ndefault-access = 'deny-all'\n",
+            n[0].config.database
+        ))
+        .unwrap();
+        let native = ntfy_rs::start_async(ntfy_rs::Config::resolve(
+            file,
+            &ntfy_rs::ServeArgs::default(),
+        ))
+        .await
+        .unwrap();
+        let app = Router::new()
+            .fallback(crate::mutate)
+            .with_state(crate::App {
+                cluster: n[0].clone(),
+                nonces: Arc::new(Mutex::new(BTreeMap::new())),
+            });
+        let root = "/v1/admin/users";
+        let origin = "http://ntfy.test";
+        assert_eq!(
+            request(&app, "GET", root, "admin:wrong", origin, json!({}))
+                .await
+                .0,
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            request(
+                &app,
+                "GET",
+                root,
+                "admin:secret",
+                "http://foreign.test",
+                json!({})
+            )
+            .await
+            .0,
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            request(
+                &app,
+                "POST",
+                "/v1/account",
+                "admin:secret",
+                origin,
+                json!({})
+            )
+            .await
+            .0,
+            StatusCode::FORBIDDEN
+        );
+        let (code, saved) = request(
+            &app,
+            "POST",
+            root,
+            "admin:secret",
+            origin,
+            json!({"username":"iphone","password":"old"}),
+        )
+        .await;
+        assert_eq!(code, StatusCode::OK);
+        assert_eq!(saved["revision"], 1);
+        assert_eq!(
+            request(&app, "GET", root, "iphone:old", origin, json!({}))
+                .await
+                .0,
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            request(
+                &app,
+                "PUT",
+                "/v1/admin/users/admin/password",
+                "iphone:old",
+                origin,
+                json!({"password":"bad"})
+            )
+            .await
+            .0,
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            request(
+                &app,
+                "POST",
+                "/v1/account/access",
+                "admin:secret",
+                origin,
+                json!({})
+            )
+            .await
+            .0,
+            StatusCode::FORBIDDEN
+        );
+        n[0].save(
+            "/v1/admin/users/iphone/access",
+            json!({"topic":"desk-events","read":true}),
+        )
+        .await
+        .unwrap();
+        let token = n[0]
+            .save("/v1/admin/users/iphone/token", json!({"label":"Phone"}))
+            .await
+            .unwrap();
+        let before = n[0].status().head.value;
+        n[2].fail_apply.store(true, Ordering::SeqCst);
+        let (code, saved) = request(
+            &app,
+            "PUT",
+            "/v1/admin/users/iphone/password",
+            "admin:secret",
+            origin,
+            json!({"password":"new"}),
+        )
+        .await;
+        assert_eq!(code, StatusCode::OK);
+        assert_eq!(saved["revision"], 4);
+        assert!(!n[2].fresh());
+        assert_eq!(
+            request(&app, "GET", root, "iphone:old", origin, json!({}))
+                .await
+                .0,
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            request(&app, "GET", root, "iphone:new", origin, json!({}))
+                .await
+                .0,
+            StatusCode::FORBIDDEN
+        );
+        n[2].fail_apply.store(false, Ordering::SeqCst);
+        n[2].reconcile().await.unwrap();
+        for node in &n {
+            let state = node.status().head.value;
+            assert_eq!(state, n[0].status().head.value);
+            assert_eq!(state["tokens"], before["tokens"]);
+            assert_eq!(state["acl"], before["acl"]);
+            for (old, new) in before["users"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .zip(state["users"].as_array().unwrap())
+            {
+                assert_eq!(old["id"], new["id"]);
+                let old_hash = old["hash"].as_str().unwrap();
+                let new_hash = new["hash"].as_str().unwrap();
+                if new["username"] == "iphone" {
+                    assert_ne!(old_hash, new_hash);
+                    assert!(bcrypt::verify("new", new_hash).unwrap());
+                } else {
+                    assert_eq!(old_hash, new_hash);
+                }
+            }
+        }
+        let (code, list) = request(&app, "GET", root, "admin:secret", origin, json!({})).await;
+        assert_eq!(code, StatusCode::OK);
+        assert_eq!(list["revision"], 4);
+        let serialized = list.to_string();
+        assert!(!serialized.contains(token["token"].as_str().unwrap()));
+        assert!(!serialized.contains("$2b$"));
+        assert!(!serialized.contains("\"hash\""));
+        let iphone = list["users"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|u| u["username"] == "iphone")
+            .unwrap();
+        assert_eq!(iphone["access"][0]["read"], true);
+        let id = iphone["tokens"][0]["id"].as_str().unwrap();
+        assert_eq!(
+            request(
+                &app,
+                "DELETE",
+                &format!("/v1/admin/users/admin/token/{id}"),
+                "admin:secret",
+                origin,
+                json!({})
+            )
+            .await
+            .0,
+            StatusCode::OK
+        );
+        assert_eq!(n[0].status().head.value["tokens"], before["tokens"]);
+        assert_eq!(
+            request(
+                &app,
+                "DELETE",
+                &format!("/v1/admin/users/iphone/token/{id}"),
+                "admin:secret",
+                origin,
+                json!({})
+            )
+            .await
+            .0,
+            StatusCode::OK
+        );
+        assert!(!n[0].status().head.value["tokens"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|t| t["token"] == token["token"]));
+        n[0].fail_apply.store(true, Ordering::SeqCst);
+        assert_eq!(
+            request(
+                &app,
+                "PUT",
+                "/v1/admin/users/iphone/password",
+                "admin:secret",
+                origin,
+                json!({"password":"pending"})
+            )
+            .await
+            .0,
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+        assert!(!n[0].fresh());
+        native.shutdown();
     }
     #[tokio::test]
     async fn minority_cannot_save_or_advertise_freshness() {

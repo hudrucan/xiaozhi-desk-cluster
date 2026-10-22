@@ -31,6 +31,7 @@ class Ingress(unittest.TestCase):
             self.assertIn('disable-l7-retry unless { method GET HEAD }', replicas)
             self.assertIn('http-request deny if { path /v1/account } { method POST }', config)
             self.assertIn('http-request deny if { path_beg /v1/account/access } !{ method GET }', config)
+            self.assertIn('use_backend desk_ntfy_adapter if { path /v1/admin/users }', config)
             self.assertIn('bind 192.168.1.186:2586', config)
             (Path('/tmp') / ('desk-ntfy-'+local+'.cfg')).write_text('global\n    maxconn 64\ndefaults\n    mode http\n    timeout connect 2s\n    timeout server 90s\n    timeout client 90s\n'+config+'\n')
 

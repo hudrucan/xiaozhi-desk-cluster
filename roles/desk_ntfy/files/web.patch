@@ -37,3 +37,51 @@ diff --git a/web/src/app/Connection.js b/web/src/app/Connection.js
  
      this.ws = new WebSocket(wsUrl);
      this.ws.onopen = (event) => {
+diff --git a/web/src/components/routes.js b/web/src/components/routes.js
+--- a/web/src/components/routes.js
++++ b/web/src/components/routes.js
+@@ -6,5 +6,6 @@
+   login: "/login",
+   signup: "/signup",
+   account: "/account",
++  serverUsers: "/server-users",
+   settings: "/settings",
+   passwordResetRequest: "/reset-password",
+diff --git a/web/src/components/App.jsx b/web/src/components/App.jsx
+--- a/web/src/components/App.jsx
++++ b/web/src/components/App.jsx
+@@ -10,3 +10,4 @@
+ import ActionBar from "./ActionBar";
+ import Preferences from "./Preferences";
++import ServerUsers from "./ServerUsers";
+ import subscriptionManager from "../app/SubscriptionManager";
+@@ -89,4 +90,5 @@
+                     <Route path={routes.app} element={<AllSubscriptions />} />
+                     <Route path={routes.account} element={<Account />} />
++                    <Route path={routes.serverUsers} element={<ServerUsers />} />
+                     <Route path={routes.settings} element={<Preferences />} />
+                     <Route path={routes.subscription} element={<SingleSubscription />} />
+diff --git a/web/src/components/Navigation.jsx b/web/src/components/Navigation.jsx
+--- a/web/src/components/Navigation.jsx
++++ b/web/src/components/Navigation.jsx
+@@ -183,6 +183,10 @@
+             <ListItemText primary={t("nav_button_account")} />
+           </ListItemButton>
+         )}
++        <ListItemButton onClick={() => navigate(routes.serverUsers)} selected={location.pathname === routes.serverUsers}>
++          <ListItemIcon><Person /></ListItemIcon>
++          <ListItemText primary="Server users" />
++        </ListItemButton>
+         <ListItemButton onClick={() => navigate(routes.settings)} selected={location.pathname === routes.settings}>
+           <ListItemIcon>
+             <SettingsIcon />
+diff --git a/web/src/components/ActionBar.jsx b/web/src/components/ActionBar.jsx
+--- a/web/src/components/ActionBar.jsx
++++ b/web/src/components/ActionBar.jsx
+@@ -37,4 +37,6 @@
+   } else if (location.pathname === routes.settings) {
+     title = t("action_bar_settings");
++  } else if (location.pathname === routes.serverUsers) {
++    title = "Server users";
+   } else if (location.pathname === routes.account) {
+     title = t("action_bar_account");

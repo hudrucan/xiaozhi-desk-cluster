@@ -16,18 +16,20 @@ SOURCE_SHA256 = 'afa46845907dc9eef6f20e25a8ec65309377aa7f754610fc0f23798f45cc0a9
 ROOT = Path(__file__).resolve().parents[1]
 PATCH = ROOT / 'roles/desk_ntfy/files/web.patch'
 TEST = ROOT / 'roles/desk_ntfy/tests/test_web.mjs'
+CUSTOM = ROOT / 'roles/desk_ntfy/files/web'
 CONFIG = {
     'base_url': '', 'app_root': '/',
     # Local subscription credentials are supported; server account sessions/settings are not.
     'enable_login': False, 'require_login': False, 'enable_signup': False,
     'enable_payments': False, 'enable_reservations': False, 'enable_emails': False,
     'enable_calls': False, 'enable_web_push': False,
-    'disallowed_topics': ['docs', 'static', 'file', 'app', 'account', 'settings', 'signup', 'login', 'v1', 'ready'],
+    'disallowed_topics': ['docs', 'static', 'file', 'app', 'account', 'settings', 'server-users', 'signup', 'login', 'v1', 'ready'],
 }
 
 
 def build(output):
-    identity = hashlib.sha256(SOURCE_SHA256.encode() + PATCH.read_bytes() + Path(__file__).read_bytes() + TEST.read_bytes()).hexdigest()
+    identity = hashlib.sha256(SOURCE_SHA256.encode() + PATCH.read_bytes() + Path(__file__).read_bytes() + TEST.read_bytes()
+        + b''.join(p.name.encode() + p.read_bytes() for p in sorted(CUSTOM.glob('*')))).hexdigest()
     cache = Path('/private/tmp/desk-ntfy-web-build') / identity
     archive = cache / 'web.tar.gz'
     if not archive.exists():
@@ -41,6 +43,8 @@ def build(output):
             source.extractall(cache, filter='data')
         source = cache / f'ntfy-{VERSION}'
         subprocess.run(['patch', '--batch', '--fuzz=0', '-p1', '-i', str(PATCH)], cwd=source, check=True, stdout=sys.stderr)
+        for file in CUSTOM.glob('*'):
+            shutil.copyfile(file, source / 'web/src/components' / file.name)
         subprocess.run(['node', '--test', str(TEST)], env=dict(os.environ, NTFY_WEB_SOURCE=str(source)), check=True, stdout=sys.stderr)
         web = source / 'web'
         subprocess.run(['npm', 'ci', '--no-audit', '--no-fund'], cwd=web, check=True, stdout=sys.stderr)

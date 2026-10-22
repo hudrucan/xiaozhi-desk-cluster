@@ -78,7 +78,8 @@ async fn mutate(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    if !matches!(method, Method::POST | Method::PUT | Method::DELETE) {
+    let listing = method == Method::GET && uri.path() == "/v1/admin/users";
+    if !listing && !matches!(method, Method::POST | Method::PUT | Method::DELETE) {
         return reply(
             StatusCode::METHOD_NOT_ALLOWED,
             json!({"error":"mutation endpoint"}),
@@ -122,11 +123,14 @@ async fn mutate(
             json!({"error":"administrator required"}),
         );
     }
-    match app
-        .cluster
-        .mutate(credential, uri.path(), method.as_str(), value)
-        .await
-    {
+    let result = if listing {
+        app.cluster.users(credential).await
+    } else {
+        app.cluster
+            .mutate(credential, uri.path(), method.as_str(), value)
+            .await
+    };
+    match result {
         Ok(value) => reply(StatusCode::OK, value),
         Err(error) if error.downcast_ref::<cluster::RequestFailure>().is_some() => reply(
             error.downcast_ref::<cluster::RequestFailure>().unwrap().0,

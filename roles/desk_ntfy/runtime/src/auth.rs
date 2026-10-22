@@ -62,6 +62,20 @@ fn password(value: &Value) -> Result<String> {
     Ok(bcrypt::hash(p, 10)?)
 }
 impl Auth {
+    pub fn users(&self) -> Value {
+        json!(self.users.iter().filter(|u| !u.deleted).map(|u| {
+            json!({
+                "username": u.username, "role": u.role, "managed": u.username == "desk-panel",
+                "access": self.acl.iter().filter(|a| a.user_id == u.id).map(|a|
+                    json!({"topic":a.topic,"read":a.read,"write":a.write})
+                ).collect::<Vec<_>>(),
+                // Expose revocation handles, never existing bearer credentials or password hashes.
+                "tokens": self.tokens.iter().filter(|t| t.user_id == u.id).map(|t|
+                    json!({"id":crate::journal::digest(&t.token),"label":t.label,"expires":t.expires})
+                ).collect::<Vec<_>>()
+            })
+        }).collect::<Vec<_>>())
+    }
     pub fn seed(admin_password: &str) -> Result<Self> {
         let admin = User {
             id: identity(),
@@ -289,6 +303,10 @@ impl Auth {
                 .find(|u| u.username == parts[3] && !u.deleted)
                 .ok_or_else(|| anyhow::anyhow!("user not found"))?;
             match (parts.len(), parts.get(4).copied(), method) {
+                (5, Some("password"), "PUT") => {
+                    keys(&["password"])?;
+                    user.hash = password(&get("password"))?;
+                }
                 (4, None, "DELETE") => {
                     keys(&[])?;
                     user.deleted = true;
@@ -331,9 +349,10 @@ impl Auth {
                 }
                 (6, Some("token"), "DELETE") => {
                     keys(&[])?;
-                    state
-                        .tokens
-                        .retain(|t| t.user_id != user.id || t.token != parts[5]);
+                    state.tokens.retain(|t| {
+                        t.user_id != user.id
+                            || (t.token != parts[5] && crate::journal::digest(&t.token) != parts[5])
+                    });
                 }
                 _ => anyhow::bail!("unsupported admin mutation"),
             }
@@ -436,6 +455,18 @@ mod tests {
         let seed = Auth::seed("secret").unwrap();
         for (actor, path, method, body) in [
             ("desk-panel", "/v1/account/token", "POST", json!({})),
+            (
+                "desk-panel",
+                "/v1/admin/users/admin/password",
+                "PUT",
+                json!({"password":"p"}),
+            ),
+            (
+                "admin",
+                "/v1/admin/users/desk-panel/password",
+                "PUT",
+                json!({"password":"p"}),
+            ),
             (
                 "desk-panel",
                 "/v1/admin/users/admin/token",
