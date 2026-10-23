@@ -362,6 +362,14 @@ function renderNtfy(){
  const status=document.getElementById('ntfy-status');if(!status)return;
  const owner=ntfyOwner();status.textContent=owner==='Conflict'?'Conflicting owners':owner==='Unconfirmed'?'Owner unconfirmed':`Owner · ${owner}`;
 }
+function httpsServiceLinks(){
+ if(location.protocol!=='https:'||location.hostname!=='cluster.huynm.dev')return;
+ for(const link of document.querySelectorAll('a.dc-service')){
+  const url=new URL(link.href,location.origin);
+  if(url.hostname==='192.168.1.186'&&url.port==='8123')link.href='https://ha.cluster.huynm.dev/';
+  if(url.hostname==='192.168.1.186'&&url.port==='2586')link.href='https://ntfy.cluster.huynm.dev/';
+ }
+}
 function renderClient(){
  const firmware=state.snapshot?.firmware;const current=firmware&&!state.unavailable&&Date.now()-Date.parse(firmware.observed_at)<=30000;
  const online=current&&firmware.state==='online';let href=null;
@@ -587,7 +595,7 @@ root.addEventListener('toggle',event=>{const el=event.target;if(!el.matches?.('[
 
 root.addEventListener('click',event=>{if(event.target.closest('[data-network-scan]')){requestNetworkScan();return;}const service=event.target.closest('.dc-endpoint[data-service]');if(service){state.selectedService=state.selectedService===service.dataset.service?null:service.dataset.service;render();}const button=event.target.closest('[data-node]');if(button){state.selected=state.selected===button.dataset.node?null:button.dataset.node;render();pollNetworkScan();}if(event.target.closest('.dc-close')){const previousSelection=state.selected;state.selected=null;render();if(previousSelection)root.querySelector(`[data-node="${previousSelection}"]`)?.focus();}if(event.target.closest('#event-collapse')){const history=document.getElementById('events');if(!state.eventsClosed)state.eventScroll=history.scrollTop;state.eventsClosed=!state.eventsClosed;renderEvents();if(!state.eventsClosed)history.scrollTop=state.eventScroll||0;}if(event.target.closest('#event-toggle')){state.showAll=!state.showAll;renderEvents();document.getElementById('events').scrollTop=0;}});
 
-document.getElementById('address').textContent=location.host;root.querySelectorAll('[data-icon]').forEach(el=>{el.innerHTML=icon(el.dataset.icon);});
+document.getElementById('address').textContent=location.host;httpsServiceLinks();root.querySelectorAll('[data-icon]').forEach(el=>{el.innerHTML=icon(el.dataset.icon);});
 let timer=null,activeRequest=null;
 async function poll(){
  if(document.hidden)return;

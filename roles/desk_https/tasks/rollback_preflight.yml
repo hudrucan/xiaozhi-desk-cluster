@@ -1,0 +1,27 @@
+---
+# Rollback does not require a healthy VIP, Caddy, DNS quorum or three live nodes.
+- name: Require the locked inventory and separate rollback approval
+  ansible.builtin.assert:
+    that:
+      - groups['xiaozhi_ingress'] | sort == ['deskb1x', 'deskb2x', 'deskb3x']
+      - desk_https_apply_approved | bool or ansible_check_mode
+
+- name: Discover surviving rollback nodes without aborting for an unreachable peer
+  ansible.builtin.ping:
+  register: desk_https_rollback_probe
+  ignore_unreachable: true
+
+- name: Admit only reachable nodes to the serial rollback play
+  ansible.builtin.group_by:
+    key: desk_https_rollback_ready
+  when: not (desk_https_rollback_probe.unreachable | default(false)) and desk_https_rollback_probe is succeeded
+
+- name: Record successful rollback preflight
+  ansible.builtin.set_fact:
+    desk_https_rollback_preflight: true
+  when: not (desk_https_rollback_probe.unreachable | default(false)) and desk_https_rollback_probe is succeeded
+
+- name: Report deferred cleanup for an unreachable node
+  ansible.builtin.debug:
+    msg: 'HTTPS rollback pending on {{ inventory_hostname }}: node unreachable; rerun after recovery.'
+  when: desk_https_rollback_probe.unreachable | default(false)

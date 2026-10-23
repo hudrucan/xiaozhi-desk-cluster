@@ -1,0 +1,60 @@
+---
+- name: Require the locked cluster and supported native platform
+  ansible.builtin.assert:
+    that:
+      - ansible_play_hosts_all | sort == ['deskb1x', 'deskb2x', 'deskb3x']
+      - groups['xiaozhi_ingress'] | sort == ['deskb1x', 'deskb2x', 'deskb3x']
+      - ansible_facts.architecture in ['aarch64', 'arm64']
+      - ansible_facts.os_family == 'Debian'
+      - desk_https_vip | string == '192.168.1.186'
+      - desk_https_port | int == 8443
+      - desk_https_names == ['cluster.huynm.dev', 'ntfy.cluster.huynm.dev', 'ha.cluster.huynm.dev']
+      - desk_https_phase in ['preflight', 'caddy', 'compatibility', 'ingress', 'dns', 'verify', 'rollback']
+
+- name: Inspect source routes rp_filter and owner or standby backend paths without changing them
+  ansible.builtin.command:
+    argv: [/usr/bin/python3, '-c', "{{ lookup('file', role_path + '/files/probe.py') }}", inspect, --node, '{{ inventory_hostname }}']
+  register: desk_https_network
+  changed_when: false
+  check_mode: false
+
+- name: Require one VIP owner and unchanged HTTP source ACL behavior across owner and standbys
+  ansible.builtin.assert:
+    that:
+      - (desk_https_network.stdout | from_json).http_codes['80'] == '403'
+      - (desk_https_network.stdout | from_json).http_codes['2586'] == '403'
+      - (desk_https_network.stdout | from_json).http_codes.local_ha == '200'
+      - groups['xiaozhi_ingress'] | map('extract', hostvars, 'desk_https_network') | map(attribute='stdout') | map('from_json') | selectattr('vip_owner') | list | length == 1
+
+- name: Require the current Cloud-owned VIP snapshot rather than changing its election
+  ansible.builtin.command:
+    argv: [/usr/bin/python3, '-c', "import json; assert json.load(open('/etc/xiaozhi-ingress.json'))['vip']=='192.168.1.186'"]
+  changed_when: false
+  check_mode: false
+
+- name: Require all Caddy data paths and negative PROXY gates before the first public ingress mutation
+  ansible.builtin.command:
+    argv: [/usr/bin/python3, '-c', "{{ lookup('file', role_path + '/files/probe.py') }}", verify, --node, '{{ inventory_hostname }}']
+  changed_when: false
+  check_mode: false
+  when: desk_https_phase == 'ingress'
+
+- name: Require trusted TLS on all three Caddy instances before preparing local listeners
+  ansible.builtin.command:
+    argv: [/usr/bin/python3, '-c', "{{ lookup('file', role_path + '/files/probe.py') }}", tls, --node, '{{ inventory_hostname }}']
+  changed_when: false
+  check_mode: false
+  when: desk_https_phase == 'compatibility'
+
+- name: Require separate production approval for every modifying phase
+  ansible.builtin.assert:
+    that: desk_https_apply_approved | bool
+    fail_msg: Production changes are opt-in; review the phase and set desk_https_apply_approved only after approval.
+  when: desk_https_phase not in ['preflight', 'verify'] and not ansible_check_mode
+
+- name: Require the real public TLS data path before publishing private DNS
+  ansible.builtin.command:
+    argv: [/usr/bin/python3, '-c', "{{ lookup('file', role_path + '/files/probe.py') }}", public, --node, '{{ inventory_hostname }}']
+  changed_when: false
+  check_mode: false
+  when: desk_https_phase == 'dns'

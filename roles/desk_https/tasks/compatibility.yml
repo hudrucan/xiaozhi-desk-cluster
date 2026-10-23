@@ -1,0 +1,58 @@
+---
+- name: Install the shared composer on both retained entrypoints
+  ansible.builtin.copy:
+    src: '{{ desk_repo_root }}/roles/desk_monitoring/files/install_proxy.py'
+    dest: '{{ item }}'
+    mode: '0755'
+  loop: [/usr/local/libexec/desk-ingress-proxy.py, /usr/local/libexec/desk-monitoring/install-proxy.py]
+
+- name: Require the Caddy account before preparing permissioned local listeners
+  ansible.builtin.command:
+    argv: [id, desk-caddy]
+  changed_when: false
+
+- name: Install only the existing node control and network boundaries
+  ansible.builtin.copy:
+    src: '{{ desk_repo_root }}/{{ item.src }}'
+    dest: '{{ item.dest }}'
+    mode: '0755'
+  loop:
+    - {src: roles/desk_node_control/files/node_control.py, dest: /usr/local/libexec/desk-node-control/node-control.py, unit: desk-node-control}
+    - {src: roles/desk_network/files/ha.py, dest: /usr/local/libexec/desk-network/ha.py, unit: desk-network}
+  register: desk_https_boundaries
+
+- name: Restart changed boundaries serially without replacing their configuration or databases
+  ansible.builtin.systemd_service:
+    name: '{{ item.item.unit }}'
+    state: restarted
+  loop: '{{ desk_https_boundaries.results }}'
+  when: item.changed
+
+- name: Reuse the pinned Beszel UI build without changing hub configuration or agent settings
+  ansible.builtin.include_role:
+    name: desk_monitoring
+    tasks_from: build-ui
+
+- name: Restart the native hub only when its UI binary changed
+  ansible.builtin.systemd_service:
+    name: beszel-hub
+    state: restarted
+  when: desk_monitoring_ui_binary.changed
+
+- name: Stage the HA composer and HTTPS-aware native panel for the existing component deployment workflow
+  ansible.builtin.copy:
+    src: '{{ desk_repo_root }}/roles/desk_homeassistant/files/{{ item }}'
+    dest: '/usr/local/libexec/desk-homeassistant/{{ item }}'
+    mode: '0644'
+  loop: [install_proxy.py, desk_cluster/panel.js]
+
+- name: Refresh the shared landing document with origin-aware links
+  ansible.builtin.include_role:
+    name: desk_https
+    tasks_from: landing
+
+- name: Prepare local listeners without exposing the public TLS frontend yet
+  ansible.builtin.command:
+    argv: "{{ ['/usr/bin/python3', '/usr/local/libexec/desk-ingress-proxy.py', '--backend', '/etc/desk-monitoring/backend.cfg', '--prepare-https'] + (['--reload-page'] if desk_https_landing.changed else []) }}"
+  register: desk_https_local_proxy
+  changed_when: desk_https_local_proxy.stdout == 'changed'

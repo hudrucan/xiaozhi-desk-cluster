@@ -1,0 +1,25 @@
+---
+# No import from site.yml; all mutations require a separately reviewed opt-in.
+- name: Read-only HTTPS preflight on the complete cluster
+  hosts: xiaozhi_ingress
+  become: true
+  gather_facts: "{{ desk_https_phase | default('preflight') != 'rollback' }}"
+  any_errors_fatal: "{{ desk_https_phase | default('preflight') != 'rollback' }}"
+  tasks:
+    - ansible.builtin.include_role:
+        name: desk_https
+        tasks_from: preflight
+      when: desk_https_phase | default('preflight') != 'rollback'
+    - ansible.builtin.include_role:
+        name: desk_https
+        tasks_from: rollback_preflight
+      when: desk_https_phase | default('preflight') == 'rollback'
+
+- name: Apply only the explicitly selected HTTPS phase
+  hosts: "{{ 'desk_https_rollback_ready' if desk_https_phase | default('preflight') == 'rollback' else 'xiaozhi_ingress' }}"
+  become: true
+  gather_facts: false
+  serial: 1
+  any_errors_fatal: true
+  roles:
+    - desk_https

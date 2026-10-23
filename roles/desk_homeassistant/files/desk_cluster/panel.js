@@ -30,7 +30,7 @@ class DeskClusterPanel extends HTMLElement {
       <p class="hint">Home Assistant keeps running during sync. A sync includes configuration saved to disk; changes made during sync remain pending for the next one.</p></ha-card>
       <ha-card id="media-card" hidden><div class="title"><ha-icon icon="mdi:cctv"></ha-icon><h2>Camera workers</h2></div><div id="camera-rows"></div><p class="hint">Healthy workers stay in place. Live streams reconnect automatically after a transfer.</p><div class="actions"><ha-button id="maintenance">Node maintenance</ha-button></div></ha-card><p class="foot">Recovery uses the latest revision confirmed by at least two nodes. If a node is offline, it catches up when it returns. SQLite remains local to each node.</p></main>`;
     this.updateMenu();
-    this.shadowRoot.getElementById('sync').onclick=()=>this.sync(); this.shadowRoot.getElementById('maintenance').onclick=()=>window.open('http://192.168.1.186/','_blank','noopener'); this.start();
+    this.shadowRoot.getElementById('sync').onclick=()=>this.sync(); this.shadowRoot.getElementById('maintenance').onclick=()=>window.open(location.protocol==='https:'&&location.hostname==='ha.cluster.huynm.dev'?'https://cluster.huynm.dev/':'http://192.168.1.186/','_blank','noopener'); this.start();
   }
   start(){if(this.isConnected&&this.shadowRoot&&!this.timer){this.timer=setTimeout(()=>{this.timer=null;this.refresh();},0);}}
   async refresh(){

@@ -1,0 +1,14 @@
+---
+- name: Verify the peer matrix data paths and rejection of v1 missing and untrusted PROXY headers
+  ansible.builtin.command:
+    argv: [/usr/bin/python3, '-c', "{{ lookup('file', role_path + '/files/probe.py') }}", verify, --node, '{{ inventory_hostname }}']
+  changed_when: false
+
+- name: Require all nine TLS backends UP on this HAProxy instance
+  ansible.builtin.command:
+    argv: [/usr/bin/python3, '-c', "import socket; s=socket.socket(socket.AF_UNIX); s.settimeout(5); s.connect('/run/xiaozhi-haproxy.sock'); s.sendall(b'show stat\n'); b=b'';\nwhile True:\n p=s.recv(65536)\n if not p:break\n b+=p\nimport csv,io; rows=list(csv.DictReader(io.StringIO(b.decode().replace('# ', '', 1)))); selected=[r for r in rows if r.get('pxname','').startswith('desk_caddy_') and r.get('svname') in ['deskb1x','deskb2x','deskb3x']]; assert len(selected)==9 and all(r['status']=='UP' for r in selected), 'HTTPS TLS health checks not all UP'"]
+  changed_when: false
+  register: desk_https_stats
+  until: desk_https_stats.rc == 0
+  retries: 10
+  delay: 2

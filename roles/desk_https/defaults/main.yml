@@ -1,0 +1,12 @@
+---
+# Opt-in only. Never imported by site.yml; preflight is the default phase.
+desk_https_phase: preflight
+desk_https_apply_approved: false
+desk_https_package: /private/tmp/desk-caddy-package
+desk_https_caddy_version: 2.11.7
+desk_https_cloudflare_version: 0.2.4
+desk_https_vip: 192.168.1.186
+desk_https_port: 8443
+desk_https_names: [cluster.huynm.dev, ntfy.cluster.huynm.dev, ha.cluster.huynm.dev]
+desk_https_token_file: "{{ desk_repo_root }}/secret/desk-https/cloudflare.env"
+desk_https_acme_email: ''

@@ -1,0 +1,16 @@
+---
+- name: Reset the public membership projection
+  ansible.builtin.set_fact:
+    dashboard_members: []
+
+- name: Resolve the same public dashboard membership without changing its settings
+  ansible.builtin.set_fact:
+    dashboard_members: "{{ (dashboard_members | default([])) + [{'id': item, 'private': hostvars[item].cluster_ip, 'management': hostvars[item].ansible_host}] }}"
+  loop: "{{ groups['deskboxes'] | sort }}"
+
+- name: Install origin-aware navigation while retaining HTTP links on HTTP
+  ansible.builtin.template:
+    src: '{{ desk_repo_root }}/roles/desk_ui/templates/index.html.j2'
+    dest: /etc/desk-ui/index.html
+    mode: '0644'
+  register: desk_https_landing

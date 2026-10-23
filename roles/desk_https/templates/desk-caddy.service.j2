@@ -1,0 +1,29 @@
+[Unit]
+Description=Native desk HTTPS termination
+After=network-online.target haproxy.service
+Wants=network-online.target
+
+[Service]
+User=desk-caddy
+Group=desk-caddy
+Environment=XDG_DATA_HOME=/var/lib/desk-caddy
+Environment=XDG_CONFIG_HOME=/var/lib/desk-caddy/config
+EnvironmentFile=/etc/desk-https/cloudflare.env
+StateDirectory=desk-caddy
+StateDirectoryMode=0700
+UMask=0077
+ExecStartPre=/opt/desk-caddy/{{ desk_https_caddy_version }}/caddy validate --config /etc/desk-https/Caddyfile
+ExecStart=/opt/desk-caddy/{{ desk_https_caddy_version }}/caddy run --config /etc/desk-https/Caddyfile
+ExecReload=/opt/desk-caddy/{{ desk_https_caddy_version }}/caddy reload --address 127.0.0.1:20219 --config /etc/desk-https/Caddyfile
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+ReadWritePaths=/var/lib/desk-caddy
+
+[Install]
+WantedBy=multi-user.target

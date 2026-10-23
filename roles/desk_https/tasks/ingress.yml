@@ -1,0 +1,16 @@
+---
+# Whole-cluster data/TLS/PROXY checks already passed in the first play.
+- name: Stage the TCP frontend with verified SNI-specific TLS health checks
+  ansible.builtin.template:
+    src: ingress.cfg.j2
+    dest: /etc/desk-https/ingress.cfg
+    mode: '0644'
+
+- name: Add HTTPS to the existing HTTP MQTT master without touching Keepalived
+  ansible.builtin.command:
+    argv: [/usr/bin/python3, /usr/local/libexec/desk-ingress-proxy.py, --backend, /etc/desk-monitoring/backend.cfg, --https-config, /etc/desk-https/ingress.cfg]
+  register: desk_https_public_proxy
+  changed_when: desk_https_public_proxy.stdout == 'changed'
+
+- name: Require healthy TLS backends before moving to the next HAProxy node
+  ansible.builtin.include_tasks: verify.yml

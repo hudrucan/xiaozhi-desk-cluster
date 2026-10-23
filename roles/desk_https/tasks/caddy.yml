@@ -1,0 +1,141 @@
+---
+- name: Require an ACME contact and prebuilt pinned package
+  ansible.builtin.assert:
+    that: desk_https_acme_email | length > 3
+
+- name: Read the public controller package manifest
+  ansible.builtin.set_fact:
+    desk_https_manifest: "{{ lookup('file', desk_https_package + '/manifest.json') | from_json }}"
+
+- name: Require exact reviewed build versions
+  ansible.builtin.assert:
+    that:
+      - desk_https_manifest.caddy == desk_https_caddy_version
+      - desk_https_manifest.cloudflare == desk_https_cloudflare_version
+      - desk_https_manifest.go == '1.26.9'
+      - desk_https_manifest.sha256 is match('^[a-f0-9]{64}$')
+
+- name: Verify the controller artifact before replacing any installed file
+  ansible.builtin.command:
+    argv: ['{{ ansible_playbook_python }}', '-c', "import pathlib,hashlib,sys; b=pathlib.Path(sys.argv[1]).read_bytes(); assert hashlib.sha256(b).hexdigest()==sys.argv[2]; assert b[:4]==bytes([127,69,76,70]) and int.from_bytes(b[18:20],'little')==183", '{{ desk_https_package }}/caddy', '{{ desk_https_manifest.sha256 }}']
+  delegate_to: localhost
+  become: false
+  changed_when: false
+
+- name: Remember whether Caddy was active for failure recovery
+  ansible.builtin.command:
+    argv: [systemctl, is-active, desk-caddy]
+  register: desk_https_was_active
+  changed_when: false
+  failed_when: false
+
+- name: Reject malformed token input silently before installing it or invoking Caddy
+  ansible.builtin.command:
+    argv: ['{{ ansible_playbook_python }}', '-c', "import pathlib,re,sys; value=pathlib.Path(sys.argv[1]).read_text().strip(); assert re.fullmatch(r'CLOUDFLARE_API_TOKEN=[A-Za-z0-9_-]{40}',value), 'Invalid token environment format'", '{{ desk_https_token_file }}']
+  delegate_to: localhost
+  become: false
+  changed_when: false
+  no_log: true
+
+- name: Create the dedicated socket access group
+  ansible.builtin.group:
+    name: desk-caddy
+    system: true
+
+- name: Create the unprivileged native Caddy account
+  ansible.builtin.user:
+    name: desk-caddy
+    group: desk-caddy
+    system: true
+    create_home: false
+    shell: /usr/sbin/nologin
+
+- name: Create private configuration persistent storage and immutable binary paths
+  ansible.builtin.file:
+    path: '{{ item.path }}'
+    state: directory
+    owner: '{{ item.owner | default("root") }}'
+    mode: '{{ item.mode }}'
+  loop:
+    - {path: /etc/desk-https, mode: '0700'}
+    - {path: /var/lib/desk-caddy, owner: desk-caddy, mode: '0700'}
+    - {path: '/opt/desk-caddy/{{ desk_https_caddy_version }}', mode: '0755'}
+
+- name: Copy the binary before checking its hash and ELF architecture
+  ansible.builtin.copy:
+    src: '{{ desk_https_package }}/caddy'
+    dest: '/opt/desk-caddy/{{ desk_https_caddy_version }}/caddy'
+    mode: '0755'
+    backup: true
+  register: desk_https_binary
+
+- name: Verify the deployed binary and required modules
+  ansible.builtin.command:
+    argv: [/usr/bin/python3, '-c', "import hashlib,pathlib,subprocess,sys; p=pathlib.Path(sys.argv[1]); b=p.read_bytes(); assert hashlib.sha256(b).hexdigest()==sys.argv[2]; assert b[:4]==b'\x7fELF' and int.from_bytes(b[18:20],'little')==183; m=subprocess.check_output([str(p),'list-modules'],text=True); assert all(n in m.splitlines() for n in ['caddy.listeners.desk_proxy_v2','caddy.listeners.proxy_protocol','dns.providers.cloudflare'])", '/opt/desk-caddy/{{ desk_https_caddy_version }}/caddy', '{{ desk_https_manifest.sha256 }}']
+  changed_when: false
+
+- name: Install only the dedicated zone-scoped token environment file
+  ansible.builtin.copy:
+    src: '{{ desk_https_token_file }}'
+    dest: /etc/desk-https/cloudflare.env
+    owner: root
+    mode: '0600'
+    backup: true
+  no_log: true
+  diff: false
+  register: desk_https_token
+
+- name: Install the public Caddy configuration
+  ansible.builtin.template:
+    src: Caddyfile.j2
+    dest: /etc/desk-https/Caddyfile
+    owner: desk-caddy
+    group: desk-caddy
+    mode: '0600'
+    backup: true
+  register: desk_https_config
+
+- name: Allow the service to traverse its configuration directory
+  ansible.builtin.file:
+    path: /etc/desk-https
+    group: desk-caddy
+    mode: '0750'
+
+- name: Install the native unit with local certificate storage
+  ansible.builtin.template:
+    src: desk-caddy.service.j2
+    dest: /etc/systemd/system/desk-caddy.service
+    mode: '0644'
+    backup: true
+  register: desk_https_unit
+
+- name: Activate Caddy with recovery of its previous inputs on failure
+  block:
+    - name: Start or restart only Caddy when its inputs changed
+      ansible.builtin.systemd_service:
+        name: desk-caddy
+        enabled: true
+        daemon_reload: '{{ desk_https_unit.changed }}'
+        state: "{{ 'restarted' if desk_https_binary.changed or desk_https_config.changed or desk_https_token.changed or desk_https_unit.changed else 'started' }}"
+  rescue:
+    - name: Restore only files replaced by this Caddy activation
+      ansible.builtin.copy:
+        src: '{{ item.record.backup_file }}'
+        dest: '{{ item.dest }}'
+        remote_src: true
+        mode: '{{ item.mode }}'
+      loop:
+        - {record: '{{ desk_https_binary }}', dest: '/opt/desk-caddy/{{ desk_https_caddy_version }}/caddy', mode: '0755'}
+        - {record: '{{ desk_https_token }}', dest: /etc/desk-https/cloudflare.env, mode: '0600'}
+        - {record: '{{ desk_https_config }}', dest: /etc/desk-https/Caddyfile, mode: '0600'}
+        - {record: '{{ desk_https_unit }}', dest: /etc/systemd/system/desk-caddy.service, mode: '0644'}
+      when: item.record.backup_file is defined
+      no_log: true
+      diff: false
+    - name: Restore the previous Caddy service state
+      ansible.builtin.systemd_service:
+        name: desk-caddy
+        daemon_reload: true
+        state: "{{ 'restarted' if desk_https_was_active.rc == 0 else 'stopped' }}"
+    - ansible.builtin.fail:
+        msg: Caddy activation failed; previous inputs and service state restored. Certificate storage was retained.

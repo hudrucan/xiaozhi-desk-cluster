@@ -1,0 +1,8 @@
+---
+# serial:1 does not make run_once global. Only the named coordinator performs edits.
+- name: Reconcile exactly three private rewrites through certified policy
+  ansible.builtin.command:
+    argv: [/usr/bin/python3, '-c', "{{ lookup('file', role_path + '/files/dns_records.py') }}"]
+  register: desk_https_dns
+  changed_when: desk_https_dns.stdout == 'changed'
+  when: inventory_hostname == (groups['xiaozhi_ingress'] | sort | first)

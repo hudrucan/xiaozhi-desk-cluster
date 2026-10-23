@@ -302,3 +302,13 @@
  	if optIn, _ := utils.GetEnv("CHECK_UPDATES"); optIn == "true" {
  		info.CheckUpdate = true
  	}
+diff --git a/internal/site/src/lib/utils.ts b/internal/site/src/lib/utils.ts
+--- a/internal/site/src/lib/utils.ts
++++ b/internal/site/src/lib/utils.ts
+@@ -324,2 +324,5 @@
+ /** Get the hub URL from the global BESZEL object */
+-export const getHubURL = () => globalThis.BESZEL?.HUB_URL || window.location.origin
++export const getHubURL = () =>
++	window.location.protocol === "https:" && window.location.hostname === "cluster.huynm.dev"
++		? window.location.origin + (globalThis.BESZEL?.BASE_PATH || "/monitor/").replace(/\/$/, "")
++		: globalThis.BESZEL?.HUB_URL || window.location.origin

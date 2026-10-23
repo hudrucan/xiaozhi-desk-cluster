@@ -713,6 +713,13 @@ class Control:
             'state': state, 'action':maintenance.get('action',lease.get('action','reboot')) if maintenance else lease.get('action','reboot'), 'started': lease['started'], 'expires': lease['expires']}}
 
 
+def same_origin(headers, public_host):
+    pair = (headers.get('Host'), headers.get('Origin'))
+    return (pair == (public_host, 'http://' + public_host) or
+            pair == ('cluster.huynm.dev', 'https://cluster.huynm.dev') and
+            headers.get('X-Forwarded-Proto') == 'https')
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *args): pass
 
@@ -753,7 +760,7 @@ class Handler(BaseHTTPRequestHandler):
                 if not isinstance(value, dict): raise Failure(400, 'Invalid body')
                 self.respond(200, control.peer_action(self.path, value)); return
             host = control.config['public_host']
-            if (self.headers.get('Host') != host or self.headers.get('Origin') != 'http://' + host
+            if (not same_origin(self.headers, host)
                     or self.headers.get('X-Desk-Action') != 'confirm-node-operation'):
                 raise Failure(403, 'Same-origin confirmation required')
             value = json.loads(raw)

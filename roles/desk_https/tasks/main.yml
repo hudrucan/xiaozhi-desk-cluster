@@ -1,0 +1,10 @@
+---
+- name: Require the phase preflight and explicit approval even when the role is included directly
+  ansible.builtin.assert:
+    that:
+      - desk_https_network is defined or (desk_https_phase == 'rollback' and desk_https_rollback_preflight | default(false))
+      - desk_https_phase in ['preflight', 'verify'] or desk_https_apply_approved | bool
+  when: not ansible_check_mode
+
+- ansible.builtin.include_tasks: '{{ desk_https_phase }}.yml'
+  when: desk_https_phase != 'preflight' and not ansible_check_mode

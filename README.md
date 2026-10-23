@@ -217,3 +217,6 @@ Keep contributions scoped to a feature. Explain the behavior changed, the state
 and compatibility assumptions it relies on, and the checks actually run. Include
 recovery implications when changing ownership or persistence. Keep credentials
 and private captures out of issues and patches.
+
+Native HA HTTPS is a separate opt-in entrypoint: [HTTPS routing and rollout](docs/DESK_HTTPS.md).
+`playbooks/https/caddy.yml` defaults to read-only preflight; production phases require explicit approval.

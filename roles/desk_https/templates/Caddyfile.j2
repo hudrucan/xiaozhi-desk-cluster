@@ -1,0 +1,69 @@
+{
+	admin 127.0.0.1:20219
+	persist_config off
+	# Signed media capabilities/query tokens must not enter an additional error log.
+	log {
+		output stderr
+		format filter {
+			wrap json
+			fields {
+				request>uri delete
+			}
+		}
+	}
+	https_port {{ desk_https_port }}
+	default_bind {{ cluster_ip }}
+	auto_https disable_redirects
+	servers {
+		protocols h1 h2
+		strict_sni_host on
+		listener_wrappers {
+			desk_proxy_v2
+			proxy_protocol {
+				timeout 2s
+				allow 10.10.10.11/32 10.10.10.12/32 10.10.10.13/32
+				fallback_policy reject
+			}
+			tls
+		}
+	}
+}
+
+(certificate) {
+	tls {
+		issuer acme {
+			email {{ desk_https_acme_email }}
+			dir https://acme-v02.api.letsencrypt.org/directory
+			disable_http_challenge
+			disable_tlsalpn_challenge
+			dns cloudflare {env.CLOUDFLARE_API_TOKEN}
+			resolvers 1.1.1.1 8.8.8.8
+		}
+	}
+}
+
+{% for name, socket in [('cluster.huynm.dev', 'cluster'), ('ntfy.cluster.huynm.dev', 'ntfy'), ('ha.cluster.huynm.dev', 'ha')] %}
+{{ name }} {
+	import certificate
+	# A reserved probe path is available only to authenticated PROXY peers.
+	@invalid_health {
+		path /__desk_https_health
+		not remote_ip 10.10.10.11 10.10.10.12 10.10.10.13
+	}
+	respond @invalid_health 404
+	# Keep URI/query/Host and the existing HAProxy routing and source ACLs.
+	@internal path /internal /internal/* /peer /peer/* /desk-sync /desk-sync/* /desk-observe /desk-observe/* /local /native/*
+	respond @internal 404
+	reverse_proxy unix//run/haproxy/desk-https-{{ socket }}.sock {
+		header_up -Forwarded
+		header_up -CF-Connecting-IP
+		header_up -True-Client-IP
+		header_up -X-Real-IP
+		# Caddy's default X-Forwarded-* handling ignores untrusted incoming values.
+		transport http {
+			proxy_protocol v2
+			versions 1.1
+		}
+	}
+}
+{% endfor %}

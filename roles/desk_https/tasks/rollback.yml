@@ -1,0 +1,18 @@
+---
+- name: Remove only rewrites previously created by this deployment
+  ansible.builtin.command:
+    argv: [/usr/bin/python3, '-c', "{{ lookup('file', role_path + '/files/dns_records.py') }}", --rollback]
+  register: desk_https_dns_rollback
+  changed_when: (desk_https_dns_rollback.stdout | from_json).changed
+  when: inventory_hostname == (ansible_play_hosts_all | sort | first)
+
+- name: Report DNS rollback completion or pending ownership and policy verification
+  ansible.builtin.debug:
+    msg: '{{ desk_https_dns_rollback.stdout | from_json }}'
+  when: inventory_hostname == (ansible_play_hosts_all | sort | first)
+
+- name: Remove only HTTPS frontend and local listeners retaining HTTP MQTT and certificate storage
+  ansible.builtin.command:
+    argv: [/usr/bin/python3, /usr/local/libexec/desk-ingress-proxy.py, --backend, /etc/desk-monitoring/backend.cfg, --remove-https]
+  register: desk_https_proxy_rollback
+  changed_when: desk_https_proxy_rollback.stdout == 'changed'

@@ -1,0 +1,30 @@
+# BEGIN DESK HTTPS
+frontend desk_https
+    mode tcp
+    option tcplog
+    bind {{ desk_https_vip }}:443
+    timeout client 1h
+    tcp-request inspect-delay 3s
+    tcp-request content reject if { req.ssl_hello_type 1 } !{ req.ssl_sni -i cluster.huynm.dev ntfy.cluster.huynm.dev ha.cluster.huynm.dev }
+    tcp-request content accept if { req.ssl_hello_type 1 }
+{% for name, backend in [('cluster.huynm.dev', 'cluster'), ('ntfy.cluster.huynm.dev', 'ntfy'), ('ha.cluster.huynm.dev', 'ha')] %}
+    use_backend desk_caddy_{{ backend }} if { req.ssl_sni -i {{ name }} }
+{% endfor %}
+{% for name, backend in [('cluster.huynm.dev', 'cluster'), ('ntfy.cluster.huynm.dev', 'ntfy'), ('ha.cluster.huynm.dev', 'ha')] %}
+
+backend desk_caddy_{{ backend }}
+    mode tcp
+    balance roundrobin
+    timeout connect 3s
+    timeout server 1h
+    timeout check 3s
+    # The HTTP check traverses Caddy and the permissioned local HTTP frontend.
+    option httpchk
+    http-check send meth GET uri /__desk_https_health ver HTTP/1.1 hdr Host {{ name }}
+    http-check expect status 200
+    # check-ssl secures only probes. Client TLS passes through unchanged.
+{% for node in groups['xiaozhi_ingress'] | sort %}
+    server {{ node }} {{ hostvars[node].cluster_ip }}:{{ desk_https_port }} source {{ cluster_ip }} check inter 2s fall 2 rise 2 send-proxy-v2 check-send-proxy check-ssl check-sni {{ name }} verify required verifyhost {{ name }} ca-file /etc/ssl/certs/ca-certificates.crt
+{% endfor %}
+{% endfor %}
+# END DESK HTTPS

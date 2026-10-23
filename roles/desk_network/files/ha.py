@@ -683,6 +683,13 @@ def relay_response(handler,response,ctype,headers,owned,event_stream=False):
   handler.wfile.write(part)
   if event_stream:handler.wfile.flush()
  if not event_stream and length is not None and size!=length:raise Unavailable('Incomplete upstream response')
+def https_origin(headers):
+ return headers.get('Host')=='cluster.huynm.dev' and headers.get('X-Forwarded-Proto')=='https'
+
+def allowed_origin(headers):
+ origin=headers.get('Origin')
+ return not origin or origin=='http://192.168.1.186' or (origin=='https://cluster.huynm.dev' and https_origin(headers))
+
 class UI(http.server.BaseHTTPRequestHandler):
  protocol_version='HTTP/1.1'
  def log_message(self,*args):pass
@@ -708,7 +715,7 @@ class UI(http.server.BaseHTTPRequestHandler):
     error=managed_settings_error(self.path,raw,c.c['api_token'])
     if error:return write_response(self,400,encoded({'error':error}))
     origin=self.headers.get('Origin')
-    if origin and origin!='http://192.168.1.186':return write_response(self,403,b'Cross-origin mutation rejected','text/plain')
+    if not allowed_origin(self.headers):return write_response(self,403,b'Cross-origin mutation rejected','text/plain')
     if self.headers.get('Sec-Fetch-Site')=='cross-site':return write_response(self,403,b'Cross-origin mutation rejected','text/plain')
    if not c.owned() or not c.ready:return write_response(self,503,b'Network collector is recovering','text/plain',{'Retry-After':'3'})
    if mutation:
@@ -729,7 +736,7 @@ class UI(http.server.BaseHTTPRequestHandler):
     except Exception:
      with c.scan_lock:c.scan_queued_at=0;c.scan_cache_at=0
      return write_response(self,503,encoded({'error':'Native scan queue unavailable'}))
-   path=self.path[len('/network'):];headers={k:v for k,v in self.headers.items() if k.lower() not in ('host','connection','transfer-encoding','content-length','accept-encoding')};headers['Host']='192.168.1.186';headers['Accept-Encoding']='identity'
+   path=self.path[len('/network'):];headers={k:v for k,v in self.headers.items() if k.lower() not in ('host','connection','transfer-encoding','content-length','accept-encoding')};headers['Host']='cluster.huynm.dev' if https_origin(self.headers) else '192.168.1.186';headers['Accept-Encoding']='identity'
    # Reserve mutation acknowledgment space before forwarding a native write.
    # Capacity rejection must not become a busy response after applying an edit.
    if mutation:

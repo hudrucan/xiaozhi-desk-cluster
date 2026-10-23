@@ -89,15 +89,25 @@
       register: xiaozhi_ntfy_fragment
       failed_when: false
 
-    - name: Validate and install the HAProxy candidate
+    - name: Install the shared HTTP MQTT HTTPS composer
+      ansible.builtin.copy:
+        src: '{{ desk_repo_root }}/roles/desk_monitoring/files/install_proxy.py'
+        dest: /usr/local/libexec/desk-ingress-proxy.py
+        mode: '0755'
+
+    - name: Render the complete HAProxy candidate without replacing live routing
       ansible.builtin.template:
         src: haproxy.cfg.j2
-        dest: /etc/haproxy/haproxy.cfg
+        dest: /etc/haproxy/desk-ingress-candidate.cfg
         owner: root
         group: root
         mode: '0644'
-        validate: /usr/sbin/haproxy -c -f %s
-      notify: Reload Xiaozhi HAProxy
+
+    - name: Retain HTTPS and validate the complete HTTP MQTT composition
+      ansible.builtin.command:
+        argv: [/usr/bin/python3, /usr/local/libexec/desk-ingress-proxy.py, --full-config, /etc/haproxy/desk-ingress-candidate.cfg, --defer-reload]
+      register: xiaozhi_ingress_proxy_install
+      changed_when: xiaozhi_ingress_proxy_install.stdout == 'changed'
 
     - name: Enable and start HAProxy
       ansible.builtin.systemd_service:
