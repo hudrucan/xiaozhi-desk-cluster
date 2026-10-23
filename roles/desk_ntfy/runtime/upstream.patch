@@ -2,39 +2,50 @@ diff --git a/src/handlers/health.rs b/src/handlers/health.rs
 index 6e2c7f1..c6b569e 100644
 --- a/src/handlers/health.rs
 +++ b/src/handlers/health.rs
-@@ -18,6 +18,7 @@ pub async fn health() -> Json<Value> {
- #[cfg(feature = "auth")]
- pub async fn topic_auth(
+@@ -20,2 +20,3 @@ pub async fn topic_auth(
      State(state): State<AppState>,
 +    axum::extract::Path(topic): axum::extract::Path<String>,
      Extension(auth_user): Extension<AuthUser>,
- ) -> impl IntoResponse {
-     use crate::auth::{authorize, Permission};
-@@ -30,7 +31,7 @@ pub async fn topic_auth(
-         state.effective_auth_db(),
-         &state.config,
+@@ -32,3 +33,3 @@ pub async fn topic_auth(
          &auth_user,
 -        "auth",
 +        &topic,
          Permission::Read,
-     ) {
-         Ok(_) => (StatusCode::OK, Json(json!({ "success": true }))).into_response(),
+diff --git a/src/handlers/subscribe.rs b/src/handlers/subscribe.rs
+index 92ad033..04eb44b 100644
+--- a/src/handlers/subscribe.rs
++++ b/src/handlers/subscribe.rs
+@@ -68,2 +68,3 @@ pub struct SubscribeParams {
+     pub poll: Option<String>,
++    pub id: Option<String>,
+     pub since: Option<String>,
+@@ -248,7 +249,12 @@ pub fn resolve_since(
+     let conn = state.db.get()?;
+-    match params.since() {
+-        Since::None      => Ok(vec![]),
+-        Since::Time(ts)  => Ok(cache::since_time(&conn, topic, ts)?),
+-        Since::Id(id)    => Ok(cache::since_id(&conn, topic, &id)?),
++    let mut messages = match params.since() {
++        Since::None      => vec![],
++        Since::Time(ts)  => cache::since_time(&conn, topic, ts)?,
++        Since::Id(id)    => cache::since_id(&conn, topic, &id)?,
++    };
++    // iOS poll requests must decode exactly one message, not the full history.
++    if let Some(id) = &params.id {
++        messages.retain(|message| message.id == *id);
+     }
++    Ok(messages)
+ }
 diff --git a/src/router.rs b/src/router.rs
 index b73a3fa..c041585 100644
 --- a/src/router.rs
 +++ b/src/router.rs
-@@ -12,7 +12,7 @@ use crate::handlers::metrics as metrics_handler;
- use crate::handlers::webpush;
- use crate::handlers::matrix;
+@@ -14,3 +14,3 @@ use crate::handlers::matrix;
  use axum::{routing::{get, post, put}, Router};
 -#[cfg(feature = "auth")]
 +#[cfg(all(feature = "auth", feature = "webpush"))]
  use axum::routing::delete;
- #[cfg(feature = "metrics")]
- use metrics_exporter_prometheus::PrometheusHandle;
-@@ -55,20 +55,12 @@ fn build_inner(state: AppState, _metrics_handle: Option<MetricsHandle>) -> Route
- 
-     #[cfg(feature = "auth")]
+@@ -57,16 +57,8 @@ fn build_inner(state: AppState, _metrics_handle: Option<MetricsHandle>) -> Route
      {
 +        // Desk Cluster: native auth is read-only, including on loopback.
 +        // All mutations are validated, chosen and applied by the Rust adapter.
@@ -56,11 +67,7 @@ index b73a3fa..c041585 100644
 +            .route("/v1/account/access", get(account::get_access))
 +            .route("/v1/admin/users", get(admin::list_users));
      }
- 
-     #[cfg(feature = "auth")]
-@@ -89,11 +81,6 @@ fn build_inner(state: AppState, _metrics_handle: Option<MetricsHandle>) -> Route
-         // File attachment downloads (unauthenticated — opaque ID is the access control).
-         .route("/file/:id",                  get(file::serve_file));
+@@ -91,7 +83,2 @@ fn build_inner(state: AppState, _metrics_handle: Option<MetricsHandle>) -> Route
  
 -    #[cfg(feature = "auth")]
 -    {
@@ -68,5 +75,3 @@ index b73a3fa..c041585 100644
 -    }
 -
      #[cfg(feature = "metrics")]
-     {
-         unauthenticated = unauthenticated.route("/metrics", get(metrics_handler::metrics));

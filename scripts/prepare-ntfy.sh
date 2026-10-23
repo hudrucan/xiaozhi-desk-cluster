@@ -1,5 +1,5 @@
 #!/bin/sh
-# Materialize only the pinned dependency plus the native auth boundary patch.
+# Materialize only the pinned dependency plus the native compatibility patch.
 set -eu
 repo=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 src="$repo/roles/desk_ntfy/runtime/upstream"
@@ -14,5 +14,6 @@ if [ ! -e "$src" ]; then
 fi
 [ "$(git -C "$src" rev-parse HEAD)" = "$pin" ]
 [ "$(git -C "$src" status --porcelain --untracked-files=all)" = ' M src/handlers/health.rs
+ M src/handlers/subscribe.rs
  M src/router.rs' ]
-git -C "$src" diff --binary | cmp -s - "$patch"
+git -C "$src" diff --binary --unified=1 | cmp -s - "$patch"

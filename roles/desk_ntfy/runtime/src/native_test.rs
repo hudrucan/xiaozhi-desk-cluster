@@ -204,6 +204,73 @@ default-access = "deny-all"
     );
     assert!(!String::from_utf8_lossy(&captured[0].2).contains("Pi test"));
     drop(captured);
+    let mut messages = vec![published.clone()];
+    for body in ["Background test 2", "Background test 3"] {
+        let message: Value = client
+            .post(&url)
+            .bearer_auth(publisher["token"].as_str().unwrap())
+            .body(body)
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        messages.push(message);
+    }
+    // The iOS notification extension decodes one JSON object, not a history stream.
+    for message in &messages {
+        let fetched: Value = client
+            .get(format!(
+                "{url}/json?poll=1&id={}",
+                message["id"].as_str().unwrap()
+            ))
+            .bearer_auth(seed.panel_token().unwrap())
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(&fetched, message);
+    }
+    for query in ["poll=1", "poll=1&since=0"] {
+        let history = client
+            .get(format!("{url}/json?{query}"))
+            .bearer_auth(seed.panel_token().unwrap())
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .text()
+            .await
+            .unwrap();
+        let history: Vec<Value> = history
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(history.len(), messages.len());
+        assert!(messages.iter().all(|message| history.contains(message)));
+    }
+    for query in ["poll=1&id=aaaaaaaaaaaa", "poll=1&since=none"] {
+        let body = client
+            .get(format!("{url}/json?{query}"))
+            .bearer_auth(seed.panel_token().unwrap())
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .text()
+            .await
+            .unwrap();
+        assert!(body.is_empty(), "unexpected history for {query}");
+    }
     let (revoked, _) = seed
         .mutate(
             "admin",
