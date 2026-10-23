@@ -183,6 +183,15 @@ class Checks(unittest.TestCase):
  def test_policy_survives_conf_from_old_owner(self):
   raw=ha.apply_policy(b"SCAN_SUBNETS=['10.77.0.0/24']\nNSLOOKUP_RUN='before_name_updates'\n",'test-token')
   self.assertNotIn(b'10.77.0.0',raw);self.assertIn(b'192.168.1.0/24 --interface=wlan0',raw);self.assertIn(b"NSLOOKUP_RUN='disabled'",raw)
+ def test_native_ntfy_policy_preserves_publisher_and_scan_settings(self):
+  conf=b"NTFY_TOKEN='test-publisher'\nNTFY_RUN='on_notification'\nARPSCAN_RUN_SCHD='*/1 * * * *'\n"
+  saved=ha.apply_policy(conf,'test-api')
+  self.assertIn(b"NTFY_TOKEN='test-publisher'",saved)
+  self.assertIn(b"NTFY_RUN='on_notification'",saved)
+  self.assertEqual(ha.scan_schedule(saved),('*/1 * * * *',1))
+  native=json.loads((pathlib.Path(__file__).parents[1]/'files/policy.json').read_text())
+  self.assertEqual(native['LOADED_PLUGINS'],ha.POLICY['LOADED_PLUGINS'])
+  self.assertIn('NTFY',native['LOADED_PLUGINS'])
  def test_scan_schedule_is_mutable_and_survives_restore_policy(self):
   conf=b"ARPSCAN_RUN_SCHD='*/1 * * * *'\nNSLOOKUP_RUN='before_name_updates'\n"
   saved=ha.apply_policy(conf,'test-token')

@@ -17,7 +17,7 @@
       no_log: true
     - ansible.builtin.assert:
         that:
-          - ntfy_publishers.keys() | sort == ['beszel','homeassistant']
+          - "['beszel','homeassistant'] | difference(ntfy_publishers.keys()) | length == 0"
           - ntfy_publishers.beszel is match('^[A-Za-z0-9]{32}$')
           - ntfy_publishers.homeassistant is match('^[A-Za-z0-9]{32}$')
           - ntfy_publishers.beszel != ntfy_publishers.homeassistant

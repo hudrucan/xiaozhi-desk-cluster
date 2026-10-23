@@ -1,0 +1,79 @@
+---
+- name: Verify the dedicated native publisher before changing replicas
+  tags: netalertx
+  hosts: deskboxes
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  vars_files:
+    - ../../roles/desk_ntfy/defaults/main.yml
+  tasks:
+    - ansible.builtin.assert:
+        that:
+          - not ansible_check_mode
+          - ansible_play_hosts_all | sort == groups['deskboxes'] | sort
+    - name: Load the dedicated scoped publisher
+      ansible.builtin.set_fact:
+        ntfy_network_token: "{{ (lookup('file',desk_ntfy_secrets+'/publishers.json') | from_json).netalertx }}"
+      no_log: true
+    - name: Require the write-only Events identity before enabling delivery
+      ansible.builtin.uri:
+        url: '{{ desk_ntfy_base_url }}/v1/account'
+        headers:
+          Authorization: 'Bearer {{ ntfy_network_token }}'
+        use_proxy: false
+        return_content: true
+      register: ntfy_network_account
+      no_log: true
+    - ansible.builtin.assert:
+        that:
+          - ntfy_network_account.json.username == 'desk-netalertx'
+          - ntfy_network_account.json.role == 'user'
+          - ntfy_network_account.json.access | length == 1
+          - ntfy_network_account.json.access[0].topic == 'desk-events'
+          - ntfy_network_account.json.access[0].write | bool
+          - not (ntfy_network_account.json.access[0].read | bool)
+      no_log: true
+
+- name: Load the pinned native NTFY plugin with the existing rolling Network rollout
+  ansible.builtin.import_playbook: ../network/network-helpers.yml
+  vars:
+    network_helpers_skip_homeassistant: true
+
+- name: Configure the active native publisher through checkpointed Save
+  tags: netalertx
+  hosts: deskboxes
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  vars_files:
+    - ../../roles/desk_ntfy/defaults/main.yml
+  tasks:
+    - name: Identify the single active Network owner
+      ansible.builtin.uri:
+        url: 'http://{{ cluster_ip }}:20213/network/desk/status'
+        use_proxy: false
+        timeout: 5
+      register: ntfy_network_state
+    - name: Require one synced owner
+      ansible.builtin.assert:
+        that:
+          - groups['deskboxes'] | map('extract',hostvars,'ntfy_network_state') | selectattr('json.state','equalto','active') | list | length == 1
+          - ntfy_network_state.json.sync == 'synced'
+    - name: Save native NTFY settings on the active collector only
+      ansible.builtin.command:
+        argv: [python3, '-c', "{{ lookup('file',desk_repo_root+'/roles/desk_network/files/ntfy_settings.py') }}"]
+        stdin: "{{ {'token':ntfy_network_token,'base_url':desk_ntfy_base_url,'host':cluster_ip} | to_json }}"
+      when: ntfy_network_state.json.state == 'active'
+      register: ntfy_network_settings
+      changed_when: ntfy_network_settings.stdout == 'changed'
+      no_log: true
+    - name: Wait for all existing checkpoint replicas to catch up
+      ansible.builtin.uri:
+        url: 'http://{{ cluster_ip }}:20213/network/desk/status'
+        use_proxy: false
+        timeout: 5
+      register: ntfy_network_synced
+      until: ntfy_network_synced.json.sync == 'synced'
+      retries: 30
+      delay: 2

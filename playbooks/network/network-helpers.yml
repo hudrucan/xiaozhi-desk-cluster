@@ -44,12 +44,20 @@
 
     - name: Install Home Assistant election agent (score weights)
       tags: homeassistant
+      when: not (network_helpers_skip_homeassistant | default(false) | bool)
       ansible.builtin.copy:
         src: "{{ desk_repo_root }}/roles/desk_homeassistant/files/agent.py"
         dest: /usr/local/libexec/desk-homeassistant/agent.py
         mode: '0700'
         validate: /usr/bin/python3 -c "import ast,sys; ast.parse(open(sys.argv[1]).read())" %s
       register: network_helpers_agent
+
+    - name: Keep native startup policy aligned with the controller
+      ansible.builtin.copy:
+        src: "{{ desk_repo_root }}/roles/desk_network/files/policy.json"
+        dest: /etc/desk-network/policy.json
+        mode: '0644'
+      register: network_helpers_policy
 
     - name: Install checkpoint resource budget slice
       ansible.builtin.template:
@@ -72,7 +80,7 @@
 
     - name: Remember whether a rolling restart is needed
       ansible.builtin.set_fact:
-        network_helpers_restart: '{{ network_checkpoint_artifacts.changed or network_helpers_files.changed or network_helpers_slice.changed or network_helpers_unit.changed }}'
+        network_helpers_restart: '{{ network_checkpoint_artifacts.changed or network_helpers_files.changed or network_helpers_policy.changed or network_helpers_slice.changed or network_helpers_unit.changed }}'
 
     - name: Verify protected services unchanged
       ansible.builtin.command:

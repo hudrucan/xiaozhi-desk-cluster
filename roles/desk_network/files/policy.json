@@ -16,7 +16,8 @@
     "SETPWD",
     "SYNC",
     "VNDRPDT",
-    "WORKFLOWS"
+    "WORKFLOWS",
+    "NTFY"
   ],
   "ARPSCAN_RUN": "schedule",
   "ARPSCAN_ARGS": "sudo arp-scan --ignoredups --retry=3",
