@@ -84,7 +84,13 @@ Ansible verifies the controller artifact before replacement and checks ARM64 ELF
 hash and required modules again on the node. It never runs a remote source build.
 
 Provide an ignored `secret/desk-https/cloudflare.env`, one unquoted line:
-`CLOUDFLARE_API_TOKEN=<40-character scoped token>`. Use only zone read and DNS edit
+`CLOUDFLARE_API_TOKEN=<scoped token>`. The format guard accepts legacy 40-character
+tokens and the 53-character `cfut_`/`cfat_` formats (prefix, 40-character payload,
+8-character checksum). It rejects `cfk_` Global API Keys, malformed lengths,
+quoted values and extra assignments. This is a structural check; Cloudflare
+verifies validity and active status through its read-only token verification API.
+See [Cloudflare token formats](https://developers.cloudflare.com/fundamentals/api/get-started/token-formats/).
+Use only zone read and DNS edit
 permissions for the relevant zone, never a global API key or cloudflared account
 credential. Provisioning/rotation requires separate approval. Token operations
 are `no_log`/`diff: false`; malformed input is rejected before Caddy can echo it.

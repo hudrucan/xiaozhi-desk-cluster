@@ -31,7 +31,7 @@
 
 - name: Reject malformed token input silently before installing it or invoking Caddy
   ansible.builtin.command:
-    argv: ['{{ ansible_playbook_python }}', '-c', "import pathlib,re,sys; value=pathlib.Path(sys.argv[1]).read_text().strip(); assert re.fullmatch(r'CLOUDFLARE_API_TOKEN=[A-Za-z0-9_-]{40}',value), 'Invalid token environment format'", '{{ desk_https_token_file }}']
+    argv: ['{{ ansible_playbook_python }}', '-c', "import pathlib,re,sys; value=pathlib.Path(sys.argv[1]).read_text().strip(); assert re.fullmatch(r'CLOUDFLARE_API_TOKEN=(?:(?!cf(?:ut|at|k)_)[A-Za-z0-9_-]{40}|cf(?:ut|at)_[A-Za-z0-9_-]{48})',value), 'Invalid token environment format'", '{{ desk_https_token_file }}']
   delegate_to: localhost
   become: false
   changed_when: false
