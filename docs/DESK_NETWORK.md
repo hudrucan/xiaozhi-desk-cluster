@@ -123,6 +123,11 @@ lookup. There is no additional daemon, modem login, NetBIOS scan or dependency
 installation: dnspython 2.8.0 is already in the pinned image. Inactive warm standbys do not run native jobs; the separate scan workers
 remain available to the owner.
 
+ARP/mDNS adapters write the pinned native 13-column result format directly, with
+UTC timestamps and empty results on scan failure. They do not import the native
+plugin helper's settings/timezone stack for each job. Native plugin ingestion,
+distributed worker selection and the configured scan schedules remain in place.
+
 Only present, non-archived IPv4 LAN devices with unknown names are eligible.
 USER/LOCKED names are excluded. Each run selects at most 32 devices; one UDP socket
 bound to wlan0 sends multicast and direct mDNS PTR queries, then checks matching

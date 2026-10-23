@@ -9,6 +9,18 @@ pathlib.Path('/tmp/api/table_settings.json').write_text(json.dumps({'data':[{'se
 os.environ['DESK_NETWORK_DISTRIBUTED']='1'
 import arp,plugin
 from const import logPath
+import mdns,plugin_helper
+stamp='2026-10-23 13:00:00'
+keys=['primaryId','secondaryId','watched1','watched2','watched3','watched4','extra','foreignKey']
+rows=[('02:11:22:33:44:01','192.168.1.1','192.168.1.1','Router','192.168.1.0/24 --interface=wlan0','','ARPSCAN',''),('02:11:22:33:44:02','192.168.1.102','','device.local','','','','02:11:22:33:44:02')]
+with patch.object(plugin_helper,'timeNowUTC',return_value=stamp),patch.object(mdns,'datetime') as clock:
+ clock.now.return_value.strftime.return_value=stamp
+ for selected in [[],rows[:1],rows[1:],rows]:
+  expected=plugin_helper.Plugin_Objects('/tmp/native-result')
+  for row in selected:expected.add_object(**dict(zip(keys,row)))
+  expected.write_result_file();mdns.write_plugin_results('/tmp/desk-result',selected)
+  assert pathlib.Path('/tmp/native-result').read_bytes()==pathlib.Path('/tmp/desk-result').read_bytes()
+print('PASS byte-for-byte ARP/mDNS results against pinned native Plugin_Objects, including UTC and empty output')
 result=pathlib.Path(logPath)/'plugins/last_result.ARPSCAN.log'
 arp.lookup=lambda:({'192.168.1.1':['02:11:22:33:44:01','Router']},{'received':1})
 assert arp.main()==0

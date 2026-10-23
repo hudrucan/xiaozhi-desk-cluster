@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Bounded LAN mDNS lookup feeding NetAlertX's native AVAHISCAN name pipeline."""
 from contextlib import closing
+from datetime import datetime, timezone
 from pathlib import Path
 import fcntl
 import ipaddress
@@ -261,11 +262,25 @@ def distributed_lookup(targets, address):
     return found, stats
 
 
+def write_plugin_results(path, rows):
+    """Pinned NetAlertX result format: eight values, UTC created, four empty help fields.
+
+    Importing plugin_helper in each short-lived adapter loads settings, requests
+    and all pytz zones. Only this native wire format is needed by the adapters.
+    """
+    lines = []
+    for row in rows:
+        if len(row) != 8 or any(not isinstance(v, str) or any(c in v for c in '|\r\n') for v in row):
+            raise ValueError('Invalid plugin result fields')
+        created = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
+        lines.append('|'.join([*row[:2], created, *row[2:], '', '', '', '']) + '\n')
+    Path(path).write_text(''.join(lines))
+
+
 def main():
     sys.path[:0] = ['/app/server', '/app/server/plugins']
-    from plugin_helper import Plugin_Objects
     from const import logPath
-    result = Plugin_Objects(str(Path(logPath) / 'plugins/last_result.AVAHISCAN.log'))
+    result = Path(logPath) / 'plugins/last_result.AVAHISCAN.log'
     started_at = time.time()
     start, cpu = time.monotonic(), time.process_time()
     with open('/tmp/desk-mdns.lock', 'w') as lock:
@@ -274,12 +289,10 @@ def main():
         except BlockingIOError:
             return 0
         # Always clear old results, including when fresh input is unavailable.
-        result.write_result_file()
+        write_plugin_results(result, [])
         try:
             names, stats = run(lookup=distributed_lookup if os.getenv('DESK_NETWORK_DISTRIBUTED') == '1' else resolve)
-            for mac, ip, name in names:
-                result.add_object(primaryId=mac, secondaryId=ip, watched2=name, foreignKey=mac)
-            result.write_result_file()
+            write_plugin_results(result, [(mac, ip, '', name, '', '', '', mac) for mac, ip, name in names])
             stats['state'] = 'ready'
         except (OSError, sqlite3.Error, ValueError) as e:
             stats = {'state':'unavailable', 'error':type(e).__name__}

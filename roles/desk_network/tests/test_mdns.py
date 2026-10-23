@@ -1,5 +1,6 @@
 """Protocol fixtures and inventory/cache isolation; no network or live services."""
-import importlib.util,json,pathlib,sqlite3,struct,tempfile,time,unittest
+import importlib.util,json,pathlib,sqlite3,struct,sys,tempfile,time,types,unittest
+from datetime import datetime, timezone
 from contextlib import closing
 from unittest.mock import patch
 import dns.message,dns.name,dns.rrset,dns.reversename,dns.wire
@@ -110,4 +111,34 @@ class MDNS(unittest.TestCase):
    m.run(db,root/'cache',empty);m.run(db,root/'cache',empty)
    self.assertEqual(sizes,[32,32])
    with patch.object(m.socket,'socket',side_effect=AssertionError('socket opened')):self.assertEqual(m.resolve({},IP)[0],{})
+class Adapter(unittest.TestCase):
+ def test_result_format_is_13_columns_with_utc_and_empty_results_clear(self):
+  with tempfile.TemporaryDirectory() as td:
+   p=pathlib.Path(td)/'result';stamp=datetime(2026,10,23,13,0,0,tzinfo=timezone.utc)
+   with patch.object(m,'datetime') as clock:
+    clock.now.return_value=stamp
+    m.write_plugin_results(p,[(MAC,IP,'','zerow.local','','','',MAC)])
+    clock.now.assert_called_once_with(timezone.utc)
+   self.assertEqual(p.read_text(),f'{MAC}|{IP}|2026-10-23 13:00:00||zerow.local||||{MAC}||||\n')
+   self.assertEqual(len(p.read_text().strip().split('|')),13)
+   m.write_plugin_results(p,[]);self.assertEqual(p.read_text(),'')
+ def test_invalid_row_cannot_publish_partial_results(self):
+  row=(MAC,IP,'','zerow.local','','','',MAC)
+  with tempfile.TemporaryDirectory() as td:
+   p=pathlib.Path(td)/'result';p.write_text('unchanged')
+   for bad in [row[:-1],(*row, ''),(*row[:3],'bad|name',*row[4:]),(*row[:3],'bad\nname',*row[4:]),(*row[:3],'bad\rname',*row[4:]),(*row[:3],None,*row[4:])]:
+    with self.subTest(row=bad),self.assertRaises(ValueError):m.write_plugin_results(p,[row,bad])
+    self.assertEqual(p.read_text(),'unchanged')
+ def test_mdns_main_uses_native_columns_without_plugin_helper_and_clears_on_failure(self):
+  with tempfile.TemporaryDirectory() as td:
+   root=pathlib.Path(td);(root/'plugins').mkdir();p=root/'plugins/last_result.AVAHISCAN.log'
+   with patch.dict(sys.modules,{'plugin_helper':None,'const':types.SimpleNamespace(logPath=td)}),patch.object(sys,'path',sys.path.copy()),patch.object(m,'save_json'):
+    with patch.object(m,'run',return_value=([(MAC,IP,'zerow.local')],{})):
+     self.assertEqual(m.main(),0)
+    fields=p.read_text().strip().split('|')
+    self.assertEqual(len(fields),13);self.assertEqual(fields[:2],[MAC,IP]);self.assertEqual(fields[4],'zerow.local');self.assertEqual(fields[8],MAC)
+    with patch.object(m,'run',side_effect=OSError('worker unavailable')):
+     self.assertEqual(m.main(),0)
+    self.assertEqual(p.read_text(),'')
+
 if __name__=='__main__':unittest.main()

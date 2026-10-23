@@ -28,18 +28,14 @@ class ARP(unittest.TestCase):
   for effect in (empty,subprocess.TimeoutExpired('arp-scan',12),subprocess.CalledProcessError(1,'arp-scan')):
    with patch('mdns.interface_address',return_value='192.168.1.102'),patch('arp.subprocess.run',side_effect=effect),patch('arp.pathlib.Path.read_text',return_value='02:11:22:33:44:02'),self.assertRaises((ValueError,subprocess.SubprocessError)):arp.scan()
  def test_adapter_clears_stale_output_and_never_writes_database(self):
-  class Objects:
-   def __init__(self,path):self.path=pathlib.Path(path);self.rows=[]
-   def add_object(self,**kw):self.rows.append(kw)
-   def write_result_file(self):self.path.write_text('\n'.join(json.dumps(row) for row in self.rows))
   with tempfile.TemporaryDirectory() as td,patch.dict('os.environ',{'DESK_NETWORK_DISTRIBUTED':'1'}):
    root=pathlib.Path(td);(root/'plugins').mkdir();result=root/'plugins/last_result.ARPSCAN.log';result.write_text('stale|success')
-   with patch.dict(sys.modules,{'plugin_helper':types.SimpleNamespace(Plugin_Objects=Objects),'const':types.SimpleNamespace(logPath=td)}),patch('mdns.save_json'),patch('arp.lookup',side_effect=OSError('worker down')):
+   with patch.dict(sys.modules,{'plugin_helper':None,'const':types.SimpleNamespace(logPath=td)}),patch('mdns.save_json'),patch('arp.lookup',side_effect=OSError('worker down')):
     self.assertEqual(arp.main(),1);self.assertEqual(result.read_text(),'')
-   with patch.dict(sys.modules,{'plugin_helper':types.SimpleNamespace(Plugin_Objects=Objects),'const':types.SimpleNamespace(logPath=td)}),patch('mdns.save_json'),patch('arp.lookup',return_value=(rows(),{})):
+   with patch.dict(sys.modules,{'plugin_helper':None,'const':types.SimpleNamespace(logPath=td)}),patch('mdns.save_json'),patch('arp.lookup',return_value=(rows(),{})):
     self.assertEqual(arp.main(),0)
-   objects=[json.loads(line) for line in result.read_text().splitlines()]
-   self.assertEqual(len(objects),2);self.assertTrue(all(v['extra']=='ARPSCAN' and v['watched3']=='192.168.1.0/24 --interface=wlan0' for v in objects))
+   objects=[line.split('|') for line in result.read_text().splitlines()]
+   self.assertEqual(len(objects),2);self.assertTrue(all(len(v)==13 and v[7]=='ARPSCAN' and v[5]=='192.168.1.0/24 --interface=wlan0' for v in objects))
 class Dispatch(unittest.IsolatedAsyncioTestCase):
  async def test_arp_uses_selected_subject_and_rechecks_owner(self):
   s=Service({'node':OWNER,'key':'fake','members':{}});s.owner=AsyncMock(return_value=[7,OWNER]);s.worker_status=AsyncMock(side_effect=[(40,OWNER),(10,WORKER),(20,'deskb3x')])

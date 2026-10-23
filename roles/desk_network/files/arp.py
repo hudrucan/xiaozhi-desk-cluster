@@ -70,29 +70,25 @@ def main():
  if os.getenv('DESK_NETWORK_DISTRIBUTED')!='1':
   os.execv(sys.executable,[sys.executable,'/app/server/plugins/arp_scan/script.py',*sys.argv[1:]])
  sys.path[:0]=['/app/server','/app/server/plugins']
- from plugin_helper import Plugin_Objects
  from const import logPath
- from mdns import save_json,DATABASE
+ from mdns import save_json,DATABASE,write_plugin_results
  from discovery import changes
  path=pathlib.Path(logPath)/'plugins/last_result.ARPSCAN.log'
  with open('/tmp/desk-arp.lock','w') as lock:
   try:fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
   except BlockingIOError:return 1
-  Plugin_Objects(str(path)).write_result_file() # Never re-import a stale successful scan.
+  write_plugin_results(path,[]) # Never re-import a stale successful scan.
   pending=path.with_name('.desk-arp-result');pending.unlink(missing_ok=True)
-  result=Plugin_Objects(str(pending))
   started=time.time()
   try:
    rows,stats=lookup();stats.update(changes(DATABASE,rows))
-   for ip,(mac,vendor) in rows.items():
-    result.add_object(primaryId=mac,secondaryId=ip,watched1=ip,watched2=vendor,watched3=LAN+' --interface='+INTERFACE,watched4='',extra='ARPSCAN',foreignKey='')
-   result.write_result_file();os.replace(pending,path)
+   write_plugin_results(pending,[(mac,ip,ip,vendor,LAN+' --interface='+INTERFACE,'','ARPSCAN','') for ip,(mac,vendor) in rows.items()]);os.replace(pending,path)
    stats=dict(stats,state='ready',devices=len(rows))
   except (OSError,ValueError,KeyError,TypeError) as error:
    # Native execute_plugin skips process_plugin_events when the file is empty.
    # No CurrentScan promotion means no synthetic all-offline scan on failure.
    pending.unlink(missing_ok=True)
-   Plugin_Objects(str(path)).write_result_file();stats={'state':'unavailable','reason':getattr(error,'reason','transport_unavailable')}
+   write_plugin_results(path,[]);stats={'state':'unavailable','reason':getattr(error,'reason','transport_unavailable')}
   stats.update(started_at=started,finished_at=time.time())
   save_json(pathlib.Path('/tmp/desk-arp-status.json'),stats)
   print('Desk ARP '+json.dumps(stats,sort_keys=True))
