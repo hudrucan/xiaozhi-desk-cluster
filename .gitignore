@@ -8,4 +8,5 @@ secret/
 __pycache__/
 *.pyc
 roles/desk_ntfy/runtime/upstream/
+roles/desk_ntfy/runtime/.upstream-prepare.*/
 .claude/auto-context.md
