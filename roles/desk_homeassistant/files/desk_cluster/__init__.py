@@ -28,7 +28,7 @@ class Readiness(HomeAssistantView):
  name='api:desk_cluster:ready'
  requires_auth=False
  def __init__(self,hass):self._desk_hass=hass
- async def get(self,request):
+ def _read_authorities(self):
   from .recording_remote import guard_status
   authority=guard_status(self._desk_hass)
   observations=dict(version=1,workloads=[],guarded=True,before_native_setup=False,owner_reads=0,failed_reads=0)
@@ -39,6 +39,10 @@ class Readiness(HomeAssistantView):
   if pathlib.Path(self._desk_hass.config.path('.storage/desk_camera_command_authority')).is_file():
    from .command_remote import status as command_status
    commands=command_status(self._desk_hass)
+  return authority,observations,commands
+ async def get(self,request):
+  # Policy reads must stay off HA's event loop, including optional-file probes.
+  authority,observations,commands=await self._desk_hass.async_add_executor_job(self._read_authorities)
   ready=(not commands['workloads'] or commands['guarded'] and commands['before_native_setup']) and (not observations['workloads'] or observations['guarded'] and observations['before_native_setup']) and self._desk_hass.is_running and authority['guarded'] and (not authority['workloads'] or authority['before_native_setup'])
   return web.json_response({'ready':ready,'recording_authority':authority,'observation_authority':observations,'command_authority':commands},status=200 if ready else 503)
 

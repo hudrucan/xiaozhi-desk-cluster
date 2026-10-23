@@ -93,6 +93,11 @@ The sidebar **Sync config** operation runs online and does not use that lifecycl
 must be checked in public status; do not assume the latest Save was replicated.
 Maintenance/reboot waits for a ready successor with matching certified revisions.
 
+The `desk_cluster` readiness handler reads recording, observation and command
+authority policies through HA's executor, including optional-file probes. Each
+request reads current policies and checks Core's running state after those reads;
+readiness and authority guards are not cached or relaxed.
+
 ## Files and services
 
 - `playbooks/homeassistant/homeassistant.yml`: staged three-node preparation, serial controller activation,
