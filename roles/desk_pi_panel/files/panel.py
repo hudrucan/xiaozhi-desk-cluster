@@ -33,6 +33,7 @@ SETTINGS_ITEMS = (('calibration','Touch calibration','Adjust touch alignment'),
                   ('fetch','Fetch interval','Choose how often the panel fetches data'),
                   ('system','Pi system','CPU, RAM, temperature and reboot'))
 SETTINGS_LIST_BOX, SETTINGS_ROW_HEIGHT = (14,50,466,274), 72
+EVENTS_LIST_BOX, EVENTS_ROW_HEIGHT = (14,81,466,270), 63
 SETTINGS_BACK_BUTTON = (6,3,50,47)
 CALIBRATE_BUTTON = (130,195,350,243)
 TIMEOUT_SELECT_BUTTON, TIMEOUT_LIST_BOX = (14,64,466,110), (14,112,466,271)
@@ -77,6 +78,30 @@ class SettingsMenu:
         row=(point[1]-self.box[1]+self.offset)//self.row_height
         first=(start[1]-self.box[1]+self.offset)//self.row_height
         return self.items[row][0] if row==first and 0<=row<len(self.items) else None
+
+class EventsList(SettingsMenu):
+    def __init__(self):
+        super().__init__((),EVENTS_LIST_BOX,EVENTS_ROW_HEIGHT)
+    def update(self,value):
+        events=(value or {}).get('events',[])
+        items=tuple((e.get('id') or (e.get('at'),e.get('node'),e.get('kind'),e['message']),e) for e in events)
+        if items==self.items:return
+        index=self.offset//self.row_height
+        anchor=self.items[index][0] if self.items and index<len(self.items) else None
+        offset=self.offset
+        if offset and anchor is not None:
+            index=next((i for i,(key,_) in enumerate(items) if key==anchor),None)
+            if index is not None:offset=index*self.row_height+self.offset%self.row_height
+        self.items=items
+        offset=max(0,min(self.max_offset,offset))
+        if self.start is not None:self.anchor+=offset-self.offset
+        self.offset=offset
+    def end(self,point):
+        self.move(point);self.cancel()
+    def render_key(self,value,live,ok):
+        state='Connecting' if value is None else 'Stale' if not live else 'Reconnecting' if not ok else value['state'].title()
+        rows=tuple((key,e.get('at'),e.get('node'),e['message']) for key,e in self.items)
+        return ('events',state,live,self.offset,rows)
 
 class TimeoutSelect(SettingsMenu):
     def __init__(self):
@@ -165,7 +190,7 @@ def validate(value):
     if value['dns'].get('mode') not in ('adguard','fallback','unavailable','unknown'):
         raise ValueError('Invalid DNS mode')
     events=value.get('events')
-    if not isinstance(events,list) or len(events)>3 or any(not isinstance(e,dict) or not isinstance(e.get('message'),str) or len(e['message'])>256 or e.get('node') not in MEMBERS for e in events):
+    if not isinstance(events,list) or len(events)>12 or any(not isinstance(e,dict) or not isinstance(e.get('message'),str) or len(e['message'])>256 or e.get('node') not in MEMBERS or ('id' in e and (not isinstance(e['id'],str) or not 1<=len(e['id'])<=128)) for e in events):
         raise ValueError('Invalid events')
     for n in nodes:
         for config in n['configuration'].values():
@@ -274,11 +299,18 @@ class Renderer:
     def text(self,d,xy,value,size=12,color=TEXT,bold=False,width=None):
         value=str(value)
         font=(self.bold if bold else self.fonts)[size]
-        if width:
-            while value and d.textlength(value,font=font)>width:
-                value=value[:-2]+'…' if not value.endswith('…') else value[:-2]+'…'
+        if width and d.textlength(value,font=font)>width:
+            if d.textlength('…',font=font)>width:value=''
+            else:
+                # Long notifications must not block touch handling with repeated full-string scans.
+                low,high=0,len(value)-1
+                while low<high:
+                    middle=(low+high+1)//2
+                    if d.textlength(value[:middle]+'…',font=font)<=width:low=middle
+                    else:high=middle-1
+                value=value[:low]+'…'
         d.text(xy,value,font=font,fill=color)
-    def draw(self,value,received,ok,page='overview',selected=0,now=None,node_view='status',clock=None):
+    def draw(self,value,received,ok,page='overview',selected=0,now=None,node_view='status',clock=None,events_menu=None):
         now=time.monotonic() if now is None else now
         live,elapsed=freshness(value,received,now)
         image=Image.new('RGB',(WIDTH,HEIGHT),BG);d=ImageDraw.Draw(image)
@@ -297,7 +329,7 @@ class Renderer:
         if page=='overview':self.overview(d,value,live,elapsed)
         elif page=='node':self.node(d,value,live,elapsed,selected,node_view)
         elif page=='network':self.network(d,value,live,elapsed)
-        else:self.events(d,value,live)
+        else:self.events(image,d,value,live,events_menu)
         self.navigation(d,page)
         return image
     def button(self,d,box,label,primary=False):
@@ -636,23 +668,29 @@ class Renderer:
             txt=f'{label} · r{cfg["revision"]}' if type(cfg.get('revision')) is int else label+' · —'
             self.text(d,(box[0]+12,231),txt,11,MUTED,width=126)
             self.text(d,(box[0]+12,249),cfg.get('state','unknown').title(),11,GREEN if cfg.get('state')=='synced' else RED,width=126)
-    def events(self,d,value,live):
+    def events(self,image,d,value,live,menu=None):
         self.text(d,(14,46),'Recent events',14,TEXT,True)
         if not live:self.right_text(d,(310,41,466,67),'Cached',12,RED)
-        events=(value or {}).get('events',[])
-        events=events[:3] if isinstance(events,list) else []
-        if not events:
+        if menu is None:menu=EventsList();menu.update(value)
+        left,top,right,bottom=menu.box
+        viewport=Image.new('RGB',(right-left+1,bottom-top+1),BG);rows=ImageDraw.Draw(viewport)
+        if not menu.items:
             d.rounded_rectangle((14,81,466,140),radius=8,fill=SURFACE,outline=BORDER)
             self.text(d,(28,102),'No retained observations',13,MUTED)
-        for i,e in enumerate(events):
-            if not isinstance(e,dict):continue
-            y=81+i*63
-            d.rounded_rectangle((14,y,466,y+54),radius=8,fill=SURFACE,outline=BORDER)
-            self.text(d,(28,y+7),e.get('node',''),12,GOLD,width=120)
+        for i,(_,e) in enumerate(menu.items):
+            y=i*menu.row_height-menu.offset
+            if y+54<0 or y>=viewport.height:continue
+            rows.rounded_rectangle((0,y,452,y+54),radius=8,fill=SURFACE,outline=BORDER)
+            self.text(rows,(14,y+7),e.get('node',''),12,GOLD,width=120)
             dt=timestamp(e.get('at'));t=datetime.fromtimestamp(dt).astimezone().strftime('%H:%M:%S') if dt else '—'
-            self.right_text(d,(336,y+4,452,y+27),t,11,MUTED)
-            self.text(d,(28,y+29),e.get('message',''),12,TEXT,width=424)
-        if not live:self.text(d,(14,256),'Current cluster state is unconfirmed',11,RED,width=452)
+            self.right_text(rows,(322,y+4,438,y+27),t,11,MUTED)
+            self.text(rows,(14,y+29),e.get('message',''),12,TEXT,width=424)
+        if menu.items:image.paste(viewport,(left,top))
+        if menu.max_offset:
+            track=bottom-top+1;thumb=max(20,round(track*track/(len(menu.items)*menu.row_height)))
+            y=top+round((track-thumb)*menu.offset/menu.max_offset)
+            d.line((474,top,474,bottom),fill=BORDER,width=2)
+            d.line((474,y,474,y+thumb-1),fill=GOLD,width=2)
 
 def validate_framebuffer(v,stride):
     if (v[0],v[1],v[6],v[8:10],v[11:13],v[14:16]) != (480,320,16,(11,5),(5,6),(0,5)) or v[4] or v[5] or stride!=960:
@@ -714,11 +752,12 @@ def run(config):
     thread=threading.Thread(target=model.poll,args=(config['url'],),daemon=True);thread.start()
     pi=PiSystem();threading.Thread(target=pi.poll,daemon=True).start()
     for sig in (signal.SIGTERM,signal.SIGINT):signal.signal(sig,lambda *_:model.stopped.set())
-    page,selected='overview',0;node_view='status';settings_view='menu';settings_menu=SettingsMenu();timeout_select=TimeoutSelect();cal=None
+    page,selected='overview',0;node_view='status';settings_view='menu';settings_menu=SettingsMenu();events_menu=EventsList();timeout_select=TimeoutSelect();cal=None
     x,y=rx.min,ry.min;pressed=False;points=[];press_at=0;last_render=0;last_key=None
     try:
         while not model.stopped.is_set():
-            ready,_,_=select.select([touch.fd],[],[],0.08 if cal or (pressed and page=='settings' and (settings_view=='menu' or timeout_select.opened)) else 0.2)
+            events_menu.update(model.snapshot()[0])
+            ready,_,_=select.select([touch.fd],[],[],0.08 if cal or (pressed and (page=='events' or (page=='settings' and (settings_view=='menu' or timeout_select.opened)))) else 0.2)
             if ready:
                 for event in touch.read():
                     now=time.monotonic()
@@ -729,6 +768,7 @@ def run(config):
                         if event.value==1:
                             pressed=True;points=[];press_at=now
                             settings_menu.cancel()
+                            events_menu.cancel()
                             timeout_select.cancel()
                             if idle.touch_down(now):last_key=None;last_render=0
                         elif pressed or idle.pressed:
@@ -758,6 +798,8 @@ def run(config):
                             elif page=='settings' and settings_view=='system' and pi.confirm_at is not None:
                                 if inside((tx,ty),PI_REBOOT_CANCEL) or inside((tx,ty),SETTINGS_BACK_BUTTON):pi.cancel()
                                 elif inside((tx,ty),PI_REBOOT_CONFIRM):pi.request_reboot(now)
+                            elif page=='events' and events_menu.start is not None:
+                                events_menu.end(touch_point(x,y,rx,ry,config))
                             elif page=='settings' and settings_view=='menu' and settings_menu.start is not None:
                                 target=settings_menu.end(touch_point(x,y,rx,ry,config))
                                 if target is not None:
@@ -810,7 +852,11 @@ def run(config):
                             last_render=0
                     elif event.type==ecodes.EV_SYN and event.code==ecodes.SYN_REPORT and pressed:
                         idle.activity(now)
-                        if not cal and page=='settings' and settings_view=='menu' and not idle.consume_touch:
+                        if not cal and page=='events' and not idle.consume_touch:
+                            point=touch_point(x,y,rx,ry,config)
+                            if not points:events_menu.begin(point)
+                            elif events_menu.move(point):last_render=0
+                        elif not cal and page=='settings' and settings_view=='menu' and not idle.consume_touch:
                             point=touch_point(x,y,rx,ry,config)
                             if not points:settings_menu.begin(point)
                             elif settings_menu.move(point):last_render=0
@@ -832,14 +878,16 @@ def run(config):
             if idle.sleeping:continue
             if now-last_render>=(0.08 if cal else 1):
                 value,received,ok=model.snapshot()
+                events_menu.update(value)
                 live,elapsed=freshness(value,received,now)
                 online=tuple(node_live(n,live,elapsed) for n in value['nodes']) if value else ()
                 network_fresh=tuple(network_live(n,live,elapsed) for n in value['nodes']) if value else ()
                 system,system_version,reboot_state=pi.snapshot()
                 clock=local_clock() if page=='overview' else None
                 key=('cal',id(cal),cal.version) if cal else ('settings',settings_view,settings_menu.offset,timeout_select.opened,timeout_select.offset,config.get('calibration_error'),config['screen_timeout'],settings_error,config['fetch_interval'],fetch_input,fetch_error,system_version,pi.confirm_at,reboot_state) if page=='settings' else (id(value),live,ok,online,network_fresh,page,selected,node_view,clock)
+                if not cal and page=='events':key=events_menu.render_key(value,live,ok)
                 if key!=last_key:
-                    image=renderer.calibration(cal) if cal else renderer.settings(config,settings_error,settings_view,settings_menu,timeout_select,fetch_input,fetch_error,system,reboot_state,pi.confirm_at is not None) if page=='settings' else renderer.draw(value,received,ok,page,selected,now,node_view,clock)
+                    image=renderer.calibration(cal) if cal else renderer.settings(config,settings_error,settings_view,settings_menu,timeout_select,fetch_input,fetch_error,system,reboot_state,pi.confirm_at is not None) if page=='settings' else renderer.draw(value,received,ok,page,selected,now,node_view,clock,events_menu)
                     fb.show(image);last_key=key
                 last_render=now
     finally:

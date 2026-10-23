@@ -13,6 +13,29 @@ import (
 	"time"
 )
 
+func TestEventOrderAndScrollableProjectionStayBounded(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	s, members := panelFixture(now)
+	for _, id := range []string{"a", "c", "b"} {
+		s.Events = append(s.Events, Event{ID: id, At: now, Node: "deskb1x", Kind: "notification", Message: id})
+	}
+	for iteration := 0; iteration < 8; iteration++ {
+		s.Events = mergeEvents(append(s.Events, s.Events...), now)
+		p := panelSnapshot(s, members, now)
+		if len(p.Events) != 3 || p.Events[0].ID != "c" || p.Events[1].ID != "b" || p.Events[2].ID != "a" {
+			t.Fatalf("equal-time events moved between refreshes: %+v", p.Events)
+		}
+	}
+	for i := 0; i < 64; i++ {
+		s.Events = append(s.Events, Event{ID: strings.Repeat("x", 128), At: now, Node: "deskb1x", Kind: "notification", Message: strings.Repeat("<", 256)})
+	}
+	p := panelSnapshot(s, members, now)
+	raw, err := json.Marshal(p)
+	if err != nil || len(raw) > panelMaxBytes || len(p.Events) > 12 || len(p.Events) < 3 {
+		t.Fatalf("escaped messages exceeded shared payload budget: events=%d bytes=%d err=%v", len(p.Events), len(raw), err)
+	}
+}
+
 func TestNotificationEventsRemainBoundedReadOnlyPanelEvents(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	meta := map[string]any{"observed_at": now.Unix(), "events": []map[string]any{{"id": "abcDEF123456", "time": now.Unix(), "message": "Door opened"}}}
@@ -218,7 +241,7 @@ func TestPanelUsesCachedBoundedProjectionWithoutPrivateMetadata(t *testing.T) {
 		s.Events = append(s.Events, Event{At: now, Node: "deskb1x", Kind: "node", Message: strings.Repeat("x", 256)})
 	}
 	p := panelSnapshot(s, members, now)
-	if p.State != "ready" || p.Protocol != panelProtocol || len(p.Nodes) != 3 || len(p.Events) != 3 || *p.Owners["dns"].Node != "deskb2x" {
+	if p.State != "ready" || p.Protocol != panelProtocol || len(p.Nodes) != 3 || len(p.Events) <= 3 || len(p.Events) > 12 || *p.Owners["dns"].Node != "deskb2x" {
 		t.Fatalf("invalid compact projection: %+v", p)
 	}
 	if *p.Nodes[0].CPU != 11.1 || *p.Nodes[0].Jobs.TTS != 1 {

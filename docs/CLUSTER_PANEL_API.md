@@ -60,7 +60,7 @@ adds no probes, packet capture, database writes or model activity. The original
 | `nodes[].components` | `worker`, `core`, `mqtt`, `dns`: `ready`, `unavailable`, `unknown` |
 | `nodes[].configuration` | `xiaozhi`, `dns`, `monitoring`: `{state: synced/pending/failed/unknown, revision: integer or null}` |
 | `client` | Robot Web Control state `online`, `offline`, `unknown` and `server_connected` bool/null |
-| `events` | Up to three latest observed cluster events: UTC `at`, `node`, `kind`, `message` |
+| `events` | Up to 12 latest observed cluster events, further limited by the 8 KiB response budget: stable `id`, UTC `at`, `node`, `kind`, `message`. Pi scrolls the list and anchors older rows by ID. Update Pi before the API when upgrading from the three-event limit. |
 
 All keys are present in unavailable node records. Unknown is always distinct
 from zero/false. Boot IDs, private endpoints, source/bundle details, transcript,

@@ -1250,7 +1250,12 @@ func (d *Dashboard) aggregate(ctx context.Context) {
 	d.mu.Unlock()
 }
 func mergeEvents(events []Event, now time.Time) []Event {
-	sort.Slice(events, func(i, j int) bool { return events[i].At.After(events[j].At) })
+	sort.Slice(events, func(i, j int) bool {
+		if events[i].At.Equal(events[j].At) {
+			return events[i].ID > events[j].ID
+		}
+		return events[i].At.After(events[j].At)
+	})
 	seen := map[string]bool{}
 	result := []Event{}
 	for _, event := range events {
@@ -1342,6 +1347,7 @@ type PanelDNS struct {
 	Resolver *string  `json:"fallback_resolver"`
 }
 type PanelEvent struct {
+	ID      string    `json:"id,omitempty"`
 	At      time.Time `json:"at"`
 	Node    string    `json:"node"`
 	Kind    string    `json:"kind"`
@@ -1581,7 +1587,7 @@ func panelSnapshot(snapshot Snapshot, members []Member, now time.Time) Panel {
 	}
 	if current {
 		for _, event := range snapshot.Events {
-			if len(p.Events) == 3 {
+			if len(p.Events) == 12 {
 				break
 			}
 			if !panelFresh(event.At, now, 6*time.Hour) || len(event.Message) > 256 || len(event.Node) > 32 {
@@ -1592,7 +1598,12 @@ func panelSnapshot(snapshot Snapshot, members []Member, now time.Time) Panel {
 			default:
 				continue
 			}
-			p.Events = append(p.Events, PanelEvent{At: event.At, Node: event.Node, Kind: event.Kind, Message: event.Message})
+			p.Events = append(p.Events, PanelEvent{ID: event.ID, At: event.At, Node: event.Node, Kind: event.Kind, Message: event.Message})
+			// Events share the existing byte budget with node telemetry.
+			if raw, err := json.Marshal(p); err != nil || len(raw) > panelMaxBytes {
+				p.Events = p.Events[:len(p.Events)-1]
+				break
+			}
 		}
 	}
 	return p

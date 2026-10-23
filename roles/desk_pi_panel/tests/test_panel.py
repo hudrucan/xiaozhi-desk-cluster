@@ -36,6 +36,78 @@ def homeassistant_fixture():
     return v
 
 class PanelTests(unittest.TestCase):
+    def test_long_notification_truncation_uses_bounded_measurements(self):
+        renderer=panel.Renderer.__new__(panel.Renderer);renderer.fonts={12:Mock()}
+        d=Mock();d.textlength.side_effect=lambda value,**kwargs:len(value)*8
+        message='Thông báo 🔔 '*22
+        renderer.text(d,(0,0),message,12,width=424)
+        shown=d.text.call_args.args[1]
+        self.assertTrue(shown.endswith('…'))
+        self.assertTrue(message.startswith(shown[:-1]))
+        self.assertLessEqual(len(shown)*8,424)
+        self.assertGreater((len(shown)+1)*8,424)
+        self.assertLessEqual(d.textlength.call_count,12)
+        d.reset_mock();renderer.text(d,(0,0),'Hi',12,width=424)
+        self.assertEqual(d.text.call_args.args[1],'Hi')
+        self.assertEqual(d.textlength.call_count,1)
+        renderer.text(d,(0,0),'Long',12,width=1)
+        self.assertEqual(d.text.call_args.args[1],'')
+
+    def test_events_scroll_reuses_drag_and_anchors_older_rows(self):
+        v=fixture();v['events']=[{'id':str(i),'node':'deskb1x','kind':'notification','at':'2026-10-23T08:00:00Z','message':f'Event {i}'} for i in range(9)]
+        menu=panel.EventsList();menu.update(v)
+        menu.begin((100,200));menu.move((100,60));menu.end((100,60))
+        self.assertEqual(menu.offset,140)
+        anchor=menu.items[menu.offset//63][0];pixel=menu.offset%63
+        v['events'].insert(0,dict(v['events'][0],id='new',message='New event'))
+        menu.update(v)
+        self.assertEqual(menu.items[menu.offset//63][0],anchor)
+        self.assertEqual(menu.offset%63,pixel)
+        menu.offset=0;v['events'].insert(0,dict(v['events'][0],id='newer'))
+        menu.update(v);self.assertEqual(menu.offset,0)
+        menu.begin((100,200));menu.move((100,-2000));menu.end((100,-2000))
+        self.assertEqual(menu.offset,menu.max_offset)
+        menu.update(dict(v,events=[]));self.assertEqual(menu.offset,0)
+
+    def test_event_polling_ignores_unrelated_telemetry_but_tracks_freshness(self):
+        v=fixture();v['events']=[{'id':'one','node':'deskb1x','message':'Test','at':'2026-10-23T08:00:00Z'}]
+        menu=panel.EventsList();menu.update(v);key=menu.render_key(v,True,True)
+        changed=copy.deepcopy(v);changed['age_ms']=2000;changed['nodes'][0]['cpu_percent']=80
+        menu.update(changed);self.assertEqual(menu.render_key(changed,True,True),key)
+        self.assertNotEqual(menu.render_key(changed,False,True),key)
+        self.assertNotEqual(menu.render_key(changed,True,False),key)
+        changed['events'][0]['message']='Updated';menu.update(changed)
+        self.assertNotEqual(menu.render_key(changed,True,True),key)
+
+    def test_event_history_bound_and_old_api_compatibility(self):
+        v=fixture();v['events']=[{'id':str(i),'node':'deskb1x','message':'Test'} for i in range(12)]
+        panel.validate(v)
+        v['events'].append(v['events'][0])
+        with self.assertRaises(ValueError):panel.validate(v)
+        v['events']=v['events'][:3]
+        for event in v['events']:del event['id']
+        panel.validate(v)
+        v['events'][0]['id']=[]
+        with self.assertRaises(ValueError):panel.validate(v)
+
+    def test_events_render_clips_scroll_and_does_not_rewrite_identical_pixels(self):
+        v=fixture();v['events']=[{'id':str(i),'node':'deskb1x','message':f'Notification {i}','at':'2026-10-23T08:00:00Z'} for i in range(12)]
+        renderer=panel.Renderer.__new__(panel.Renderer)
+        renderer.fonts={size:panel.ImageFont.load_default(size=size) for size in (11,12,13,14,16,18,22)}
+        renderer.bold=renderer.fonts
+        menu=panel.EventsList();menu.update(v)
+        first=renderer.draw(v,100,True,'events',now=100,events_menu=menu)
+        repeated=renderer.draw(copy.deepcopy(v),101,True,'events',now=101,events_menu=menu)
+        fb=panel.Framebuffer.__new__(panel.Framebuffer);fb.rotation=0;fb.previous=None
+        fb.output=ctypes.create_string_buffer(480*320*2);fb.buffer=bytearray(480*320*2);fb.pack=Mock()
+        fb.show(first);fb.show(repeated)
+        self.assertEqual(fb.pack.call_count,1)
+        menu.begin((100,200));menu.move((100,50));menu.end((100,50))
+        scrolled=renderer.draw(v,100,True,'events',now=100,events_menu=menu)
+        self.assertIsNotNone(panel.ImageChops.difference(first,scrolled).getbbox())
+        for box in ((0,0,480,80),(0,276,480,320)):
+            self.assertIsNone(panel.ImageChops.difference(first.crop(box),scrolled.crop(box)).getbbox())
+
     def test_ntfy_uses_shared_vip_role_instead_of_replica_readiness(self):
         v=fixture();n=v['nodes'][0];n['components']['ntfy']='ready';n['vip']['xiaozhi']=True
         for peer in v['nodes'][1:]:peer['components']['ntfy']='ready';peer['vip']['xiaozhi']=False
