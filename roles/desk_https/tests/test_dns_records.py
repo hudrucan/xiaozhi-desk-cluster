@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import Mock
 
 spec=importlib.util.spec_from_file_location('https_dns',Path(__file__).parents[1]/'files/dns_records.py')
 dns=importlib.util.module_from_spec(spec);spec.loader.exec_module(dns)
@@ -58,7 +59,9 @@ class DNS(unittest.TestCase):
     def test_degraded_rollback_preserves_dns_when_ownership_or_policy_is_unverified(self):
         with tempfile.TemporaryDirectory() as tmp:
             state=Path(tmp)/'owned.json';api=Policy()
-            self.assertEqual(dns.rollback(state,api)['status'],'pending')
+            no_api=Mock(side_effect=AssertionError('Missing ownership must not access DNS policy'))
+            self.assertEqual(dns.rollback(state,no_api),{'status':'pending','changed':False,'reason':'Ownership journal unavailable on surviving coordinator'})
+            no_api.assert_not_called()
             self.assertEqual(api.writes,[])
             row={'domain':dns.NAMES[0],'answer':'192.168.1.186','enabled':True}
             state.write_text(json.dumps([row]));api.records.append(row);api.ready=False
