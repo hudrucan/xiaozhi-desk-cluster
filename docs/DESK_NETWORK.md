@@ -363,9 +363,10 @@ the database; late jobs cannot reopen a retired detector.
 
 Static API read models use connection-local TEMP table-revision triggers for the
 exact pinned SELECTs. Resource_History writes do not invalidate Settings or
-language metadata on the same connection. External commits, schema changes,
-unknown SQL, force/ad-hoc requests and the existing thirty-second age bound retain
-conservative refresh behavior. TEMP state is not replicated and disappears when
+language metadata on the same connection. Unchanged exact table queries reuse
+their native read models without periodic JSON rebuilds. External commits and
+schema changes invalidate immediately; unknown SQL retains the thirty-second age
+bound. Force/ad-hoc requests still bypass the cache. TEMP state is not replicated and disappears when
 the native connection closes. No persistent schema or scan cadence changes.
 
 The same-origin `/network/server/` namespace forwards to the authenticated native

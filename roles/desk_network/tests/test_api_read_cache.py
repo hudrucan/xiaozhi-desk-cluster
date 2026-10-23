@@ -31,7 +31,7 @@ class Checks(unittest.TestCase):
   other=sqlite3.connect(str(pathlib.Path(self.tmp.name)/'db'));self.addCleanup(other.close)
   self.db.sql_connection=other
   self.assertIsNot(self.read(),a)
- def test_time_and_custom_queries_never_cached_and_static_has_max_age(self):
+ def test_time_and_custom_paths_bypass_cache_and_unknown_sql_has_max_age(self):
   for path in ('table_devices.json','table_devices_tiles.json','table_resource_history_hour.json','table_custom_endpoint.json'):
    a=self.read(path=path);self.assertIsNot(self.read(path=path),a)
   a=self.read();self.time[0]=31;self.assertIsNot(self.read(),a)
@@ -45,7 +45,7 @@ class Checks(unittest.TestCase):
   self.conn.execute('CREATE TABLE Settings(value)');self.conn.execute('CREATE TABLE Resource_History(value)')
   schema=self.conn.execute('SELECT sql FROM main.sqlite_master ORDER BY name').fetchall()
   def read():return self.read(query='SELECT * FROM Settings',path='/tmp/api/table_settings.json')
-  first=read();self.conn.execute('INSERT INTO Resource_History VALUES (1)');self.assertIs(read(),first)
+  first=read();self.time[0]=3600;self.conn.execute('INSERT INTO Resource_History VALUES (1)');self.assertIs(read(),first)
   for sql in ['INSERT INTO Settings VALUES (1)','UPDATE Settings SET value=2','DELETE FROM Settings']:
    self.conn.execute(sql);current=read();self.assertIsNot(current,first);first=current
   self.assertEqual(self.conn.execute('SELECT sql FROM main.sqlite_master ORDER BY name').fetchall(),schema)
@@ -53,6 +53,7 @@ class Checks(unittest.TestCase):
   self.conn.execute('CREATE TABLE Settings(value)')
   def read():return self.read(query='SELECT * FROM Settings',path='/tmp/api/table_settings.json')
   first=read()
+  self.time[0]=3600;self.assertIs(read(),first)
   with sqlite3.connect(str(pathlib.Path(self.tmp.name)/'db')) as other:other.execute('INSERT INTO Settings VALUES (1)')
   second=read();self.assertIsNot(first,second)
   self.conn.execute('DROP TABLE Settings');self.conn.execute('CREATE TABLE Settings(value)')
@@ -63,6 +64,6 @@ class Checks(unittest.TestCase):
   first=self.read(query=query,path=path);self.conn.execute('BEGIN');self.conn.execute('INSERT INTO Settings VALUES (1)');self.conn.rollback()
   self.assertIs(self.read(query=query,path=path),first)
   def build(*args):self.conn.execute('INSERT INTO Settings VALUES (1)');return object()
-  self.factory.side_effect=build;self.time[0]=31;self.read(query=query,path=path);self.read(query=query,path=path)
+  self.factory.side_effect=build;self.conn.execute('INSERT INTO Settings VALUES (2)');self.read(query=query,path=path);self.read(query=query,path=path)
   self.assertEqual(self.factory.call_count,3)
 if __name__=='__main__':unittest.main()

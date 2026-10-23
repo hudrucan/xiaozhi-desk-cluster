@@ -67,8 +67,11 @@ class ReadModelCache:
             return self.factory(db, force, query, path, ad_hoc)
         now = self.clock()
         cached = self.entries.get(path)
+        # Exact table queries have no clock dependency: unchanged revisions are
+        # sufficient. Keep the age bound for SQL outside that pinned allowlist.
+        exact_table = ' '.join(query.split()).casefold() in TABLE_QUERIES
         if (cached and cached[0] is conn and cached[1] == (stamp, query)
-                and now - cached[2] < MAX_AGE):
+                and (exact_table or now - cached[2] < MAX_AGE)):
             return cached[3]
         result = self.factory(db, force, query, path, ad_hoc)
         # Keep the BEFORE stamp so a write during materialization forces the
