@@ -33,6 +33,12 @@ class VerifyStats(unittest.TestCase):
         self.assertEqual((TASK['retries'],TASK['delay'],TASK['until']),(10,2,'desk_https_stats.rc == 0'))
         self.assertFalse(TASK['changed_when'])
 
+    def test_herdr_up_or_down_does_not_affect_legacy_gate(self):
+        for status in ['UP','DOWN']:
+            with self.subTest(status=status):
+                self.run_gate(self.rows()+[('desk_caddy_herdr',node,status,'','')
+                    for node in ['deskb1x','deskb2x','deskb3x']],True)
+
     def test_missing_backend_fails(self):self.run_gate(self.rows()[:-1],False)
 
     def test_down_backend_fails(self):

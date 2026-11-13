@@ -15,8 +15,9 @@ import threading
 import time
 import unittest
 from test_https import probe, proxy, render
+from test_transport import PlainBackend
 
-NAMES=['cluster.huynm.dev','ntfy.cluster.huynm.dev','ha.cluster.huynm.dev']
+NAMES=['cluster.huynm.dev','ntfy.cluster.huynm.dev','ha.cluster.huynm.dev','herdr.huynm.dev']
 NODES=['deskb1x','deskb2x','deskb3x']
 
 
@@ -42,6 +43,9 @@ class EndToEndHealth(unittest.TestCase):
             upstream=http.server.ThreadingHTTPServer(('127.0.0.1',0),Ready)
             upstream.dashboard_available=True
             thread=threading.Thread(target=upstream.serve_forever,daemon=True);thread.start()
+            pc=http.server.ThreadingHTTPServer(('127.0.0.1',0),PlainBackend)
+            pc_port=pc.server_port
+            pc_thread=threading.Thread(target=pc.serve_forever,daemon=True);pc_thread.start()
             def start(binary,config):
                 log=(tmp/(config.name+'.log')).open('ab');logs.append(log)
                 args=[binary,'run','--config',str(config)] if binary==os.environ['CADDY_BIN'] else [binary,'-db','-f',str(config)]
@@ -84,6 +88,7 @@ class EndToEndHealth(unittest.TestCase):
                             for k,v in value.items():value[k]=localize(v)
                         elif isinstance(value,list):return [localize(v) for v in value]
                         elif isinstance(value,str):
+                            if value=='192.168.1.168:7317':return f'127.0.0.1:{pc_port}'
                             if value.startswith('10.10.10.'):return '127.0.0.1/32' if value.endswith('/32') else '127.0.0.1'
                             if value.startswith('unix//run/haproxy/desk-https-'):
                                 suffix=value.split('desk-https-')[1].removesuffix('.sock');return 'unix/'+str(tmp/(node+'-'+suffix+'.sock'))
@@ -92,7 +97,7 @@ class EndToEndHealth(unittest.TestCase):
                 stats=tmp/'stats.sock';public_port=port()
                 fragment=fragment.replace('192.168.1.186:443',f'127.0.0.1:{public_port}').replace('source 10.10.10.11','source 127.0.0.1').replace('/etc/ssl/certs/ca-certificates.crt',str(cert))
                 for i,node in enumerate(NODES):fragment=fragment.replace(f'10.10.10.{11+i}:8443',f'127.0.0.1:{caddy_ports[node]}')
-                fragment=fragment.replace('inter 2s','inter 100ms')
+                fragment=fragment.replace('inter 2s','inter 100ms').replace('    tcp-request inspect-delay', '    tcp-request connection set-src ipv4(192.168.1.123)\n    tcp-request inspect-delay')
                 path=tmp/'router.cfg';path.write_text(f'global\n    stats socket {stats} level admin\ndefaults\n    mode tcp\n    timeout connect 1s\n    timeout client 2s\n    timeout server 2s\n'+fragment)
                 start(os.environ['HAPROXY_BIN'],path)
                 def states():
@@ -104,11 +109,49 @@ class EndToEndHealth(unittest.TestCase):
                             data+=chunk
                     rows=csv.DictReader(io.StringIO(data.decode().replace('# ', '', 1)))
                     return {(r['pxname'],r['svname']):r['status'] for r in rows if r['svname'] in NODES}
-                await_state(lambda: len(states())==9 and set(states().values())=={'UP'})
+                await_state(lambda: len(states())==12 and set(states().values())=={'UP'})
                 context=ssl.create_default_context(cafile=str(cert))
                 with socket.create_connection(('127.0.0.1',plain_port),timeout=3) as raw:
                     raw.sendall(b'GET /__desk_https_health HTTP/1.1\r\nHost: cluster.huynm.dev\r\nX-Forwarded-For: 10.10.10.11\r\nConnection: close\r\n\r\n')
                     self.assertIn(b' 404 ',raw.makefile('rb').readline())
+                def herdr_request():
+                    with socket.create_connection(('127.0.0.1',public_port),timeout=3) as raw:
+                        with context.wrap_socket(raw,server_hostname=NAMES[3]) as tls:
+                            tls.sendall(f'GET / HTTP/1.1\r\nHost: {NAMES[3]}\r\nConnection: close\r\n\r\n'.encode())
+                            return tls.makefile('rb').readline()
+                def websocket_echo():
+                    with socket.create_connection(('127.0.0.1',public_port),timeout=3) as raw:
+                        with context.wrap_socket(raw,server_hostname=NAMES[3]) as tls:
+                            tls.sendall(f'GET /ws HTTP/1.1\r\nHost: {NAMES[3]}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n'.encode())
+                            response=tls.makefile('rb');self.assertIn(b' 101 ',response.readline())
+                            headers={}
+                            while True:
+                                line=response.readline()
+                                if line==b'\r\n':break
+                                k,v=line.decode().split(':',1);headers[k.lower()]=v.strip()
+                            self.assertEqual(headers['sec-websocket-accept'],'s3pPLMBiTxaQ9kYGzzhZRbK+xOo=')
+                            for body in [b'terminal input',b'second message']:
+                                mask=b'abcd';tls.sendall(bytes([0x81,0x80|len(body)])+mask+bytes(b^mask[i%4] for i,b in enumerate(body)))
+                                self.assertEqual(response.read(2),bytes([0x81,len(body)]))
+                                self.assertEqual(response.read(len(body)),body)
+                            # Close the upgraded stream; the next call reconnects.
+                            tls.sendall(b'\x88\x80abcd')
+                self.assertIn(b' 200 ',herdr_request());websocket_echo();websocket_echo()
+                pc.shutdown();pc.server_close();pc_thread.join(timeout=2)
+                self.assertIn(b' 502 ',herdr_request())
+                for _ in range(6):
+                    time.sleep(.2)
+                    self.assertEqual(len(states()),12);self.assertEqual(set(states().values()),{'UP'})
+                    self.assertEqual(sum(backend!='desk_caddy_herdr' for backend,_ in states()),9)
+                for name,uri in zip(NAMES[:3],['/api/cluster/panel','/ready','/api/desk_cluster/ready']):
+                    with socket.create_connection(('127.0.0.1',public_port),timeout=3) as raw:
+                        with context.wrap_socket(raw,server_hostname=name) as tls:
+                            tls.sendall(f'GET {uri} HTTP/1.1\r\nHost: {name}\r\nConnection: close\r\n\r\n'.encode())
+                            self.assertIn(b' 200 ',tls.makefile('rb').readline())
+                # Recovery uses the same endpoint, without reloading either proxy.
+                pc=http.server.ThreadingHTTPServer(('127.0.0.1',pc_port),PlainBackend)
+                pc_thread=threading.Thread(target=pc.serve_forever,daemon=True);pc_thread.start()
+                self.assertIn(b' 200 ',herdr_request());websocket_echo()
                 upstream.dashboard_available=False
                 for name,uri,status in [(NAMES[0],'/api/cluster/panel',503),(NAMES[0],'/dns/',200),(NAMES[1],'/ready',200),(NAMES[2],'/api/desk_cluster/ready',200)]:
                     with socket.create_connection(('127.0.0.1',public_port),timeout=3) as raw:
@@ -118,7 +161,7 @@ class EndToEndHealth(unittest.TestCase):
                 # More than fall=2 check intervals with Dashboard returning 503.
                 for _ in range(6):
                     time.sleep(.2)
-                    self.assertEqual(len(states()),9);self.assertEqual(set(states().values()),{'UP'})
+                    self.assertEqual(len(states()),12);self.assertEqual(set(states().values()),{'UP'})
                 upstream.dashboard_available=True
                 for name in NAMES:
                     with socket.create_connection(('127.0.0.1',caddy_ports['deskb1x']),timeout=3) as raw:
@@ -127,7 +170,7 @@ class EndToEndHealth(unittest.TestCase):
                             tls.sendall(f'GET /__desk_https_health HTTP/1.1\r\nHost: {name}\r\nX-Forwarded-For: 127.0.0.1\r\nConnection: close\r\n\r\n'.encode())
                             self.assertIn(b' 404 ',tls.makefile('rb').readline())
                 locals_['deskb1x'].terminate();locals_['deskb1x'].wait(timeout=5)
-                await_state(lambda: all(status==('DOWN' if node=='deskb1x' else 'UP') for (_,node),status in states().items()))
+                await_state(lambda: all(status==('DOWN' if node=='deskb1x' and backend!='desk_caddy_herdr' else 'UP') for (backend,node),status in states().items()))
                 self.assertIsNone(caddys['deskb1x'].poll(),'Caddy must remain alive while its local HAProxy is down')
                 # TLS itself still succeeds on the failed node: this is the P1
                 # regression, not a Caddy process/network failure.
@@ -142,11 +185,12 @@ class EndToEndHealth(unittest.TestCase):
                             headers=response.read().decode().lower();self.assertNotIn('x-test-node: deskb1x',headers)
                             self.assertRegex(headers,r'x-test-node: deskb[23]x')
                 locals_['deskb1x']=start(os.environ['HAPROXY_BIN'],local_configs['deskb1x'])
-                await_state(lambda: len(states())==9 and set(states().values())=={'UP'})
+                await_state(lambda: len(states())==12 and set(states().values())=={'UP'})
             finally:
                 for p in reversed(processes):
                     if p.poll() is None:p.terminate();p.wait(timeout=5)
                 upstream.shutdown();upstream.server_close();thread.join(timeout=2)
+                pc.shutdown();pc.server_close();pc_thread.join(timeout=2)
                 for log in logs:log.close()
 
 

@@ -8,10 +8,10 @@ this guide establishes live certificate readiness or authorizes a rollout.
 ## Routing and trust
 
 The existing management VIP `192.168.1.186:443` runs HAProxy TCP passthrough to
-three native ARM64 Caddy instances on `10.10.10.11–13:8443`. Each of the three
+three native ARM64 Caddy instances on `10.10.10.11–13:8443`. Each of the four
 SNI names has its own three-member backend with trusted-certificate, hostname
-and SNI health checks. Each probe also requires HTTP 200 through Caddy and its
-local Unix socket. Cluster ingress health ends at the HAProxy frontend and is
+and SNI health checks. The three legacy hostnames require HTTP 200 through Caddy and their
+local Unix sockets; herdr uses Caddy-only synthetic health. Cluster ingress health ends at the HAProxy frontend and is
 independent of Dashboard state; NTFY and HA also require their existing application
 readiness. A live TLS listener
 alone cannot keep a node UP. Data and health checks send PROXY v2; `check-ssl` applies
@@ -24,7 +24,7 @@ parser's exact three-peer allowlist and TLS. Missing/v1 headers, malformed
 commands and untrusted peers fail before serving requests. Header deadlines
 remain owned by the standard parser, including incomplete v2 payloads.
 
-Routing inspection must run on every node before activation. The selected
+Routing inspection must run on every node before activation. For the three legacy hostnames, the selected
 upstream is a local HAProxy Unix listener, rather than a mesh-sourced connection
 to the management VIP. Owner/standby routes differ, and the existing HTTP source
 ACLs correctly reject mesh sources. The local listeners avoid dependence on
@@ -67,6 +67,56 @@ config/peer ports, VPN native/peer APIs or HA agents. The existing denial of
 namespaces. Public UI APIs such as `/dns/control/*` and `/network/server/*` remain
 available through their existing validation boundaries. WebRTC media LAN/VPN
 transport is unchanged; MSE/signaling and browser HTTP assets traverse HA.
+
+## Herdr on the LAN PC
+
+`https://herdr.huynm.dev` follows VIP `192.168.1.186:443` through cluster
+Caddy to ordinary HTTP `192.168.1.168:7317`. This separate route sends no
+upstream PROXY preamble. Upstream connection establishment is limited to 5s, without read or response timeouts on WebSocket terminals. Caddy uses the inbound PROXY-derived address to admit
+only LAN `192.168.1.0/24` and WireGuard `10.77.0.0/24` application clients (others receive 403), scrubs identity
+headers, and supplies the HTTPS forwarding envelope. Keep the PC's pairing/token authentication.
+No PC firewall change is needed if its existing LAN rule permits the actual node
+sources; otherwise review only those sources on TCP 7317 separately.
+
+The reserved health path returns 200 locally only for trusted mesh identities,
+including PROXY LOCAL; client identities receive 404. It does not call the PC.
+PC failure can return 502 for herdr while all twelve TLS health members stay UP.
+The role's verification gate deliberately requires only the nine legacy members;
+Keepalived readiness does not depend on herdr or PC uptime. HTTP upgrade supports
+WebSocket transport; real Ovis origin/cookie/authenticated WSS and reconnect,
+PWA/service worker and push remain live acceptance checks.
+
+Add exactly one **manually owned** certified AdGuard UI rewrite,
+`herdr.huynm.dev → 192.168.1.186`, last, after trusted TLS and application checks
+using an authorized client's temporary hostname mapping. The `dns` phase and
+ownership journal continue managing only the three legacy names. Confirm no
+pre-existing herdr record or journal ownership before rollout; investigate any
+collision rather than infer ownership. DNS-01 does not need public A/AAAA or
+inbound public web ports. The hostname becomes public in certificate transparency;
+the existing Cloudflare DNS-edit token remains zone-scoped.
+
+For an existing installation, approve baseline inspection first, then Caddy and
+ingress separately. Do not use `--limit`: preflight requires the complete cluster.
+Use `--step` for each modifying phase, with explicit order
+**deskb1x → deskb2x → deskb3x**. Before each Caddy activation, validate the candidate
+in the service environment and require the other six legacy members UP. After
+each restart, require all nine legacy members UP across every HAProxy and trusted
+herdr TLS/mesh health on that node before advancing. `serial: 1` does not enforce
+these manual recovery gates. Activation restarts Caddy and interrupts existing
+sessions on that node, including old sites. HAProxy's one-hour inactivity limit
+still applies to WebSockets. Before each ingress reload, validate full HTTP+MQTT;
+then require all nine legacy and three herdr members UP. Validate trusted TLS and
+actual application/WSS through the VIP before publishing the manual rewrite.
+
+For **herdr-only rollback**, remove only its manual rewrite through certified UI
+(or restore its captured prior state), then remove its SNI/backend fragment through
+the full composer with HTTP+MQTT validation and serial reload. Remove only its
+Caddy site with serial validation/restarts and legacy recovery gates; revert names
+in defaults/preflight together and retain certificates. Keep the explicit legacy
+verify selector. Never use whole-role `rollback`, `--remove-https`, or DNS-helper
+rollback for one hostname. The manual rewrite creates no journal entry. If prior
+ownership exists, reconcile and clean that exact record first, then atomically
+remove only its journal row; do not invalidate the journal by narrowing names first.
 
 ## Build and certificate lifecycle
 
@@ -222,13 +272,15 @@ TLS/transport tests use temporary loopback/Unix sockets and generated local
 certificates, never production or public DNS. The Caddy adapter is exercised with
 a synthetic token. The health fixture uses three real Caddys and local HAProxy
 processes; Dashboard 503 must leave cluster ingress UP while other UI paths work.
-Stopping one local proxy must withdraw all three hostnames while TLS
-still works, and restarting it must restore them automatically. The rollback
+Stopping one local proxy must withdraw its three legacy members while TLS
+still works and herdr remains UP; restarting restores the legacy members. The
+separate loopback PC fixture tests plain HTTP, failure isolation/recovery and
+WebSocket upgrade/echo/reconnect; transport fixtures verify source/header gates. The rollback
 fixture executes the play logic with command actions replaced, testing loss of
 deskb2x and deskb1x without performing system/DNS writes. Existing monitoring, NTFY ingress, dashboard, UI, node-control,
 HA proxy and playbook-layout regression tests remain applicable.
 
-The device UI `http://192.168.1.128:8080/` remains an explicit blocker: no fourth
+The device UI `http://192.168.1.128:8080/` remains an explicit blocker: no device
 hostname or device proxy is added. Detailed Xiaozhi Settings API/WS/callback source
 lives in the separately pinned server checkout; its complete browser compatibility
 also requires verification against that exact deployed revision.

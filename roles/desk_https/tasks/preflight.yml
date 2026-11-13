@@ -8,7 +8,7 @@
       - ansible_facts.os_family == 'Debian'
       - desk_https_vip | string == '192.168.1.186'
       - desk_https_port | int == 8443
-      - desk_https_names == ['cluster.huynm.dev', 'ntfy.cluster.huynm.dev', 'ha.cluster.huynm.dev']
+      - desk_https_names == ['cluster.huynm.dev', 'ntfy.cluster.huynm.dev', 'ha.cluster.huynm.dev', 'herdr.huynm.dev']
       - desk_https_phase in ['preflight', 'caddy', 'compatibility', 'ingress', 'dns', 'verify', 'rollback']
 
 - name: Inspect source routes rp_filter and owner or standby backend paths without changing them

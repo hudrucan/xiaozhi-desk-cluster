@@ -20,6 +20,7 @@
   become: true
   gather_facts: false
   serial: 1
+  order: sorted
   any_errors_fatal: true
   roles:
     - desk_https

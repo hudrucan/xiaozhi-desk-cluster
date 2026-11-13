@@ -67,3 +67,27 @@
 	}
 }
 {% endfor %}
+
+herdr.huynm.dev {
+	import certificate
+	route {
+		@health {
+			path /__desk_https_health
+			remote_ip 10.10.10.11 10.10.10.12 10.10.10.13
+		}
+		respond @health "ok" 200
+		@reserved path /__desk_https_health
+		respond @reserved 404
+		@outside not remote_ip 192.168.1.0/24 10.77.0.0/24
+		respond @outside 403
+		reverse_proxy http://192.168.1.168:7317 {
+			transport http {
+				dial_timeout 5s
+			}
+			header_up -Forwarded
+			header_up -CF-Connecting-IP
+			header_up -True-Client-IP
+			header_up -X-Real-IP
+		}
+	}
+}

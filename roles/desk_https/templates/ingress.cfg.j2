@@ -5,12 +5,12 @@ frontend desk_https
     bind {{ desk_https_vip }}:443
     timeout client 1h
     tcp-request inspect-delay 3s
-    tcp-request content reject if { req.ssl_hello_type 1 } !{ req.ssl_sni -i cluster.huynm.dev ntfy.cluster.huynm.dev ha.cluster.huynm.dev }
+    tcp-request content reject if { req.ssl_hello_type 1 } !{ req.ssl_sni -i cluster.huynm.dev ntfy.cluster.huynm.dev ha.cluster.huynm.dev herdr.huynm.dev }
     tcp-request content accept if { req.ssl_hello_type 1 }
-{% for name, backend in [('cluster.huynm.dev', 'cluster'), ('ntfy.cluster.huynm.dev', 'ntfy'), ('ha.cluster.huynm.dev', 'ha')] %}
+{% for name, backend in [('cluster.huynm.dev', 'cluster'), ('ntfy.cluster.huynm.dev', 'ntfy'), ('ha.cluster.huynm.dev', 'ha'), ('herdr.huynm.dev', 'herdr')] %}
     use_backend desk_caddy_{{ backend }} if { req.ssl_sni -i {{ name }} }
 {% endfor %}
-{% for name, backend in [('cluster.huynm.dev', 'cluster'), ('ntfy.cluster.huynm.dev', 'ntfy'), ('ha.cluster.huynm.dev', 'ha')] %}
+{% for name, backend in [('cluster.huynm.dev', 'cluster'), ('ntfy.cluster.huynm.dev', 'ntfy'), ('ha.cluster.huynm.dev', 'ha'), ('herdr.huynm.dev', 'herdr')] %}
 
 backend desk_caddy_{{ backend }}
     mode tcp
@@ -18,7 +18,7 @@ backend desk_caddy_{{ backend }}
     timeout connect 3s
     timeout server 1h
     timeout check 3s
-    # The HTTP check traverses Caddy and the permissioned local HTTP frontend.
+    # Legacy checks traverse the local HTTP frontend; herdr checks Caddy only, excluding the PC.
     option httpchk
     http-check send meth GET uri /__desk_https_health ver HTTP/1.1 hdr Host {{ name }}
     http-check expect status 200

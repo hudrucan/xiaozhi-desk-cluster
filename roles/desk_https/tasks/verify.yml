@@ -22,7 +22,7 @@
                     break
                 b += p
         rows = list(csv.DictReader(io.StringIO(b.decode().replace('# ', '', 1))))
-        selected = [r for r in rows if r.get('pxname', '').startswith('desk_caddy_')
+        selected = [r for r in rows if r.get('pxname') in ['desk_caddy_cluster', 'desk_caddy_ntfy', 'desk_caddy_ha']
                     and r.get('svname') in ['deskb1x', 'deskb2x', 'deskb3x']]
         assert len(selected) == 9 and all(r['status'] == 'UP' for r in selected), 'HTTPS TLS health checks not all UP'
   changed_when: false
