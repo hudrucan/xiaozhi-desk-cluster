@@ -35,7 +35,7 @@ frontend xiaozhi_settings
 {% if desk_node_control_enabled | default(false) %}
     use_backend desk_node_control if { path /api/cluster/operations /api/cluster/operations/prepare /api/cluster/operations/reboot /api/cluster/operations/resume }
 {% endif %}
-    use_backend desk_dashboard if { path / /api/cluster/status /api/cluster/panel }
+    use_backend desk_dashboard if { path / /api/cluster/status /api/cluster/panel /favicon.ico /favicon.svg /manifest.webmanifest /apple-touch-icon.png /icon-192.png /icon-512.png /icon-square.svg }
 {% endif %}
     use_backend desk_adguard_ui if { path_beg /dns/ }
 # END DESK DNS UI ROUTE

@@ -7,6 +7,17 @@ JSON contract display clients can consume.
 For display clients, use the bounded, versioned
 [Front-panel API](CLUSTER_PANEL_API.md) at `/api/cluster/panel`.
 
+The page includes rack favicons, an opaque Apple touch icon and a standalone
+manifest for iPhone Safari's **Add to Home Screen**. Public assets live beside
+the page in `/etc/desk-ui`; the collector serves explicit icon/manifest paths
+with one-day icon and five-minute manifest caches. No service worker or offline
+cache is installed. The viewport retains its existing layout without
+`viewport-fit=cover`. The LAN HTTP and cluster HTTPS routes forward the seven exact icon/manifest
+paths to the dashboard alongside `/` and the two read APIs. Existing installations also need the updated
+collector; a page-only refresh installs assets but cannot add collector routes.
+For existing installations, run `dashboard-helpers.yml` → `dashboard-ui.yml` → `dashboard-routes.yml` under `playbooks/dashboard/` with `--step`, in inventory order deskb1x → deskb2x → deskb3x; the last play updates only HAProxy routes and requires the existing local cluster Unix socket.
+For routing-only rollback, restore that node’s saved composer and main config from `/var/tmp/desk-dashboard-routes-*`, validate HTTP+MQTT and gracefully reload, after checking for unrelated config drift; retain collector/assets and avoid role-wide rollback.
+
 ## Data and ownership
 
 Three identical `desk-dashboard` services bind only to their existing private IPs

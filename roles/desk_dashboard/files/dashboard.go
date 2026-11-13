@@ -1624,6 +1624,30 @@ func (d *Dashboard) allowed(req *http.Request) bool {
 	}
 	return false
 }
+
+// Only public, fixed UI assets are served; other paths never become file paths.
+func serveUIAsset(w http.ResponseWriter, r *http.Request, directory string) bool {
+	contentType := ""
+	cache := "public, max-age=86400"
+	switch r.URL.Path {
+	case "/manifest.webmanifest":
+		contentType = "application/manifest+json"
+		cache = "public, max-age=300"
+	case "/favicon.svg", "/icon-square.svg":
+		contentType = "image/svg+xml"
+	case "/favicon.ico":
+		contentType = "image/vnd.microsoft.icon"
+	case "/apple-touch-icon.png", "/icon-192.png", "/icon-512.png":
+		contentType = "image/png"
+	default:
+		return false
+	}
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Cache-Control", cache)
+	http.ServeFile(w, r, filepath.Join(directory, r.URL.Path[1:]))
+	return true
+}
+
 func (d *Dashboard) handle(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
@@ -1638,6 +1662,9 @@ func (d *Dashboard) handle(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.URL.RawQuery != "" {
 		http.Error(w, "Query not supported", 400)
+		return
+	}
+	if serveUIAsset(w, r, "/etc/desk-ui") {
 		return
 	}
 	d.mu.RLock()

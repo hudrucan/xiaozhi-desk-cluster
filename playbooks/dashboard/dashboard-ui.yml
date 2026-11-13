@@ -36,6 +36,8 @@
             dest: /etc/desk-ui/index.html
             mode: '0644'
           register: dashboard_page
+        - name: Install the public page assets
+          ansible.builtin.import_tasks: ../../roles/desk_ui/tasks/assets.yml
         - name: Validate existing HTTP and MQTT routes and gracefully refresh the page
           ansible.builtin.command:
             argv: [/usr/bin/python3, /usr/local/libexec/desk-monitoring/install-proxy.py, --backend, /etc/desk-monitoring/backend.cfg, --dns-backend, /etc/desk-ui/backend.cfg, --dashboard-backend, /etc/desk-dashboard/backend.cfg, --reload-page]

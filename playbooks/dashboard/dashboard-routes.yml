@@ -1,0 +1,69 @@
+---
+# Existing installations: dashboard-helpers.yml -> dashboard-ui.yml -> dashboard-routes.yml.
+# Only routing/composer changes here; collector and assets must already be ready.
+- name: Update only dashboard HAProxy routes one node at a time
+  hosts: deskboxes
+  become: true
+  gather_facts: false
+  order: inventory
+  serial: 1
+  any_errors_fatal: true
+  vars:
+    # Force the existing shared argv to include --reload-page for this route-only run.
+    dashboard_page:
+      changed: true
+    dashboard_route_paths: [/, /api/cluster/status, /api/cluster/panel, /favicon.ico, /favicon.svg, /manifest.webmanifest, /apple-touch-icon.png, /icon-192.png, /icon-512.png, /icon-square.svg]
+  tasks:
+    - name: Require the complete expected inventory order
+      ansible.builtin.assert:
+        that:
+          - ansible_play_hosts_all == ['deskb1x', 'deskb2x', 'deskb3x']
+    - name: Freeze protected voice, DNS and VIP state
+      ansible.builtin.command:
+        argv: [/usr/bin/python3, '-c', "{{ lookup('ansible.builtin.file', desk_repo_root + '/roles/desk_ui/files/ui_guard.py') }}", freeze]
+      register: dashboard_routes_before
+      changed_when: false
+      no_log: true
+    - name: Require the local cluster HAProxy socket before changing routes
+      ansible.builtin.stat:
+        path: /run/haproxy/desk-https-cluster.sock
+      register: dashboard_routes_socket
+    - name: Require the existing local HTTPS to HTTP frontend binding
+      ansible.builtin.assert:
+        that: dashboard_routes_socket.stat.issock | default(false)
+    - name: Apply the shared dashboard route transaction
+      ansible.builtin.import_tasks: tasks/dashboard-routes.yml
+    - name: Verify protected services and policy unchanged
+      ansible.builtin.command:
+        argv: [/usr/bin/python3, '-c', "{{ lookup('ansible.builtin.file', desk_repo_root + '/roles/desk_ui/files/ui_guard.py') }}", guard]
+        stdin: '{{ dashboard_routes_before.stdout }}'
+      changed_when: false
+      no_log: true
+    - name: Require every exact dashboard path through this node HAProxy
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/python3
+          - -c
+          - |
+            import http.client, ipaddress, json, socket, struct, sys
+            paths = json.loads(sys.argv[1])
+            for path in paths:
+                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as peer:
+                    peer.settimeout(10)
+                    peer.connect('/run/haproxy/desk-https-cluster.sock')
+                    # Root-only local probe, allowed loopback identity; never a public bind.
+                    addresses = ipaddress.ip_address('127.0.0.1').packed * 2
+                    peer.sendall(b'\r\n\r\n\x00\r\nQUIT\n' + b'\x21\x11\x00\x0c' + addresses + struct.pack('!HH', 49152, 80))
+                    peer.sendall(('GET ' + path + ' HTTP/1.1\r\nHost: cluster.huynm.dev\r\nConnection: close\r\n\r\n').encode())
+                    response = http.client.HTTPResponse(peer)
+                    response.begin()
+                    if response.status != 200:
+                        raise SystemExit(path + ': expected 200, got ' + str(response.status))
+                    response.read()
+                    print(path + ': 200')
+          - '{{ dashboard_route_paths | to_json }}'
+      register: dashboard_routes_probe
+      until: dashboard_routes_probe.rc == 0
+      retries: 8
+      delay: 2
+      changed_when: false

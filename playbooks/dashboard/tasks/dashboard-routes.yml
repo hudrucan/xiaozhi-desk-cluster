@@ -1,0 +1,69 @@
+---
+- name: Inspect the existing route composer
+  ansible.builtin.stat:
+    path: /usr/local/libexec/desk-monitoring/install-proxy.py
+  register: dashboard_routes_composer_before
+- name: Keep a private per-node route rollback directory
+  ansible.builtin.tempfile:
+    state: directory
+    path: /var/tmp
+    prefix: desk-dashboard-routes-
+  register: dashboard_routes_backup
+- name: Preserve the current complete main HAProxy config
+  ansible.builtin.copy:
+    src: /etc/haproxy/haproxy.cfg
+    dest: '{{ dashboard_routes_backup.path }}/haproxy.cfg'
+    remote_src: true
+    mode: preserve
+- name: Preserve the previous route composer when present
+  ansible.builtin.copy:
+    src: /usr/local/libexec/desk-monitoring/install-proxy.py
+    dest: '{{ dashboard_routes_backup.path }}/install-proxy.py'
+    remote_src: true
+    mode: preserve
+  when: dashboard_routes_composer_before.stat.exists
+- name: Validate and apply only dashboard routing
+  block:
+    - name: Install the complete route validator
+      ansible.builtin.copy:
+        src: '{{ desk_repo_root }}/roles/desk_monitoring/files/install_proxy.py'
+        dest: /usr/local/libexec/desk-monitoring/install-proxy.py
+        mode: '0755'
+    - name: Validate the complete HTTP and MQTT candidate without activation
+      ansible.builtin.command:
+        argv: [/usr/bin/python3, /usr/local/libexec/desk-monitoring/install-proxy.py, --backend, /etc/desk-monitoring/backend.cfg, --dns-backend, /etc/desk-ui/backend.cfg, --dashboard-backend, /etc/desk-dashboard/backend.cfg, --validate-only]
+      changed_when: false
+    - name: Validate HTTP and MQTT and gracefully reload HAProxy
+      ansible.builtin.command:
+        argv: "{{ ['/usr/bin/python3','/usr/local/libexec/desk-monitoring/install-proxy.py','--backend','/etc/desk-monitoring/backend.cfg','--dns-backend','/etc/desk-ui/backend.cfg','--dashboard-backend','/etc/desk-dashboard/backend.cfg'] + (['--reload-page'] if dashboard_page.changed else []) }}"
+      changed_when: dashboard_page.changed
+  rescue:
+    - name: Restore only the saved main HAProxy config
+      ansible.builtin.copy:
+        src: '{{ dashboard_routes_backup.path }}/haproxy.cfg'
+        dest: /etc/haproxy/haproxy.cfg
+        remote_src: true
+        mode: preserve
+    - name: Restore the saved composer
+      ansible.builtin.copy:
+        src: '{{ dashboard_routes_backup.path }}/install-proxy.py'
+        dest: /usr/local/libexec/desk-monitoring/install-proxy.py
+        remote_src: true
+        mode: preserve
+      when: dashboard_routes_composer_before.stat.exists
+    - name: Remove only the newly introduced composer when previously absent
+      ansible.builtin.file:
+        path: /usr/local/libexec/desk-monitoring/install-proxy.py
+        state: absent
+      when: not dashboard_routes_composer_before.stat.exists
+    - name: Validate both restored HTTP and unchanged MQTT before reloading
+      ansible.builtin.command:
+        argv: [/usr/sbin/haproxy, -c, -f, /etc/haproxy/haproxy.cfg, -f, /etc/haproxy/xiaozhi-mqtt.cfg]
+      changed_when: false
+    - name: Gracefully reload the restored routing
+      ansible.builtin.systemd_service:
+        name: haproxy
+        state: reloaded
+    - name: Stop after restoring dashboard routing
+      ansible.builtin.fail:
+        msg: 'Dashboard routing failed; saved main config and composer restored. Backups: {{ dashboard_routes_backup.path }}'

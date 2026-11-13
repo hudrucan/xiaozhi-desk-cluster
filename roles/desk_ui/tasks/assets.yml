@@ -1,0 +1,8 @@
+---
+- name: Install public dashboard icons and standalone manifest beside the page
+  ansible.builtin.copy:
+    src: "{{ desk_repo_root }}/roles/desk_ui/files/static/"
+    dest: /etc/desk-ui/
+    owner: root
+    group: root
+    mode: '0644'

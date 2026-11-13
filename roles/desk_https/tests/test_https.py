@@ -55,7 +55,7 @@ class HTTPS(unittest.TestCase):
             old_acls = [l for l in current.splitlines() if 'deny unless { src ' in l]
             self.assertEqual([l for l in updated.splitlines() if 'deny unless { src ' in l], old_acls)
             self.assertEqual(updated.count('mode 600 accept-proxy'),3)
-            self.assertIn('path / /api/cluster/status /api/cluster/panel }',updated)
+            self.assertIn('path / /api/cluster/status /api/cluster/panel /favicon.ico /favicon.svg /manifest.webmanifest /apple-touch-icon.png /icon-192.png /icon-512.png /icon-square.svg }',updated)
             self.assertIn('use_backend desk_vpn_ui if { path_beg /vpn/ }',updated)
             self.assertEqual(caddy.count('reverse_proxy unix//run/haproxy/desk-https-'),3)
             for private in [':8000',':8004',':8007',':1986',':20226',':3002',':51855']:

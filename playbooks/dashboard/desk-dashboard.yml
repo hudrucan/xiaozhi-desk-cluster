@@ -38,15 +38,8 @@
             dest: /etc/desk-ui/index.html
             mode: '0644'
           register: dashboard_page
-        - name: Install the complete route validator
-          ansible.builtin.copy:
-            src: "{{ desk_repo_root }}/roles/desk_monitoring/files/install_proxy.py"
-            dest: /usr/local/libexec/desk-monitoring/install-proxy.py
-            mode: '0755'
-        - name: Validate HTTP and MQTT and gracefully reload HAProxy
-          ansible.builtin.command:
-            argv: "{{ ['/usr/bin/python3','/usr/local/libexec/desk-monitoring/install-proxy.py','--backend','/etc/desk-monitoring/backend.cfg','--dns-backend','/etc/desk-ui/backend.cfg','--dashboard-backend','/etc/desk-dashboard/backend.cfg'] + (['--reload-page'] if dashboard_page.changed else []) }}"
-          changed_when: dashboard_page.changed
+        - name: Install and validate the dashboard routes
+          ansible.builtin.import_tasks: tasks/dashboard-routes.yml
         - name: Verify unchanged protected services and configuration
           ansible.builtin.command:
             argv: [/usr/bin/python3, '-c', "{{ lookup('ansible.builtin.file', desk_repo_root + '/roles/desk_ui/files/ui_guard.py') }}", guard]

@@ -8,10 +8,62 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestPublicUIAssets(t *testing.T) {
+	directory := "../../desk_ui/files/static"
+	for path, contentType := range map[string]string{
+		"/manifest.webmanifest": "application/manifest+json",
+		"/favicon.svg":          "image/svg+xml", "/icon-square.svg": "image/svg+xml",
+		"/favicon.ico":          "image/vnd.microsoft.icon",
+		"/apple-touch-icon.png": "image/png", "/icon-192.png": "image/png", "/icon-512.png": "image/png",
+	} {
+		t.Run(path, func(t *testing.T) {
+			r := httptest.NewRequest("GET", path, nil) // No cookie or Authorization header.
+			w := httptest.NewRecorder()
+			if !serveUIAsset(w, r, directory) || w.Code != http.StatusOK {
+				t.Fatalf("public asset unavailable: %d %s", w.Code, w.Body.String())
+			}
+			if w.Header().Get("Content-Type") != contentType {
+				t.Fatal("wrong content type", w.Header())
+			}
+			cache := "public, max-age=86400"
+			if path == "/manifest.webmanifest" {
+				cache = "public, max-age=300"
+			}
+			if w.Header().Get("Cache-Control") != cache {
+				t.Fatal("wrong cache policy", w.Header())
+			}
+			want, err := os.ReadFile(filepath.Join(directory, path[1:]))
+			if err != nil || !bytes.Equal(w.Body.Bytes(), want) {
+				t.Fatal("asset bytes changed", err)
+			}
+			for _, remote := range []string{"127.0.0.1:1234", "203.0.113.1:1234"} {
+				r.RemoteAddr = remote
+				w = httptest.NewRecorder()
+				(&Dashboard{}).handle(w, r)
+				if remote == "127.0.0.1:1234" {
+					// The deployed directory may not exist offline, but no new auth gate is allowed.
+					if w.Code == 401 || w.Code == 403 || w.Header().Get("Cache-Control") != cache {
+						t.Fatal("asset gained authentication requirements", w.Code, w.Header())
+					}
+				} else if w.Code != http.StatusForbidden {
+					t.Fatal("private listener peer policy bypassed", w.Code)
+				}
+			}
+		})
+	}
+	for _, path := range []string{"/config.json", "/../config.json", "/other.png", "/favicon.svg/extra"} {
+		if serveUIAsset(httptest.NewRecorder(), httptest.NewRequest("GET", path, nil), directory) {
+			t.Fatal("unexpected public file path", path)
+		}
+	}
+}
 
 func TestEventOrderAndScrollableProjectionStayBounded(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)

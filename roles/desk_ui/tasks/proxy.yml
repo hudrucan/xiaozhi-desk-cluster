@@ -16,6 +16,8 @@
         dest: /etc/desk-ui/index.html
         mode: '0644'
       register: desk_ui_landing
+    - name: Install the public page assets
+      ansible.builtin.import_tasks: assets.yml
     - name: Render DNS UI forwarding to its existing floating authority
       ansible.builtin.template:
         src: backend.cfg.j2
