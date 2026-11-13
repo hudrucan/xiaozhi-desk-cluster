@@ -2,7 +2,7 @@
 # Pure Go cross-build; no node is contacted and no credentials are needed.
 set -eu
 repo=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-out=${1:-/private/tmp/desk-caddy-package}
+out=${1:-${DESK_BUILD_ROOT:-/private/tmp}/desk-caddy-package}
 mkdir -p "$out"
 out=$(CDPATH= cd -- "$out" && pwd)
 cd "$repo/roles/desk_https/caddy"

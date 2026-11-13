@@ -36,10 +36,12 @@ For cross compilation, configure the ARM64 C linker or use the supported
 `DESK_NTFY_ZIG=1` option with `cargo-zigbuild` and Zig installed.
 
 ```sh
-scripts/build-ntfy.sh /private/tmp/desk-ntfy-package
+scripts/build-ntfy.sh "${DESK_BUILD_ROOT:-/private/tmp}/desk-ntfy-package"
 ansible-playbook -i inventory.ini playbooks/notifications/ntfy.yml \
-  -e desk_ntfy_package=/private/tmp/desk-ntfy-package
+  -e desk_build_root="${DESK_BUILD_ROOT:-/private/tmp}"
 ```
+
+The self-hashed `build-ntfy-web.py` cache remains pinned to `/private/tmp`; `DESK_BUILD_ROOT` relocates the native package output but does not yet make a complete web build portable.
 
 The build pins upstream sources and checksums, builds the official frontend, and
 packages the native binary and static assets. Deployment verifies the ARM64 ELF

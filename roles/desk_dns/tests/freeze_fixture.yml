@@ -6,7 +6,7 @@
   become: false
   vars:
     ansible_python_interpreter: "{{ ansible_playbook_python }}"
-    ansible_remote_tmp: /private/tmp/desk-dns-local-fixture
+    ansible_remote_tmp: "{{ lookup('ansible.builtin.config', 'DEFAULT_LOCAL_TMP') }}/desk-dns-local-fixture"
   tasks:
     - ansible.builtin.set_fact:
         desk_dns_snapshot:

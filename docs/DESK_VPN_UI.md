@@ -26,8 +26,8 @@ Server key, port, tunnel CIDRs, firewall and shell hooks remain cluster-managed.
 
 ```sh
 python3 scripts/build-vpn-ui.py --node /path/to/node --pnpm /path/to/pnpm
-python3 roles/desk_vpn_ui/files/seed.py --repo "$PWD" --upstream /private/tmp/desk-wg-easy-build --node /path/to/node
-ansible-playbook -i inventory.ini playbooks/vpn/vpn-ui.yml
+python3 roles/desk_vpn_ui/files/seed.py --repo "$PWD" --upstream "${DESK_BUILD_ROOT:-/private/tmp}/desk-wg-easy-build" --node /path/to/node
+ansible-playbook -i inventory.ini playbooks/vpn/vpn-ui.yml -e desk_build_root="${DESK_BUILD_ROOT:-/private/tmp}"
 ```
 
 The build pins upstream commit `2dc8ba779216929c10c1998341d36963fe0eca7a`, applies the tracked patch and installs the frozen dependency lock. Node ARM64 archives use official SHA-256 checksums; native npm packages use registry integrity checks. The exact modified upstream source and license ship at `/opt/desk-vpn-ui/app/wg-easy-source.tar.gz`. The native build has no authentication bypass patch.

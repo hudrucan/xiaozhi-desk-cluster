@@ -6,7 +6,7 @@
   gather_facts: false
   any_errors_fatal: true
   vars:
-    desk_vpn_ui_package: /private/tmp/desk-vpn-ui-package
+    desk_vpn_ui_package: "{{ desk_build_root | default('/private/tmp') }}/desk-vpn-ui-package"
   tasks:
     - name: Create public asset directory independently of native runtime
       ansible.builtin.file:

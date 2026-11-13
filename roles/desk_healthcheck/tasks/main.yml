@@ -9,7 +9,7 @@
           - ansible_facts.architecture in ['aarch64', 'arm64']
     - name: Resolve the source-addressed controller artifact
       ansible.builtin.set_fact:
-        desk_healthcheck_artifact: "/private/tmp/desk-healthcheck-build/{{ lookup('ansible.builtin.file', role_path + '/files/healthcheck.go') | hash('sha256') }}/desk-healthcheck"
+        desk_healthcheck_artifact: "{{ desk_build_root | default('/private/tmp') }}/desk-healthcheck-build/{{ lookup('ansible.builtin.file', role_path + '/files/healthcheck.go') | hash('sha256') }}/desk-healthcheck"
     - name: Create the controller build cache outside Git
       ansible.builtin.file:
         path: "{{ desk_healthcheck_artifact | dirname }}"
@@ -27,7 +27,7 @@
         GOARCH: arm64
         CGO_ENABLED: '0'
         GO111MODULE: 'off'
-        GOCACHE: /private/tmp/desk-healthcheck-go-cache
+        GOCACHE: "{{ desk_build_root | default('/private/tmp') }}/desk-healthcheck-go-cache"
         GOTOOLCHAIN: local
       delegate_to: localhost
       become: false

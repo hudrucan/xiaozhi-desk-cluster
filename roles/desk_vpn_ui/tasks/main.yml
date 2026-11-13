@@ -102,20 +102,20 @@
   register: vpn_ui_units
 - name: Build current bounded VPN readiness helper on controller
   ansible.builtin.command:
-    argv: [go, build, -trimpath, -ldflags, '-s -w -buildid=', -o, /private/tmp/desk-vpn-ui-probe-arm64, "{{ desk_repo_root }}/roles/desk_vpn/files/probe.go"]
+    argv: [go, build, -trimpath, -ldflags, '-s -w -buildid=', -o, "{{ desk_build_root | default('/private/tmp') }}/desk-vpn-ui-probe-arm64", "{{ desk_repo_root }}/roles/desk_vpn/files/probe.go"]
   environment:
     GOOS: linux
     GOARCH: arm64
     CGO_ENABLED: '0'
     GO111MODULE: 'off'
-    GOCACHE: /private/tmp/desk-vpn-go-cache
+    GOCACHE: "{{ desk_build_root | default('/private/tmp') }}/desk-vpn-go-cache"
     GOTOOLCHAIN: local
   delegate_to: localhost
   become: false
   run_once: true
 - name: Install sync-aware readiness helper
   ansible.builtin.copy:
-    src: /private/tmp/desk-vpn-ui-probe-arm64
+    src: "{{ desk_build_root | default('/private/tmp') }}/desk-vpn-ui-probe-arm64"
     dest: /usr/local/libexec/desk-vpn/probe
     mode: '0755'
 - name: Start unprivileged native UI

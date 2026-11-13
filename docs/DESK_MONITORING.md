@@ -192,7 +192,7 @@ the shared boundary still requires its normal write quorum.
 
 The small patch is `roles/desk_monitoring/files/beszel-ui.patch`, applied to the
 pinned 0.21.0 source by `scripts/build-beszel-ui.py`. Builds use the upstream npm
-lockfile and Go module checksums, and cache the ARM64 artifact under `/private/tmp`.
+lockfile and Go module checksums, and cache the ARM64 artifact under `/private/tmp` (the self-hashed builder remains pinned there to preserve its default cache identity).
 The controller needs Python 3.12+ and Node 24+ (also used for the command tests),
 npm, patch and Go with automatic toolchain download enabled. The regular monitoring
 install preserves the patched hub. To update existing hubs without rerunning

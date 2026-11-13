@@ -36,7 +36,7 @@
   no_log: true
 - name: Create controller recovery build directory
   ansible.builtin.file:
-    path: /private/tmp/desk-vpn-recovery-source
+    path: "{{ desk_build_root | default('/private/tmp') }}/desk-vpn-recovery-source"
     state: directory
     mode: '0700'
   delegate_to: localhost
@@ -44,13 +44,13 @@
   when: inventory_hostname == (ansible_play_hosts_all | sort | first)
 - name: Build dependency-free endpoint helper once on controller
   ansible.builtin.command:
-    argv: [go, build, -trimpath, -ldflags, '-s -w -buildid=', -o, /private/tmp/desk-vpn-recovery-source/recovery-arm64, "{{ role_path }}/files/recovery.go"]
+    argv: [go, build, -trimpath, -ldflags, '-s -w -buildid=', -o, "{{ desk_build_root | default('/private/tmp') }}/desk-vpn-recovery-source/recovery-arm64", "{{ role_path }}/files/recovery.go"]
   environment:
     GOOS: linux
     GOARCH: arm64
     CGO_ENABLED: '0'
     GO111MODULE: 'off'
-    GOCACHE: /private/tmp/desk-vpn-go-cache
+    GOCACHE: "{{ desk_build_root | default('/private/tmp') }}/desk-vpn-go-cache"
     GOTOOLCHAIN: local
   delegate_to: localhost
   become: false
@@ -79,7 +79,7 @@
   register: recovery_config
 - name: Install endpoint recovery helper
   ansible.builtin.copy:
-    src: /private/tmp/desk-vpn-recovery-source/recovery-arm64
+    src: "{{ desk_build_root | default('/private/tmp') }}/desk-vpn-recovery-source/recovery-arm64"
     dest: /usr/local/libexec/desk-vpn/recovery
     mode: '0755'
   register: recovery_binary

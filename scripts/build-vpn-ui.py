@@ -34,7 +34,7 @@ def package(source,out):
  (out/'checksums.json').write_text(json.dumps({filename:expected,'app.tar.gz':hashlib.sha256((out/'app.tar.gz').read_bytes()).hexdigest(),'assets.tar.gz':hashlib.sha256((out/'assets.tar.gz').read_bytes()).hexdigest()}))
 
 def main():
- p=argparse.ArgumentParser();p.add_argument('--source',type=Path,default=Path('/private/tmp/desk-wg-easy-build'));p.add_argument('--out',type=Path,default=Path('/private/tmp/desk-vpn-ui-package'));p.add_argument('--node',default='node');p.add_argument('--pnpm',default='pnpm');p.add_argument('--package-only',action='store_true');a=p.parse_args();repo=Path(__file__).resolve().parents[1]
+ p=argparse.ArgumentParser();p.add_argument('--source',type=Path,default=Path(os.environ.get('DESK_BUILD_ROOT') or '/private/tmp')/'desk-wg-easy-build');p.add_argument('--out',type=Path,default=Path(os.environ.get('DESK_BUILD_ROOT') or '/private/tmp')/'desk-vpn-ui-package');p.add_argument('--node',default='node');p.add_argument('--pnpm',default='pnpm');p.add_argument('--package-only',action='store_true');a=p.parse_args();repo=Path(__file__).resolve().parents[1]
  if not a.package_only:
   if a.source.exists():raise SystemExit('Use an empty source directory to avoid patching unrelated work')
   subprocess.run(['git','clone','--depth','1','--branch','v15.3.0','https://github.com/wg-easy/wg-easy.git',str(a.source)],check=True)

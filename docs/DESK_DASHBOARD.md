@@ -148,7 +148,7 @@ exclusive leases, drain deadlines and reboot execution remain unchanged.
 ## Deployment and isolation
 
 ```sh
-ANSIBLE_LOCAL_TEMP=/private/tmp/desk-ui-ansible ANSIBLE_PIPELINING=1 \
+ANSIBLE_LOCAL_TEMP="${DESK_BUILD_ROOT:-/private/tmp}/desk-ui-ansible" ANSIBLE_PIPELINING=1 \
   ansible-playbook -i inventory.ini -u ops playbooks/dashboard/desk-dashboard.yml
 ```
 
@@ -159,6 +159,7 @@ and checks protected runtime/policy before and after each node. It does not
 build or restart the collector, node controller, DNS or voice services.
 
 The dependency-free ARM64 binary is compiled on the controller, not the TV boxes.
+On Linux, pass `-e desk_build_root=/tmp/desk-build` (or another writable directory) when building the collector. Run the shared build-root checks with `python3 -m unittest discover -s tests -p test_build_root.py`.
 It uses a single Go processor, low CPU weight and a 3% service CPU ceiling, with
 48 MB maximum memory. These limits apply only to the dashboard; DNS and TTS have
 no new request limits. The service cannot write the root filesystem. Its only capability is

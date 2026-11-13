@@ -16,6 +16,7 @@ import tempfile
 import threading
 import time
 import unittest
+from fixture_env import fixture_env
 from test_https import render
 
 SIGNATURE=b'\r\n\r\n\0\r\nQUIT\n'
@@ -81,7 +82,7 @@ class Transport(unittest.TestCase):
                 openssl=tmp/'openssl.cnf';openssl.write_text('[req]\ndistinguished_name=dn\n[dn]\n[SAN]\nsubjectAltName='+','.join('DNS:'+name for name in names)+'\n')
                 subprocess.run(['openssl','req','-x509','-newkey','rsa:2048','-nodes','-keyout',str(key),'-out',str(cert),'-days','1','-subj','/CN=cluster.huynm.dev','-config',str(openssl),'-extensions','SAN'],check=True,capture_output=True)
                 _,_,config=render()
-                p=subprocess.run([os.environ['CADDY_BIN'],'adapt','--adapter','caddyfile','--config','/dev/stdin'],input=config,text=True,capture_output=True,check=True)
+                p=subprocess.run([os.environ['CADDY_BIN'],'adapt','--adapter','caddyfile','--config','/dev/stdin'],input=config,text=True,capture_output=True,check=True,env=fixture_env(tmp))
                 cfg=json.loads(p.stdout);cfg['admin']={'disabled':True}
                 cfg['apps']['tls']={'certificates':{'load_files':[{'certificate':str(cert),'key':str(key)}]}}
                 with socket.socket() as reservation:
@@ -103,7 +104,7 @@ class Transport(unittest.TestCase):
                 localize(cfg)
                 path=tmp/'caddy.json';path.write_text(json.dumps(cfg))
                 with (tmp/'log').open('wb') as log:
-                    caddy=subprocess.Popen([os.environ['CADDY_BIN'],'run','--config',str(path)],stdout=log,stderr=log,env={**os.environ,'XDG_DATA_HOME':str(tmp/'data'),'XDG_CONFIG_HOME':str(tmp/'config')})
+                    caddy=subprocess.Popen([os.environ['CADDY_BIN'],'run','--config',str(path)],stdout=log,stderr=log,env=fixture_env(tmp))
                     for _ in range(100):
                         if caddy.poll() is not None:self.fail((tmp/'log').read_text())
                         try:
@@ -161,7 +162,7 @@ class Transport(unittest.TestCase):
                             for item in value:localize_health(item)
                     caddy.terminate();caddy.wait(timeout=10);localize_health(cfg)
                     path.write_text(json.dumps(cfg))
-                    caddy=subprocess.Popen([os.environ['CADDY_BIN'],'run','--config',str(path)],stdout=log,stderr=log,env={**os.environ,'XDG_DATA_HOME':str(tmp/'data'),'XDG_CONFIG_HOME':str(tmp/'config')})
+                    caddy=subprocess.Popen([os.environ['CADDY_BIN'],'run','--config',str(path)],stdout=log,stderr=log,env=fixture_env(tmp))
                     for _ in range(100):
                         if caddy.poll() is not None:self.fail((tmp/'log').read_text())
                         try:

@@ -64,7 +64,7 @@
   when: not vpn_ui_managed.stat.exists
 - name: Create the controller VPN build directory
   ansible.builtin.file:
-    path: /private/tmp/desk-vpn-source
+    path: "{{ desk_build_root | default('/private/tmp') }}/desk-vpn-source"
     state: directory
     mode: '0700'
   delegate_to: localhost
@@ -72,20 +72,20 @@
   run_once: true
 - name: Build dependency-free ARM64 readiness helper once on controller
   ansible.builtin.command:
-    argv: [go, build, -trimpath, -ldflags, '-s -w -buildid=', -o, /private/tmp/desk-vpn-source/probe-arm64, "{{ role_path }}/files/probe.go"]
+    argv: [go, build, -trimpath, -ldflags, '-s -w -buildid=', -o, "{{ desk_build_root | default('/private/tmp') }}/desk-vpn-source/probe-arm64", "{{ role_path }}/files/probe.go"]
   environment:
     GOOS: linux
     GOARCH: arm64
     CGO_ENABLED: '0'
     GO111MODULE: 'off'
-    GOCACHE: /private/tmp/desk-vpn-go-cache
+    GOCACHE: "{{ desk_build_root | default('/private/tmp') }}/desk-vpn-go-cache"
     GOTOOLCHAIN: local
   delegate_to: localhost
   become: false
   run_once: true
 - name: Install native readiness helper
   ansible.builtin.copy:
-    src: /private/tmp/desk-vpn-source/probe-arm64
+    src: "{{ desk_build_root | default('/private/tmp') }}/desk-vpn-source/probe-arm64"
     dest: /usr/local/libexec/desk-vpn/probe
     mode: '0755'
 - name: Stage independent Keepalived configuration

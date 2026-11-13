@@ -1,5 +1,5 @@
 ---
-desk_ntfy_package: /private/tmp/desk-ntfy-package
+desk_ntfy_package: "{{ desk_build_root | default('/private/tmp') }}/desk-ntfy-package"
 desk_ntfy_secrets: "{{ desk_repo_root }}/secret/ntfy"
 # The role verifies this against the already applied management VIP snapshot.
 desk_ntfy_vip: 192.168.1.186

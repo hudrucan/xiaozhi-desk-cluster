@@ -5,7 +5,6 @@ import (
 	"encoding/binary"
 	"io"
 	"net"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -39,11 +38,7 @@ func TestStatsExactExistingReadiness(t *testing.T) {
 	}
 }
 func TestIngressSocketAndUnavailable(t *testing.T) {
-	directory, err := os.MkdirTemp("/private/tmp", "desk-hc-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(directory)
+	directory := t.TempDir()
 	path := filepath.Join(directory, "stats.sock")
 	listener, err := net.Listen("unix", path)
 	if err != nil {

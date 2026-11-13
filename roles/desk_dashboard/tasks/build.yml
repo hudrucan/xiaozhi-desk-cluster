@@ -1,7 +1,7 @@
 ---
 - name: Resolve the source-addressed native dashboard artifact
   ansible.builtin.set_fact:
-    dashboard_artifact: "/private/tmp/desk-dashboard-build/{{ lookup('ansible.builtin.file', desk_repo_root + '/roles/desk_dashboard/files/dashboard.go') | hash('sha256') }}/desk-dashboard"
+    dashboard_artifact: "{{ desk_build_root | default('/private/tmp') }}/desk-dashboard-build/{{ lookup('ansible.builtin.file', desk_repo_root + '/roles/desk_dashboard/files/dashboard.go') | hash('sha256') }}/desk-dashboard"
 - name: Create the controller artifact cache
   ansible.builtin.file:
     path: "{{ dashboard_artifact | dirname }}"
@@ -19,6 +19,6 @@
     CGO_ENABLED: '0'
     GO111MODULE: 'off'
     GOTOOLCHAIN: local
-    GOCACHE: /private/tmp/desk-dashboard-go-cache
+    GOCACHE: "{{ desk_build_root | default('/private/tmp') }}/desk-dashboard-go-cache"
   delegate_to: localhost
   become: false

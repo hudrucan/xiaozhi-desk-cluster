@@ -123,10 +123,10 @@ remove only its journal row; do not invalidate the journal by narrowing names fi
 The checked-in Go module and checksums pin Caddy `2.11.7`, Cloudflare module
 `0.2.4`, and Go `1.26.9`. A direct Go main imports the standard Caddy modules,
 Cloudflare and the v2 guard; no additional build wrapper or runtime service is
-needed. Build on the controller:
+needed. On Linux, export `DESK_BUILD_ROOT=/tmp/desk-build`, create that directory, and pass `-e desk_build_root="$DESK_BUILD_ROOT"` to Ansible. Build on the controller:
 
 ```sh
-scripts/build-caddy.sh /private/tmp/desk-caddy-package
+scripts/build-caddy.sh "${DESK_BUILD_ROOT:-/private/tmp}/desk-caddy-package"
 ```
 
 The package contains `caddy`, `manifest.json` with SHA-256, and `build.txt`.
@@ -260,9 +260,9 @@ always targets Linux ARM64.
 ```sh
 cd roles/desk_https/caddy
 go test -mod=readonly ./...
-go build -mod=readonly -o /private/tmp/desk-caddy-test ./cmd/desk-caddy
+go build -mod=readonly -o "${DESK_BUILD_ROOT:-/private/tmp}/desk-caddy-test" ./cmd/desk-caddy
 cd ../../..
-CADDY_BIN=/private/tmp/desk-caddy-test HAPROXY_BIN=/path/to/native/ssl-enabled/haproxy python3 -m unittest discover -s roles/desk_https/tests -v
+CADDY_BIN="${DESK_BUILD_ROOT:-/private/tmp}/desk-caddy-test" HAPROXY_BIN=/path/to/native/ssl-enabled/haproxy python3 -m unittest discover -s roles/desk_https/tests -v
 node roles/desk_https/tests/test_links.js
 ansible-playbook -i inventory.ini playbooks/https/caddy.yml --syntax-check
 git diff --check

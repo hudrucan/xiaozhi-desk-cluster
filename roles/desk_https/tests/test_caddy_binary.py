@@ -4,6 +4,7 @@ import os
 import subprocess
 import tempfile
 import unittest
+from fixture_env import fixture_env
 from test_https import render
 
 
@@ -13,7 +14,8 @@ class Binary(unittest.TestCase):
         _,_,config=render()
         storage=tempfile.TemporaryDirectory(prefix='caddy-validate-')
         self.addCleanup(storage.cleanup)
-        env={**os.environ,'CLOUDFLARE_API_TOKEN':'a'*40,'XDG_DATA_HOME':storage.name+'/data','XDG_CONFIG_HOME':storage.name+'/config'}
+        env=fixture_env(storage.name)
+        env['CLOUDFLARE_API_TOKEN']='a'*40
         adapted=subprocess.run([env['CADDY_BIN'],'adapt','--config','/dev/stdin','--adapter','caddyfile'],input=config,text=True,capture_output=True,env=env)
         self.assertEqual(adapted.returncode,0,adapted.stderr)
         data=json.loads(adapted.stdout)

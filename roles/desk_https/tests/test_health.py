@@ -14,6 +14,7 @@ import tempfile
 import threading
 import time
 import unittest
+from fixture_env import fixture_env
 from test_https import probe, proxy, render
 from test_transport import PlainBackend
 
@@ -49,7 +50,7 @@ class EndToEndHealth(unittest.TestCase):
             def start(binary,config):
                 log=(tmp/(config.name+'.log')).open('ab');logs.append(log)
                 args=[binary,'run','--config',str(config)] if binary==os.environ['CADDY_BIN'] else [binary,'-db','-f',str(config)]
-                p=subprocess.Popen(args,stdout=log,stderr=log,env={**os.environ,'XDG_DATA_HOME':str(tmp/'data'),'XDG_CONFIG_HOME':str(tmp/'config')})
+                p=subprocess.Popen(args,stdout=log,stderr=log,env=fixture_env(tmp))
                 processes.append(p);return p
             def await_state(predicate):
                 deadline=time.monotonic()+15
@@ -64,7 +65,7 @@ class EndToEndHealth(unittest.TestCase):
                 openssl.write_text('[req]\ndistinguished_name=dn\n[dn]\n[SAN]\nsubjectAltName='+','.join('DNS:'+n for n in NAMES)+'\n')
                 subprocess.run(['openssl','req','-x509','-newkey','rsa:2048','-nodes','-keyout',str(key),'-out',str(cert),'-days','1','-subj','/CN=cluster.huynm.dev','-config',str(openssl),'-extensions','SAN'],check=True,capture_output=True)
                 original,fragment,caddyfile=render()
-                adapted=subprocess.run([os.environ['CADDY_BIN'],'adapt','--adapter','caddyfile','--config','/dev/stdin'],input=caddyfile,text=True,capture_output=True,check=True)
+                adapted=subprocess.run([os.environ['CADDY_BIN'],'adapt','--adapter','caddyfile','--config','/dev/stdin'],input=caddyfile,text=True,capture_output=True,check=True,env=fixture_env(tmp))
                 base=json.loads(adapted.stdout);base['admin']={'disabled':True}
                 base['apps']['tls']={'certificates':{'load_files':[{'certificate':str(cert),'key':str(key)}]}}
                 composed=proxy.https_candidate(original,fragment)

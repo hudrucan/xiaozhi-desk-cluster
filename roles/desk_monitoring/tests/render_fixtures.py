@@ -1,5 +1,6 @@
 """Validate optional monitoring templates and preserved ingress composition."""
 import ast
+import tempfile
 from pathlib import Path
 import jinja2
 import yaml
@@ -36,5 +37,6 @@ for enabled in (False, True):
         assert 'path_beg /internal/' in rendered
         if enabled:
             assert f'10.10.10.11:{8091 if shared else 8090}' in rendered
-            Path('/private/tmp/beszel-trial/ingress-candidate.cfg').write_text(rendered)
+            with tempfile.TemporaryDirectory(prefix='beszel-trial-') as directory:
+                Path(directory, 'ingress-candidate.cfg').write_text(rendered)
 print('Monitoring YAML/Python/templates and ingress enabled/disabled fixtures PASS')

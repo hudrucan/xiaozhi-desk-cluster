@@ -5,7 +5,7 @@
 set -eu
 repo=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 "$repo/scripts/prepare-ntfy.sh"
-out=${1:-/private/tmp/desk-ntfy-package}
+out=${1:-${DESK_BUILD_ROOT:-/private/tmp}/desk-ntfy-package}
 manifest="$repo/roles/desk_ntfy/runtime/Cargo.toml"
 target=${CARGO_TARGET_DIR:-/tmp/desk-ntfy-build}
 export CARGO_TARGET_DIR="$target"
