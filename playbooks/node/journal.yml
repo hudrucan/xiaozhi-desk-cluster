@@ -1,0 +1,40 @@
+---
+- name: Increase journal retention one node at a time
+  hosts: deskboxes
+  become: true
+  gather_facts: false
+  order: inventory
+  serial: 1
+  any_errors_fatal: true
+  tasks:
+    - name: Create the journald drop-in directory
+      ansible.builtin.file:
+        path: /etc/systemd/journald.conf.d
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+    - name: Retain up to 200M of persistent journal data
+      ansible.builtin.copy:
+        dest: /etc/systemd/journald.conf.d/90-desk-journal.conf
+        content: "[Journal]\nSystemMaxUse=200M\n"
+        owner: root
+        group: root
+        mode: '0644'
+      notify: Restart systemd-journald
+    - name: Apply journal changes before checking services
+      ansible.builtin.meta: flush_handlers
+    - name: Require journald and ingress services active before advancing
+      ansible.builtin.command:
+        argv: [/usr/bin/systemctl, is-active, --quiet, '{{ item }}']
+      loop: [systemd-journald, haproxy, keepalived, desk-caddy]
+      register: desk_journal_service
+      until: desk_journal_service.rc == 0
+      retries: 3
+      delay: 2
+      changed_when: false
+  handlers:
+    - name: Restart systemd-journald
+      ansible.builtin.systemd_service:
+        name: systemd-journald
+        state: restarted
