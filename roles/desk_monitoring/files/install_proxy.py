@@ -48,12 +48,15 @@ def https_candidate(current, fragment=None):
                  '    http-request set-var(txn.desk_https_health) bool(true) if { fc_rcvd_proxy } { src 10.10.10.11 10.10.10.12 10.10.10.13 } { method GET } { path /__desk_https_health }\n')
         if readiness:
             # Application readiness retains its existing source ACL boundary.
-            extra += (f'    http-request set-path {readiness} if {{ var(txn.desk_https_health) -m bool }}\n'
+            extra += ('    http-response set-log-level silent if { var(txn.desk_https_health) -m bool } { status 200 }\n'
+                      f'    http-request set-path {readiness} if {{ var(txn.desk_https_health) -m bool }}\n'
                       '    http-request set-src ipv4(127.0.0.1) if { var(txn.desk_https_health) -m bool }\n')
         else:
             # Cluster ingress health ends at this frontend, independently of
             # Dashboard state. Public binds never accept PROXY headers.
             extra += ('    http-request deny deny_status 404 if { path /__desk_https_health } !{ var(txn.desk_https_health) -m bool }\n'
+                      # Local returns bypass http-response rules. Keep this beside its fixed 200 reply.
+                      '    http-request set-log-level silent if { var(txn.desk_https_health) -m bool }\n'
                       '    http-request return status 200 content-type text/plain string ok if { var(txn.desk_https_health) -m bool }\n')
         extra += (
                  '    http-request del-header Forwarded\n'

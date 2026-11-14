@@ -7,6 +7,16 @@ this guide establishes live certificate readiness or authorizes a rollout.
 
 ## Routing and trust
 
+The shared HAProxy composer suppresses access logs only for successful (HTTP 200)
+trusted mesh GET checks of the exact `/__desk_https_health` path on the three
+local HTTP frontends. Failed checks and ordinary client requests retain existing
+logging. On HAProxy 2.6, cluster sets `http-request set-log-level silent` immediately
+before its fixed local 200 reply; NTFY/HA use `http-response set-log-level silent`
+only after backend status 200. Do not use `http-after-response set-log-level`,
+which is unavailable on 2.6. The TCP TLS passthrough frontend cannot inspect HTTP
+paths and retains its logs; NTFY's existing `no log` policy is unchanged. Logrotate is not managed
+by this repository.
+
 The existing management VIP `192.168.1.186:443` runs HAProxy TCP passthrough to
 three native ARM64 Caddy instances on `10.10.10.11–13:8443`. Each of the four
 SNI names has its own three-member backend with trusted-certificate, hostname
