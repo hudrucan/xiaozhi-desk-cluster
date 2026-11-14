@@ -1,0 +1,12 @@
+---
+- name: Require a supported observer installation state
+  ansible.builtin.assert:
+    that:
+      - desk_wifi_watch_state in ['present', 'absent']
+      - desk_wifi_watch_recovery is boolean
+- name: Install the observer
+  ansible.builtin.import_tasks: present.yml
+  when: desk_wifi_watch_state == 'present'
+- name: Remove the observer
+  ansible.builtin.import_tasks: absent.yml
+  when: desk_wifi_watch_state == 'absent'

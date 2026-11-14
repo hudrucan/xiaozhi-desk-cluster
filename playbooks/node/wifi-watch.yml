@@ -1,0 +1,20 @@
+---
+- name: Manage the observation-only Wi-Fi monitor one node at a time
+  hosts: deskboxes
+  become: true
+  gather_facts: false
+  serial: 1
+  order: inventory
+  any_errors_fatal: true
+  roles: [desk_wifi_watch]
+  post_tasks:
+    - name: Verify the observer timer is active
+      ansible.builtin.command:
+        argv: [/usr/bin/systemctl, is-active, --quiet, desk-wifi-watch.timer]
+      changed_when: false
+      when: desk_wifi_watch_state == 'present'
+    - name: Complete one successful observation before advancing
+      ansible.builtin.command:
+        argv: [/usr/bin/systemctl, start, desk-wifi-watch.service]
+      changed_when: false
+      when: desk_wifi_watch_state == 'present'

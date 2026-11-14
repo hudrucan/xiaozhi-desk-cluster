@@ -1,0 +1,4 @@
+---
+desk_wifi_watch_state: present
+# Reserved for a later reviewed phase; has no effect on this observer.
+desk_wifi_watch_recovery: false

@@ -222,3 +222,5 @@ and private captures out of issues and patches.
 
 Native HA HTTPS is a separate opt-in entrypoint: [HTTPS routing and rollout](docs/DESK_HTTPS.md).
 `playbooks/https/caddy.yml` defaults to read-only preflight; production phases require explicit approval.
+
+The separate [Wi-Fi observer](docs/DESK_WIFI_WATCH.md) records connectivity evidence with a lightweight oneshot timer and performs no network recovery.

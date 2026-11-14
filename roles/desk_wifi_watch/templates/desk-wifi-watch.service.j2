@@ -1,0 +1,29 @@
+[Unit]
+Description=Observe Wi-Fi connectivity without changing networking
+After=NetworkManager.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /usr/local/libexec/desk-wifi-watch.py /etc/desk-wifi-watch.json
+TimeoutStartSec=20s
+User=root
+Nice=19
+IOSchedulingClass=idle
+CPUQuota=30%
+MemoryMax=32M
+TasksMax=32
+PrivateTmp=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/desk-wifi-watch /run/desk-wifi-watch
+StateDirectory=desk-wifi-watch
+StateDirectoryMode=0700
+RuntimeDirectory=desk-wifi-watch
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
+NoNewPrivileges=yes
+CapabilityBoundingSet=CAP_NET_RAW
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=desk-wifi-watch
+SyslogLevel=notice
+LogLevelMax=notice

@@ -1,0 +1,38 @@
+---
+- name: Create the observer program directory
+  ansible.builtin.file:
+    path: /usr/local/libexec
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+- name: Install the read-only observer
+  ansible.builtin.copy:
+    src: desk-wifi-watch.py
+    dest: /usr/local/libexec/desk-wifi-watch.py
+    owner: root
+    group: root
+    mode: '0755'
+- name: Install the two physical peer addresses per interface
+  ansible.builtin.template:
+    src: config.json.j2
+    dest: /etc/desk-wifi-watch.json
+    owner: root
+    group: root
+    mode: '0644'
+- name: Install observer units
+  ansible.builtin.template:
+    src: '{{ item }}.j2'
+    dest: '/etc/systemd/system/{{ item }}'
+    owner: root
+    group: root
+    mode: '0644'
+  loop: [desk-wifi-watch.service, desk-wifi-watch.timer]
+  notify: Reload observer units
+- name: Load units before enabling the timer
+  ansible.builtin.meta: flush_handlers
+- name: Enable only the observer timer
+  ansible.builtin.systemd_service:
+    name: desk-wifi-watch.timer
+    enabled: true
+    state: started

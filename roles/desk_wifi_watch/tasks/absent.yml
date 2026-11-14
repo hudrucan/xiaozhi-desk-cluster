@@ -1,0 +1,27 @@
+---
+- name: Check whether observer units exist
+  ansible.builtin.stat:
+    path: '/etc/systemd/system/{{ item }}'
+  loop: [desk-wifi-watch.timer, desk-wifi-watch.service]
+  register: desk_wifi_watch_units
+- name: Disable the timer and stop any running observation before removing files
+  ansible.builtin.systemd_service:
+    name: '{{ item.item }}'
+    state: stopped
+    enabled: false
+  loop: '{{ desk_wifi_watch_units.results }}'
+  when: item.stat.exists
+- name: Remove only observer-owned files and state
+  ansible.builtin.file:
+    path: '{{ item }}'
+    state: absent
+  loop:
+    - /etc/systemd/system/desk-wifi-watch.timer
+    - /etc/systemd/system/desk-wifi-watch.service
+    - /etc/desk-wifi-watch.json
+    - /usr/local/libexec/desk-wifi-watch.py
+    - /run/desk-wifi-watch
+    - /var/lib/desk-wifi-watch
+  notify: Reload observer units
+- name: Complete unit removal before advancing
+  ansible.builtin.meta: flush_handlers
