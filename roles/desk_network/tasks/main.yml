@@ -43,6 +43,9 @@
     - {path: /var/lib/desk-network/state, mode: '0700'}
     - {path: /var/lib/desk-network/data/config, mode: '0700'}
     - {path: /var/lib/desk-network/data/db, mode: '0700'}
+- name: Prepare explicitly enabled DB tmpfs before controller installation
+  ansible.builtin.include_tasks: db-tmpfs.yml
+  when: desk_network_db_tmpfs | default(false) | bool
 - name: Load existing ignored Network credentials
   ansible.builtin.set_fact:
     network_credentials: "{{ lookup('file',desk_repo_root+'/secret/network/credentials.json') | from_json }}"

@@ -1,0 +1,59 @@
+---
+- name: Require a stopped controller before introducing a DB mount
+  ansible.builtin.command:
+    argv:
+    - systemctl
+    - is-active
+    - desk-network
+  register: network_db_controller
+  changed_when: false
+  failed_when: false
+- name: Inspect current DB mount
+  ansible.builtin.command:
+    argv:
+    - findmnt
+    - --mountpoint
+    - /var/lib/desk-network/data/db
+    - -n
+    - -o
+    - FSTYPE
+  register: network_db_mount
+  changed_when: false
+  failed_when: false
+- name: Inspect any existing native collector before creating a submount
+  ansible.builtin.command:
+    argv:
+    - podman
+    - container
+    - exists
+    - desk-netalertx
+  register: network_db_container
+  changed_when: false
+  failed_when: network_db_container.rc not in [0, 1]
+- name: Reject an unrelated filesystem mounted over the database
+  ansible.builtin.assert:
+    that:
+    - network_db_mount.rc != 0 or network_db_mount.stdout == 'tmpfs'
+- name: Never cover a running disk-backed container
+  ansible.builtin.assert:
+    that:
+    - network_db_mount.stdout == 'tmpfs' or (network_db_controller.stdout != 'active'
+      and network_db_container.rc == 1)
+- name: Install the tmpfs-only entrypoint mount check replacement
+  ansible.builtin.copy:
+    src: '{{ desk_repo_root }}/roles/desk_network/files/db-mounts-noop.py'
+    dest: /usr/local/libexec/desk-network/db-mounts-noop.py
+    owner: root
+    group: root
+    mode: '0555'
+- name: Install DB-only mount unit
+  ansible.builtin.template:
+    src: '{{ desk_repo_root }}/roles/desk_network/templates/var-lib-desk-network-data-db.mount.j2'
+    dest: /etc/systemd/system/var-lib-desk\x2dnetwork-data-db.mount
+    mode: '0644'
+- name: Activate DB-only mount
+  ansible.builtin.systemd_service:
+    name: var-lib-desk\x2dnetwork-data-db.mount
+    state: started
+    enabled: true
+    daemon_reload: true

@@ -3,6 +3,11 @@ Description=Desk LAN discovery majority lease and checkpoint replication
 Wants=network-online.target desk-dashboard.service
 After=network-online.target desk-dashboard.service
 
+{% if desk_network_db_tmpfs | default(false) | bool %}
+Requires=var-lib-desk\x2dnetwork-data-db.mount
+After=var-lib-desk\x2dnetwork-data-db.mount
+{% endif %}
+
 [Service]
 Type=simple
 ExecStart=/usr/bin/python3 /usr/local/libexec/desk-network/ha.py --config /etc/desk-network/config.json

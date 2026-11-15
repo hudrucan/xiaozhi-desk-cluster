@@ -1,0 +1,12 @@
+[Unit]
+Description=Volatile NetAlertX database only
+Before=desk-network.service
+
+[Mount]
+What=tmpfs
+Where=/var/lib/desk-network/data/db
+Type=tmpfs
+Options=size=256M,mode=0700,nosuid,nodev,noexec
+
+[Install]
+WantedBy=multi-user.target

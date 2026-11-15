@@ -1,0 +1,246 @@
+- name: Canary DB-only tmpfs on one warm replica at a time
+  hosts: '{{ desk_network_tmpfs_target }}'
+  become: true
+  gather_facts: false
+  serial: 1
+  order: inventory
+  any_errors_fatal: true
+  tasks:
+  - name: Require one explicitly selected node and storage mode
+    ansible.builtin.assert:
+      that:
+      - desk_network_tmpfs_target in ['deskb3x','deskb1x','deskb2x']
+      - ansible_play_hosts_all == [desk_network_tmpfs_target]
+      - desk_network_db_tmpfs is boolean
+  - name: Check all three replicas before changing one node
+    ansible.builtin.uri:
+      url: http://{{ hostvars[item].cluster_ip }}:20213/network/desk/status
+      use_proxy: false
+      timeout: 3
+    loop:
+    - deskb1x
+    - deskb2x
+    - deskb3x
+    register: tmpfs_before
+    changed_when: false
+  - name: Require synced voters and exactly one owner
+    ansible.builtin.assert:
+      that:
+      - tmpfs_before.results | map(attribute='json.state') | select('equalto','active') | list | length == 1
+      - tmpfs_before.results | map(attribute='json.sync') | unique | list == ['synced']
+      - tmpfs_before.results | map(attribute='json.voter_ready') | select('equalto',true) | list | length == 3
+      - tmpfs_before.results | map(attribute='json.standby_mode') | unique | list == ['warm']
+  - name: Require standby unless owner-last handoff is explicitly approved
+    ansible.builtin.assert:
+      that:
+      - (tmpfs_before.results | selectattr('item','equalto',inventory_hostname) | first).json.state == 'standby' or desk_network_tmpfs_allow_owner
+        | default(false) | bool
+  - name: Freeze protected services
+    ansible.builtin.command:
+      argv:
+      - python3
+      - -c
+      - '{{ lookup(''file'', desk_repo_root+''/roles/desk_ui/files/ui_guard.py'') }}'
+      - freeze
+    register: tmpfs_protected
+    changed_when: false
+    no_log: true
+  - name: Read previous storage flag
+    ansible.builtin.slurp:
+      src: /etc/desk-network/config.json
+    register: tmpfs_config
+    no_log: true
+  - name: Record previous storage mode
+    ansible.builtin.set_fact:
+      tmpfs_previous: '{{ (tmpfs_config.content | b64decode | from_json).db_tmpfs | default(false) | bool }}'
+  - name: Check installed flag agrees with actual mount before any mutation
+    ansible.builtin.command:
+      argv:
+      - findmnt
+      - --mountpoint
+      - /var/lib/desk-network/data/db
+      - -n
+      - -o
+      - FSTYPE
+    register: tmpfs_original_mount
+    changed_when: false
+    failed_when: false
+  - name: Stop for pre-existing storage drift instead of claiming its mount
+    ansible.builtin.assert:
+      that:
+      - (tmpfs_previous and tmpfs_original_mount.stdout == 'tmpfs') or (not tmpfs_previous and tmpfs_original_mount.rc ==
+        1)
+  - name: Create private rollback directory
+    ansible.builtin.tempfile:
+      state: directory
+      prefix: desk-db-tmpfs-
+    register: tmpfs_backup
+  - name: Inspect rollback files
+    ansible.builtin.stat:
+      path: '{{ item }}'
+    loop:
+    - /etc/desk-network/config.json
+    - /usr/local/libexec/desk-network/ha.py
+    - /usr/local/libexec/desk-network/db-mounts-noop.py
+    - /etc/systemd/system/desk-network.service
+    - /etc/systemd/system/var-lib-desk\x2dnetwork-data-db.mount
+    register: tmpfs_originals
+  - name: Save current files before stopping controller
+    ansible.builtin.copy:
+      src: '{{ item.item }}'
+      dest: '{{ tmpfs_backup.path }}/{{ item.item | basename }}'
+      remote_src: true
+      mode: preserve
+    loop: '{{ tmpfs_originals.results }}'
+    when: item.stat.exists
+    no_log: true
+  - name: Switch only one replica with rollback on failure
+    block:
+    - name: Stop only the selected Network controller and its old container
+      ansible.builtin.systemd_service:
+        name: desk-network
+        state: stopped
+    - name: Require one remaining native-ready owner
+      ansible.builtin.command:
+        argv:
+        - python3
+        - /usr/local/libexec/desk-network/verify_ready.py
+      register: tmpfs_survivor
+      until: tmpfs_survivor.rc == 0
+      retries: 65
+      delay: 3
+      changed_when: false
+    - name: Install mount only after container teardown
+      ansible.builtin.include_tasks: ../../roles/desk_network/tasks/db-tmpfs.yml
+      when: desk_network_db_tmpfs | bool
+    - name: Remove volatile mount only for explicit disk rollback
+      ansible.builtin.systemd_service:
+        name: var-lib-desk\x2dnetwork-data-db.mount
+        state: stopped
+        enabled: false
+      when: not (desk_network_db_tmpfs | bool) and tmpfs_previous
+    - name: Install controller with host and container mount guards
+      ansible.builtin.copy:
+        src: '{{ desk_repo_root }}/roles/desk_network/files/ha.py'
+        dest: /usr/local/libexec/desk-network/ha.py
+        mode: '0755'
+        validate: python3 -m py_compile %s
+    - name: Change only the DB storage flag in the installed private configuration
+      ansible.builtin.command:
+        argv:
+        - python3
+        - -c
+        - import json,os,pathlib; p=pathlib.Path('/etc/desk-network/config.json'); c=json.loads(p.read_text()); c['db_tmpfs']={{
+          desk_network_db_tmpfs | bool | ternary('True','False') }}; t=p.with_suffix('.tmp'); t.write_text(json.dumps(c));
+          os.chmod(t,0o600); os.replace(t,p)
+      no_log: true
+    - name: Install controller mount ordering
+      ansible.builtin.template:
+        src: '{{ desk_repo_root }}/roles/desk_network/templates/desk-network.service.j2'
+        dest: /etc/systemd/system/desk-network.service
+        mode: '0644'
+    - name: Recreate warm container with the selected DB filesystem
+      ansible.builtin.systemd_service:
+        name: desk-network
+        state: started
+        daemon_reload: true
+    - name: Wait for recovered replica and verified DB mount
+      register: tmpfs_after
+      until: tmpfs_after.rc == 42 or (tmpfs_after.rc == 0 and ((tmpfs_after.stdout | from_json).sync | default('') == 'synced'
+        and (tmpfs_after.stdout | from_json).voter_ready | default(false) and (tmpfs_after.stdout | from_json).warm_state
+        | default('') in ['active','inactive'] and (tmpfs_after.stdout | from_json).db_storage.mode | default('') == (desk_network_db_tmpfs
+        | bool | ternary('tmpfs','disk')) and (tmpfs_after.stdout | from_json).db_storage.error is not defined))
+      retries: 65
+      delay: 3
+      changed_when: false
+      ansible.builtin.command:
+        argv:
+        - python3
+        - -c
+        - |
+          import json,subprocess,sys,urllib.request
+          inspect=subprocess.run(['podman','inspect','desk-netalertx'],capture_output=True,text=True,timeout=3)
+          if inspect.returncode == 0:
+              state=json.loads(inspect.stdout)[0]['State']['Status'].lower()
+              if state in ('exited','dead'):
+                  print('Recreated desk-netalertx is '+state+'; last 20 log lines:',file=sys.stderr)
+                  try:
+                      logs=subprocess.run(['podman','logs','--tail','20','desk-netalertx'],capture_output=True,text=True,timeout=3)
+                      print('\n'.join((logs.stdout+logs.stderr).splitlines()[-20:]),file=sys.stderr)
+                  except (OSError,subprocess.TimeoutExpired) as error:
+                      print('Cannot read container logs: '+type(error).__name__,file=sys.stderr)
+                  sys.exit(42)
+          try:
+              opener=urllib.request.build_opener(urllib.request.ProxyHandler({}))
+              with opener.open('http://{{ cluster_ip }}:20213/network/desk/status',timeout=3) as response:
+                  print(json.dumps(json.load(response)))
+          except (OSError,ValueError):
+              sys.exit(1)
+      failed_when: tmpfs_after.rc not in [0, 1]
+    - name: Require exactly one native-ready owner after recreation
+      ansible.builtin.command:
+        argv:
+        - python3
+        - /usr/local/libexec/desk-network/verify_ready.py
+      changed_when: false
+    - name: Require protected services unchanged
+      ansible.builtin.command:
+        argv:
+        - python3
+        - -c
+        - '{{ lookup(''file'', desk_repo_root+''/roles/desk_ui/files/ui_guard.py'') }}'
+        - guard
+        stdin: '{{ tmpfs_protected.stdout }}'
+      changed_when: false
+    rescue:
+    - name: Stop failed canary before restoring files
+      ansible.builtin.systemd_service:
+        name: desk-network
+        state: stopped
+    - name: Inspect actual mount before rollback unmount
+      ansible.builtin.command:
+        argv:
+        - findmnt
+        - --mountpoint
+        - /var/lib/desk-network/data/db
+        - -n
+        - -o
+        - FSTYPE
+      register: tmpfs_failed_mount
+      failed_when: false
+      changed_when: false
+    - name: Unmount newly introduced tmpfs before removing its unit
+      ansible.builtin.systemd_service:
+        name: var-lib-desk\x2dnetwork-data-db.mount
+        state: stopped
+        enabled: false
+      when: not tmpfs_previous and desk_network_db_tmpfs | bool and tmpfs_failed_mount.stdout == 'tmpfs'
+    - name: Restore saved files without touching checkpoint state
+      ansible.builtin.copy:
+        src: '{{ tmpfs_backup.path }}/{{ item.item | basename }}'
+        dest: '{{ item.item }}'
+        remote_src: true
+        mode: preserve
+      loop: '{{ tmpfs_originals.results }}'
+      when: item.stat.exists
+      no_log: true
+    - name: Remove only files introduced by this attempt
+      ansible.builtin.file:
+        path: '{{ item.item }}'
+        state: absent
+      loop: '{{ tmpfs_originals.results }}'
+      when: not item.stat.exists
+    - name: Restore previous DB filesystem
+      ansible.builtin.systemd_service:
+        name: var-lib-desk\x2dnetwork-data-db.mount
+        state: started
+        enabled: true
+        daemon_reload: true
+      when: tmpfs_previous
+    - name: Restart the original Network controller
+      ansible.builtin.systemd_service:
+        name: desk-network
+        state: started
+        daemon_reload: true
+    - ansible.builtin.fail:
+        msg: DB storage canary failed; previous files and storage mode restored. Review recovery; do not advance.

@@ -4,6 +4,7 @@ from contextlib import closing
 import discovery,bootstrap,checkpoint_budget
 from checkpoint_source import CheckpointSource
 from peer_http import PeerHTTP
+import stat
 import ast, signal, argparse, base64, concurrent.futures, gzip, hashlib, hmac, http.client, http.server, io, json, logging, os, pathlib, re, secrets, shutil, socket, sqlite3, ssl, struct, subprocess, sys, threading, time, urllib.parse, urllib.request, zlib
 LOG = logging.getLogger('desk-network')
 TTL, MARGIN, LIMIT, DBLIMIT = 15., 5., 16*1024*1024, 64*1024*1024
@@ -14,6 +15,7 @@ def ha_held(n):return (n.get('homeassistant') or {}).get('state') in ('starting'
 def other_owners(n):return sum(1 for k in ('xiaozhi','dns','vpn') if (n.get('vip') or {}).get(k))+(1 if ha_held(n) else 0)
 def clock():return time.clock_gettime(time.CLOCK_BOOTTIME) if hasattr(time,'CLOCK_BOOTTIME') else time.monotonic()
 NAME = 'desk-netalertx'
+DB_MOUNTS_CHECK = pathlib.Path('/usr/local/libexec/desk-network/db-mounts-noop.py')
 IMAGE = 'ghcr.io/netalertx/netalertx@sha256:f95bca7a794141296dd1d16be5bb7f39f6fdbcd20353cdb51eee696e12d317f6'
 def encoded(v): return json.dumps(v,sort_keys=True,separators=(',',':')).encode()
 def sha(b): return hashlib.sha256(b).hexdigest()
@@ -250,6 +252,15 @@ def checkpoint(data,run):
   if dbpath.stat().st_size>DBLIMIT:raise Unavailable('Database exceeds checkpoint limit')
   blob=checkpoint_blob(dbpath,conf,workflows);unpack(blob);return blob
  finally:dbpath.unlink(missing_ok=True)
+def tmpfs_mount(path, mountinfo):
+ # Match an actual mount boundary, not a tmpfs ancestor or a string prefix.
+ for line in mountinfo.splitlines():
+  left,right=line.split(' - ',1);fields=left.split()
+  target=re.sub(r'\\([0-7]{3})',lambda m:chr(int(m[1],8)),fields[4])
+  if target==str(path) and right.split()[0]=='tmpfs' and 'rw' in fields[5].split(','):
+   return fields[2]
+ raise Unavailable('Required DB tmpfs mount missing: '+str(path))
+
 class Cluster:
  def __init__(self,c):
   self.c=c;self.key=base64.b64decode(c['key']);self.node=c['node'];self.members=c['members'];self.root=pathlib.Path('/var/lib/desk-network');self.run=pathlib.Path('/run/desk-network');self.run.mkdir(exist_ok=True)
@@ -260,10 +271,37 @@ class Cluster:
   context=ssl.create_default_context(cafile=c['certificate']);self.opener=urllib.request.build_opener(urllib.request.ProxyHandler({}),resuming_https_handler(context))
   self.peer_http=PeerHTTP(context,LIMIT*2)
   self.checkpoint_pool=concurrent.futures.ThreadPoolExecutor(max_workers=3)
+ def require_db_tmpfs(self,container=False):
+  if not self.c.get('db_tmpfs',False):return
+  path=self.root/'data/db'
+  device=tmpfs_mount(path,pathlib.Path('/proc/self/mountinfo').read_text())
+  if container:
+   if not self.pid:raise Unavailable('Container DB mount cannot be verified')
+   pid,start=self.pid
+   if pathlib.Path(f'/proc/{pid}/stat').read_text().split(') ',1)[1].split()[19]!=start:raise Unavailable('Container PID changed')
+   if tmpfs_mount('/data/db',pathlib.Path(f'/proc/{pid}/mountinfo').read_text())!=device:raise Unavailable('Container DB mount differs from host')
+   host=path.stat();inside=pathlib.Path(f'/proc/{pid}/root/data/db').stat()
+   if (host.st_dev,host.st_ino)!=(inside.st_dev,inside.st_ino):raise Unavailable('Container DB inode differs from host')
+ def require_db_entrypoint(self):
+  if not self.c.get('db_tmpfs',False):return
+  try:info=DB_MOUNTS_CHECK.lstat()
+  except OSError as e:raise Unavailable('DB tmpfs entrypoint helper missing or unreadable') from e
+  if not stat.S_ISREG(info.st_mode) or info.st_uid!=0 or stat.S_IMODE(info.st_mode)!=0o555:
+   raise Unavailable('DB tmpfs entrypoint helper must be a root-owned regular file mode 0555')
+ def db_storage(self):
+  if not self.c.get('db_tmpfs',False):return {'mode':'disk'}
+  try:
+   self.require_db_entrypoint()
+   self.require_db_tmpfs(self.running)
+   v=os.statvfs(self.root/'data/db')
+   return {'mode':'tmpfs','bytes':(v.f_blocks-v.f_bfree)*v.f_frsize,'capacity':v.f_blocks*v.f_frsize}
+  except (OSError,Unavailable,ValueError) as e:return {'mode':'tmpfs','error':str(e)}
  def owned(self):return self.running and clock()<self.until
  def status(self):
   return {'node':self.node,'lease':self.lease.status(),'active':self.owned(),'ready':self.owned() and self.ready,'head':self.store.head,'eligible':self.eligible(),'score':self.score(),'sync':self.sync_state}
  def eligible(self):
+  try:self.require_db_tmpfs(self.running)
+  except (OSError,Unavailable,ValueError):return False
   if self.warm and ((self.run/'warm-drain').exists() or (not self.owned() and self.warm_state().get('state')!='inactive')):return False
   if clock()<self.cooldown or not self.local or clock()-self.last_local>20 or not self.local.get('online'):return False
   return not any(v is True for v in self.local.get('admission',{}).values())
@@ -385,16 +423,19 @@ class Cluster:
   return False
  def start_container(self,preload=False):
   with self.oplock:
+   self.require_db_entrypoint()
    if not preload and clock()>=self.until:return
    if self.running:
     if self.warm and not preload:
      self.activate_warm()
     return
    if self.warm:self.warm_control()
+   self.require_db_tmpfs()
    self.retire_checkpoint_source()
    restore_worker(self.store.blob(self.store.head['digest']),self.root/'data',self.run,self.c['api_token'])
    cmd=['podman','run','-d','--replace','--name',NAME,'--network=host','--read-only','--cpus=0.5','--cpu-shares=128','--memory=512m','--pids-limit=256','--log-driver=k8s-file','--log-opt=max-size=5mb','--cap-drop=ALL','--tmpfs','/tmp:rw,noexec,nosuid,nodev,mode=1700,size=256m','-v',str(self.root/'data')+':/data:rw','-v','/usr/local/libexec/desk-network/api-loopback.py:/app/server/api_server/api_server_start.py:ro','-v','/etc/desk-network/policy.json:/data/config/app_conf_override.json:ro','-v','/usr/local/libexec/desk-network/override-policy.sh:/entrypoint.d/35-apply-conf-override.sh:ro','-v','/usr/local/libexec/desk-network/lang-cached.php:/app/front/php/templates/language/lang.php:ro','-v','/usr/local/libexec/desk-network/opcache.so:/usr/lib/php83/modules/opcache.so:ro','-v','/usr/local/libexec/desk-network/opcache.ini:/etc/php83/conf.d/10_desk_opcache.ini:ro','-e','LISTEN_ADDR='+self.members[self.node],'-e','PORT=20211','-e','GRAPHQL_PORT=20212']
    cmd+=['-v','/usr/local/libexec/desk-network/mdns.py:/app/desk_network/mdns.py:ro','-v','/usr/local/libexec/desk-network/arp.py:/app/desk_network/arp.py:ro','-v','/usr/local/libexec/desk-network/discovery.py:/app/desk_network/discovery.py:ro']
+   if self.c.get('db_tmpfs',False):cmd+=['-v',str(self.root/'data/db')+':/data/db:rw','-v',str(DB_MOUNTS_CHECK)+':/entrypoint.d/15-mounts.py:ro']
    if self.c.get('scan_distributed'):
     cmd+=['-v','/run/desk-network-scan:/run/desk-network-scan:ro','-e','DESK_NETWORK_DISTRIBUTED=1']
    for cap in ('NET_ADMIN','NET_RAW','NET_BIND_SERVICE','CHOWN','SETUID','SETGID'):cmd+=['--cap-add='+cap]
@@ -405,6 +446,7 @@ class Cluster:
     self.command(*cmd,timeout=5)
     info=json.loads(self.command('podman','inspect',NAME,timeout=1).stdout)[0];pid=info['State']['Pid']
     self.pid=(pid,pathlib.Path(f'/proc/{pid}/stat').read_text().split(') ',1)[1].split()[19])
+    self.require_db_tmpfs(container=True)
     if self.budget.start(self.pid,self.local,clock()-self.last_local<15):LOG.info('Collector bootstrap budget: at most one core for 60 seconds')
    except Exception:
     self.kill_container();raise
@@ -413,6 +455,7 @@ class Cluster:
    LOG.info('LAN collector started on %s',self.node)
  def activate_warm(self):
   if not self.owned() or self.warm_state().get('state')!='inactive':raise Unavailable('Warm runtime not inactive')
+  self.require_db_tmpfs(container=True)
   # No PHP/backend/database handles survive this boundary. The preloaded parent
   # contains imports only; restore the latest majority-certified data first.
   self.retire_checkpoint_source()
@@ -482,7 +525,7 @@ class Cluster:
    return value
  def public(self):
   schedule,minutes=self.live_scan()
-  return {'node':self.node,'state':'active' if self.owned() and self.ready else 'starting' if self.owned() else 'standby','protocol':'desk-network-v1','lease_term':list(self.term) if self.owned() else None,'observed_at':time.time(),'voter_ready':clock()>=self.lease.quarantine,'revision':self.store.head['revision'] if self.store.head else None,'sync':self.sync_state,'subnet':'192.168.1.0/24','scan_minutes':minutes,'scan_schedule':schedule,'boot_ready_seconds':self.boot_ready_seconds,'bootstrap_budget':'boosted' if self.budget.fd is not None else 'steady','standby_mode':'warm' if self.warm else 'cold','warm_state':self.warm_state().get('state') if self.warm else None,'preload_seconds':self.warm_state().get('preload_seconds') if self.warm else None,'promotion_seconds':self.promotion_seconds}
+  return {'db_storage':self.db_storage(),'node':self.node,'state':'active' if self.owned() and self.ready else 'starting' if self.owned() else 'standby','protocol':'desk-network-v1','lease_term':list(self.term) if self.owned() else None,'observed_at':time.time(),'voter_ready':clock()>=self.lease.quarantine,'revision':self.store.head['revision'] if self.store.head else None,'sync':self.sync_state,'subnet':'192.168.1.0/24','scan_minutes':minutes,'scan_schedule':schedule,'boot_ready_seconds':self.boot_ready_seconds,'bootstrap_budget':'boosted' if self.budget.fd is not None else 'steady','standby_mode':'warm' if self.warm else 'cold','warm_state':self.warm_state().get('state') if self.warm else None,'preload_seconds':self.warm_state().get('preload_seconds') if self.warm else None,'promotion_seconds':self.promotion_seconds}
  def run_loop(self):
   self.kill_container(force=True);threading.Thread(target=self.fence,daemon=True).start()
   while not self.stop.is_set():

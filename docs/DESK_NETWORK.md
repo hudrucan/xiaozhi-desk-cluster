@@ -443,3 +443,58 @@ nonblocking syscall flags, running/exited/reaped results and absence of a `/proc
 group scan. The portable check does not replace real Linux process validation.
 To run only the warm tests, set `PYTHONPATH=roles/desk_network/files` and use
 `python3 -m unittest discover -s roles/desk_network/tests -p test_warm.py -v`.
+
+
+## Optional DB-only tmpfs
+
+`desk_network_db_tmpfs` defaults to false. When true, the dedicated mount unit
+places only `/var/lib/desk-network/data/db` on tmpfs (256M, mode0700,
+nosuid/nodev/noexec), ordered before the controller. `data/config` and all
+`state/` blobs, head and durable votes remain on eMMC. Rust checkpoint code and
+format, leases, quorum, quiet admission and fencing are unchanged. A missing,
+read-only or wrong host/container tmpfs mount blocks restore/start/promotion;
+container mount device, PID starttime and directory inode must match the host.
+Public status exposes `db_storage` mode, used bytes and capacity, or a mount error.
+No new alert thresholds or periodic disk writes are added.
+
+Tmpfs mode alone binds a root-owned 0555 no-op helper read-only over the pinned
+image's `/entrypoint.d/15-mounts.py`, whose persistent-storage check rejects
+intentional tmpfs. Disk mode retains the original container command. Missing or
+unsafe helper files block startup and appear in `db_storage.error`. This also
+removes that script's read/write permission checks for `/data`; host/container
+mount guards remain required. Image upgrades moving this entrypoint need review:
+a rejected bind or failed startup fails closed. The canary stops retries on an
+Exited/Dead container, includes its last 20 log lines and enters existing rescue.
+
+
+Use `playbooks/network/network-db-tmpfs.yml` for an existing warm cluster, one
+explicit `desk_network_tmpfs_target` per invocation. It checks all three synced
+warm voters and one owner, freezes protected services and saves private rollback
+files, stops only the selected controller (including the old container), requires
+a surviving native-ready owner, then mounts/unmounts and changes the installed
+storage flag. Starting the controller restores a certified checkpoint before
+recreating its warm container, including a separate `/data/db` bind. Ready/synced
+voter, expected storage and protected-service gates must pass before advancing.
+The full role refuses to introduce the mount under an active disk-backed collector;
+it is not a substitute for this canary. Never mount beneath a live container bind.
+
+At the surveyed state, enable standbys **deskb3x then deskb1x**, and original owner
+**deskb2x last** with `desk_network_tmpfs_allow_owner=true`. Recheck the owner before
+each invocation; adapt the order if ownership has changed. No `--limit` bypass of
+`network-warm.yml` is used. Keep `desk_network_db_tmpfs=true` in each node's
+inventory overrides afterward so future full-role renders retain its storage mode.
+Rollback uses the same canary with the flag false, inactive replicas first and
+owner last. It stops the container before unmounting and restores the certified
+checkpoint into ext4; it never copies live WAL or trusts the stale underlying DB.
+A failed canary restores saved files/storage and starts the old controller, then
+fails to stop forward rollout. Keep the private backup directory until accepted.
+
+Live tmpfs content is lost on power failure. Recovery uses the latest durable
+certified checkpoint; pending observations can be lost and rediscovered by scanning.
+The user accepts this loss; no new planned-drain majority snapshot gate is added.
+The nominal five-minute snapshot cadence is not a maximum RPO when quorum is
+unavailable. A 256M cap reserves no memory and does not prevent cgroup OOM;
+existing container512M/controller256M/worker384M limits remain. Monitor usage,
+checkpoint age, pending status and memory.events through restore/scan/cleanup
+before broad rollout. Actual mount propagation, memory charging, ENOSPC/OOM,
+hardware reboot and post-change write reduction still need canary verification.
