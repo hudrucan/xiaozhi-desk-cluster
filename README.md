@@ -224,3 +224,5 @@ Native HA HTTPS is a separate opt-in entrypoint: [HTTPS routing and rollout](doc
 `playbooks/https/caddy.yml` defaults to read-only preflight; production phases require explicit approval.
 
 The separate [Wi-Fi observer](docs/DESK_WIFI_WATCH.md) records connectivity evidence with a lightweight oneshot timer and performs no network recovery.
+
+Repository-owned deployment backups retain three days and at least the newest of each kind; see [backup retention](docs/DESK_BACKUP_RETENTION.md). Cleanup runs after successful gates and handlers, with an explicit maintenance play for legacy artifacts.

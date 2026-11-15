@@ -1,0 +1,11 @@
+---
+- name: Prune only catalogued repository-owned rollback artifacts
+  hosts: deskboxes
+  become: true
+  gather_facts: false
+  serial: 1
+  order: inventory
+  any_errors_fatal: true
+  roles:
+    - role: desk_backup_retention
+      desk_backup_retention_scopes: "{{ lookup('ansible.builtin.file', playbook_dir + '/../../roles/desk_backup_retention/files/catalog.json') | from_json | list }}"

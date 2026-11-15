@@ -38,7 +38,9 @@ class RoutesPlaybook(unittest.TestCase):
         start = before.index('        - name: Install the complete route validator\n')
         end = before.index('        - name: Verify unchanged protected services', start)
         expected_file = before[:start] + '        - name: Install and validate the dashboard routes\n          ansible.builtin.import_tasks: tasks/dashboard-routes.yml\n' + before[end:]
-        self.assertEqual((ROOT / 'playbooks/dashboard/desk-dashboard.yml').read_text(), expected_file)
+        actual_file = (ROOT / 'playbooks/dashboard/desk-dashboard.yml').read_text()
+        self.assertEqual(actual_file.partition('\n  post_tasks:')[0].rstrip('\n'), expected_file.rstrip('\n'))
+        self.assertEqual(yaml.safe_load(actual_file)[-1]['post_tasks'][1]['ansible.builtin.include_role']['name'], 'desk_backup_retention')
         rescue = transaction['rescue']
         self.assertEqual(rescue[-2]['ansible.builtin.systemd_service']['state'], 'reloaded')
         self.assertIn('-c', rescue[-3]['ansible.builtin.command']['argv'])

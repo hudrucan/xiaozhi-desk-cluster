@@ -1,0 +1,233 @@
+{
+  "/etc/desk-camera/command-core-policy.json": {
+    "file": "/etc/desk-camera/command-core-policy.json",
+    "type": "ansible"
+  },
+  "/etc/desk-camera/observation-core-policy.json": {
+    "file": "/etc/desk-camera/observation-core-policy.json",
+    "type": "ansible"
+  },
+  "/etc/desk-camera/recording-core-policy.json": {
+    "file": "/etc/desk-camera/recording-core-policy.json",
+    "type": "ansible"
+  },
+  "/etc/desk-camera/recording-policy/commands.json": {
+    "file": "/etc/desk-camera/recording-policy/commands.json",
+    "type": "ansible"
+  },
+  "/etc/desk-camera/recording-policy/observations.json": {
+    "file": "/etc/desk-camera/recording-policy/observations.json",
+    "type": "ansible"
+  },
+  "/etc/desk-camera/recording-policy/owner.json": {
+    "file": "/etc/desk-camera/recording-policy/owner.json",
+    "type": "ansible"
+  },
+  "/etc/desk-dns/backend-haproxy.cfg": {
+    "file": "/etc/desk-dns/backend-haproxy.cfg",
+    "type": "ansible"
+  },
+  "/etc/desk-dns/dnsdist.conf": {
+    "file": "/etc/desk-dns/dnsdist.conf",
+    "type": "ansible"
+  },
+  "/etc/desk-dns/ui-haproxy.cfg": {
+    "file": "/etc/desk-dns/ui-haproxy.cfg",
+    "type": "ansible"
+  },
+  "/etc/desk-homeassistant/proxy.cfg": {
+    "file": "/etc/desk-homeassistant/proxy.cfg",
+    "type": "ansible"
+  },
+  "/etc/desk-https/Caddyfile": {
+    "file": "/etc/desk-https/Caddyfile",
+    "type": "ansible"
+  },
+  "/etc/desk-https/cloudflare.env": {
+    "file": "/etc/desk-https/cloudflare.env",
+    "type": "ansible"
+  },
+  "/etc/keepalived/keepalived.conf": {
+    "file": "/etc/keepalived/keepalived.conf",
+    "type": "ansible"
+  },
+  "/etc/systemd/system/beszel-hub.service": {
+    "file": "/etc/systemd/system/beszel-hub.service",
+    "type": "ansible"
+  },
+  "/etc/systemd/system/desk-adguard.service": {
+    "file": "/etc/systemd/system/desk-adguard.service",
+    "type": "ansible"
+  },
+  "/etc/systemd/system/desk-caddy.service": {
+    "file": "/etc/systemd/system/desk-caddy.service",
+    "type": "ansible"
+  },
+  "/etc/systemd/system/desk-camera-thumbnails.service": {
+    "file": "/etc/systemd/system/desk-camera-thumbnails.service",
+    "type": "ansible"
+  },
+  "/usr/local/libexec/desk-camera/command_contract.py": {
+    "file": "/usr/local/libexec/desk-camera/command_contract.py",
+    "type": "ansible"
+  },
+  "/usr/local/libexec/desk-camera/command_worker.py": {
+    "file": "/usr/local/libexec/desk-camera/command_worker.py",
+    "type": "ansible"
+  },
+  "/usr/local/libexec/desk-camera/controller.py": {
+    "file": "/usr/local/libexec/desk-camera/controller.py",
+    "type": "ansible"
+  },
+  "/usr/local/libexec/desk-camera/media_delivery.py": {
+    "file": "/usr/local/libexec/desk-camera/media_delivery.py",
+    "type": "ansible"
+  },
+  "/usr/local/libexec/desk-camera/media_rpc.py": {
+    "file": "/usr/local/libexec/desk-camera/media_rpc.py",
+    "type": "ansible"
+  },
+  "/usr/local/libexec/desk-camera/observation_contract.py": {
+    "file": "/usr/local/libexec/desk-camera/observation_contract.py",
+    "type": "ansible"
+  },
+  "/usr/local/libexec/desk-camera/observation_worker.py": {
+    "file": "/usr/local/libexec/desk-camera/observation_worker.py",
+    "type": "ansible"
+  },
+  "/usr/local/libexec/desk-camera/playback.py": {
+    "file": "/usr/local/libexec/desk-camera/playback.py",
+    "type": "ansible"
+  },
+  "/usr/local/libexec/desk-camera/playback_worker.py": {
+    "file": "/usr/local/libexec/desk-camera/playback_worker.py",
+    "type": "ansible"
+  },
+  "/usr/local/libexec/desk-camera/recording_contract.py": {
+    "file": "/usr/local/libexec/desk-camera/recording_contract.py",
+    "type": "ansible"
+  },
+  "/usr/local/libexec/desk-camera/recording_jobs.py": {
+    "file": "/usr/local/libexec/desk-camera/recording_jobs.py",
+    "type": "ansible"
+  },
+  "/usr/local/libexec/desk-camera/recording_owner.py": {
+    "file": "/usr/local/libexec/desk-camera/recording_owner.py",
+    "type": "ansible"
+  },
+  "/usr/local/libexec/desk-camera/thumbnail_fetch.py": {
+    "file": "/usr/local/libexec/desk-camera/thumbnail_fetch.py",
+    "type": "ansible"
+  },
+  "/usr/local/libexec/desk-camera/thumbnail_worker.py": {
+    "file": "/usr/local/libexec/desk-camera/thumbnail_worker.py",
+    "type": "ansible"
+  },
+  "/usr/local/libexec/desk-camera/transport.py": {
+    "file": "/usr/local/libexec/desk-camera/transport.py",
+    "type": "ansible"
+  },
+  "/usr/local/libexec/desk-camera/warm_playback.py": {
+    "file": "/usr/local/libexec/desk-camera/warm_playback.py",
+    "type": "ansible"
+  },
+  "/usr/local/libexec/desk-cluster-panel/panel.py": {
+    "file": "/usr/local/libexec/desk-cluster-panel/panel.py",
+    "type": "ansible"
+  },
+  "/usr/local/libexec/desk-dashboard": {
+    "file": "/usr/local/libexec/desk-dashboard",
+    "type": "ansible"
+  },
+  "/usr/local/libexec/desk-homeassistant/component_config.py": {
+    "file": "/usr/local/libexec/desk-homeassistant/component_config.py",
+    "type": "ansible"
+  },
+  "/usr/local/libexec/desk-homeassistant/desk_cluster/__init__.py": {
+    "file": "/usr/local/libexec/desk-homeassistant/desk_cluster/__init__.py",
+    "type": "ansible"
+  },
+  "/usr/local/libexec/desk-homeassistant/desk_cluster/camera-card.js": {
+    "file": "/usr/local/libexec/desk-homeassistant/desk_cluster/camera-card.js",
+    "type": "ansible"
+  },
+  "/usr/local/libexec/desk-homeassistant/desk_cluster/camera_recordings.py": {
+    "file": "/usr/local/libexec/desk-homeassistant/desk_cluster/camera_recordings.py",
+    "type": "ansible"
+  },
+  "/usr/local/libexec/desk-homeassistant/desk_cluster/command_remote.py": {
+    "file": "/usr/local/libexec/desk-homeassistant/desk_cluster/command_remote.py",
+    "type": "ansible"
+  },
+  "/usr/local/libexec/desk-homeassistant/desk_cluster/observation_remote.py": {
+    "file": "/usr/local/libexec/desk-homeassistant/desk_cluster/observation_remote.py",
+    "type": "ansible"
+  },
+  "/usr/local/libexec/desk-homeassistant/desk_cluster/recording_model.py": {
+    "file": "/usr/local/libexec/desk-homeassistant/desk_cluster/recording_model.py",
+    "type": "ansible"
+  },
+  "/usr/local/libexec/desk-homeassistant/desk_cluster/recording_remote.py": {
+    "file": "/usr/local/libexec/desk-homeassistant/desk_cluster/recording_remote.py",
+    "type": "ansible"
+  },
+  "/usr/local/libexec/desk-homeassistant/desk_cluster/recording_sessions.py": {
+    "file": "/usr/local/libexec/desk-homeassistant/desk_cluster/recording_sessions.py",
+    "type": "ansible"
+  },
+  "/usr/local/libexec/desk-homeassistant/desk_cluster/recording_thumbnails.py": {
+    "file": "/usr/local/libexec/desk-homeassistant/desk_cluster/recording_thumbnails.py",
+    "type": "ansible"
+  },
+  "/usr/local/libexec/desk-homeassistant/recording_bootstrap.py": {
+    "file": "/usr/local/libexec/desk-homeassistant/recording_bootstrap.py",
+    "type": "ansible"
+  },
+  "/usr/local/libexec/desk-homeassistant/runtime.py": {
+    "file": "/usr/local/libexec/desk-homeassistant/runtime.py",
+    "type": "ansible"
+  },
+  "/usr/local/libexec/desk-homeassistant/ui_bridge.py": {
+    "file": "/usr/local/libexec/desk-homeassistant/ui_bridge.py",
+    "type": "ansible"
+  },
+  "caddy-binary": {
+    "directory": "/opt/desk-caddy",
+    "file": "caddy",
+    "type": "versioned"
+  },
+  "dashboard-routes": {
+    "parents": [
+      "/var/tmp"
+    ],
+    "prefix": "desk-dashboard-routes-",
+    "type": "directories"
+  },
+  "db-tmpfs": {
+    "parents": [
+      "/tmp",
+      "/var/tmp"
+    ],
+    "prefix": "desk-db-tmpfs-",
+    "type": "directories"
+  },
+  "legacy-emmc-round2": {
+    "parents": [
+      "/var/tmp"
+    ],
+    "prefix": "desk-emmc-round2-",
+    "type": "directories"
+  },
+  "legacy-ntfy": {
+    "parents": [
+      "/var/backups"
+    ],
+    "prefix": "desk-ntfy-",
+    "type": "directories"
+  },
+  "monitoring-binary": {
+    "directory": "/opt/desk-monitoring",
+    "file": "beszel-desk-ui",
+    "type": "versioned"
+  }
+}

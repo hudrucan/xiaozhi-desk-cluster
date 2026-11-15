@@ -1,0 +1,15 @@
+---
+- name: Prune only expired owned backups while retaining the newest of each kind
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/python3
+      - -c
+      - "{{ lookup('ansible.builtin.file', role_path + '/files/retention.py') }}"
+    stdin: >-
+      {{ {'days': desk_backup_retention_days,
+          'scopes': desk_backup_retention_scopes,
+          'catalog': lookup('ansible.builtin.file', role_path + '/files/catalog.json') | from_json,
+          'check': ansible_check_mode} | to_json }}
+  check_mode: false
+  register: desk_backup_pruned
+  changed_when: (desk_backup_pruned.stdout | from_json).deleted | length > 0

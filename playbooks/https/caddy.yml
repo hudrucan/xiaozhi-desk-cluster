@@ -24,3 +24,29 @@
   any_errors_fatal: true
   roles:
     - desk_https
+
+  post_tasks:
+  - name: Flush successful deployment handlers before backup retention
+    ansible.builtin.meta: flush_handlers
+    run_once: false
+    when: &id001
+    - ansible_play_hosts | length == ansible_play_hosts_all | length
+    - ansible_run_tags | difference(['all']) | length == 0
+    - ansible_skip_tags | length == 0
+    - ansible_failed_task is not defined
+    - ansible_play_hosts_all | map('extract', hostvars) | selectattr('ansible_failed_task', 'defined') | list | length == 0
+    - desk_https_phase | default('preflight') == 'caddy'
+  - name: Retain only recent and newest owned deployment backups
+    ansible.builtin.include_role:
+      name: desk_backup_retention
+      apply:
+        become: true
+        run_once: false
+    vars:
+      desk_backup_retention_scopes:
+      - /etc/desk-https/Caddyfile
+      - /etc/desk-https/cloudflare.env
+      - /etc/systemd/system/desk-caddy.service
+      - caddy-binary
+    run_once: false
+    when: *id001

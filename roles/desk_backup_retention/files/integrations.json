@@ -1,0 +1,21 @@
+[
+  "playbooks/camera/camera-commands.yml",
+  "playbooks/camera/camera-helpers.yml",
+  "playbooks/camera/camera-media-delivery.yml",
+  "playbooks/camera/camera-observations.yml",
+  "playbooks/camera/camera-recording-owner.yml",
+  "playbooks/cluster/healthchecks.yml",
+  "playbooks/dashboard/dashboard-helpers.yml",
+  "playbooks/dashboard/dashboard-routes.yml",
+  "playbooks/dashboard/desk-dashboard.yml",
+  "playbooks/dashboard/panel-homeassistant.yml",
+  "playbooks/dashboard/panel-network.yml",
+  "playbooks/dns/dns-resilience.yml",
+  "playbooks/dns/dns.yml",
+  "playbooks/https/caddy.yml",
+  "playbooks/monitoring/monitoring-ui.yml",
+  "playbooks/monitoring/monitoring.yml",
+  "playbooks/network/network-db-tmpfs.yml",
+  "playbooks/notifications/ntfy-integrations.yml",
+  "playbooks/pi-panel/deploy.yml"
+]
