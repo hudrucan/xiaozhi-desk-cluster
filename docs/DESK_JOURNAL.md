@@ -104,3 +104,21 @@ with physical eMMC writes. SSH, sudo and ordinary system activity may themselves
 be logged by the OS; the collector does not suppress those normal audit records.
 Do not redirect output to a node file when measuring writes. No live readings
 were taken as part of this repository change.
+
+## Periodic service logging
+
+DNS peer ARP, ingress peer ARP, DNS policy pull/filter refresh, VPN DDNS and
+transient network checkpoint workers use `LogLevelMax=notice`. Timer cadence and
+resource limits are unchanged. DNS/ARP stdout and stderr default to notice so
+existing failure diagnostics survive. DDNS keeps routine standby/unchanged output
+at info, emits confirmed updates and ownership changes at notice, and errors at
+err using systemd priority prefixes. Worker stdout/stderr remain captured by the
+existing pipe; controller checkpoint failures still produce warnings.
+
+On systemd 252, failed unit results are warning; unsuccessful process exits are
+notice (normal exit) or warning (signal). These survive the unit cutoff. Ordinary
+starting/finished/deactivated messages at info are filtered. Separate credential
+mount units are outside this filter; resource summaries already at notice may
+remain. This is not a global journald filter. See the
+[systemd.exec documentation](https://www.freedesktop.org/software/systemd/man/252/systemd.exec.html#LogLevelMax=)
+and [systemd 252 unit logging source](https://github.com/systemd/systemd/blob/v252/src/core/unit.c).

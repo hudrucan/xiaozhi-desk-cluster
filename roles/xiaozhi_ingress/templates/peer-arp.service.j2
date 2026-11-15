@@ -3,6 +3,8 @@ Description=Refresh floating VIP ARP on ingress peers while locally owned
 After=network-online.target keepalived.service
 
 [Service]
+LogLevelMax=notice
+SyslogLevel=notice
 Type=oneshot
 ExecStart=/usr/bin/python3 /usr/local/libexec/xiaozhi-peer-arp --config /etc/xiaozhi-peer-arp.json --snapshot {{ xiaozhi_ingress_state_file }}
 TimeoutStartSec=5

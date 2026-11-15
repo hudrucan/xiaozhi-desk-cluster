@@ -97,9 +97,10 @@ def main():
         if not is_owner():print('DDNS standby');return 0
         secret=credentials(load(Path(os.environ['CREDENTIALS_DIRECTORY'])/'cloudflare.json',4096))
         # Fresh startup health was checked above, before TLS initialization.
-        print('DDNS '+reconcile(Client(secret['api_token']),secret,owner=lambda:True,still_owner=lambda:is_owner(check_fresh=False)))
+        outcome=reconcile(Client(secret['api_token']),secret,owner=lambda:True,still_owner=lambda:is_owner(check_fresh=False))
+        print(('<5>' if outcome in ('updated','ownership_changed') else '')+'DDNS '+outcome)
         return 0
     except (Failure,OSError,ValueError,TypeError,KeyError) as e:
-        print('DDNS failed: '+(str(e) if isinstance(e,Failure) else 'local_or_response_invalid'))
+        print('<3>DDNS failed: '+(str(e) if isinstance(e,Failure) else 'local_or_response_invalid'))
         return 1
 if __name__=='__main__':raise SystemExit(main())

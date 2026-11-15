@@ -4,6 +4,8 @@ Wants=desk-dns-sync-agent.service
 After=desk-dns-sync-agent.service
 
 [Service]
+LogLevelMax=notice
+SyslogLevel=notice
 Type=oneshot
 User=desk-dns-sync
 Group=desk-dns-sync

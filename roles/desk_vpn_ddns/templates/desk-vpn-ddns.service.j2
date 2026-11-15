@@ -3,6 +3,9 @@ Description=Owner-only Cloudflare DDNS for Desk WireGuard
 After=network-online.target
 
 [Service]
+LogLevelMax=notice
+SyslogLevel=info
+SyslogLevelPrefix=yes
 Type=oneshot
 ExecStart=/usr/bin/python3 /usr/local/libexec/desk-vpn-ddns/ddns.py
 LoadCredential=cloudflare.json:/etc/desk-vpn-ddns/cloudflare.json

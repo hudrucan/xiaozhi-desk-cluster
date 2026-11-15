@@ -3,6 +3,8 @@ Description=Refresh shared AdGuard filters sequentially from the DNS VIP owner
 After=desk-dns-sync-agent.service
 Wants=desk-dns-sync-agent.service
 [Service]
+LogLevelMax=notice
+SyslogLevel=notice
 Type=oneshot
 User=desk-dns-sync
 Group=desk-dns-sync

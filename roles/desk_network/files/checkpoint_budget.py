@@ -84,6 +84,7 @@ def execute(command, blob=None):
     runner = ['/usr/bin/systemd-run', '--quiet', '--pipe', '--wait', '--collect',
               '--unit=' + unit, '--slice=' + SLICE,
               '--property=BindsTo=desk-network.service',
+              '--property=LogLevelMax=notice',
               '--property=After=desk-network.service',
               '--property=RuntimeMaxSec=50', '--property=TimeoutStopSec=2',
               '--property=CPUQuota=50%', '--property=MemoryMax=' + _WORKER_MEMORY_MAX,

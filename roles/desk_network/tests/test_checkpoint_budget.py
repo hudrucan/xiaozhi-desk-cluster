@@ -14,6 +14,7 @@ class CheckpointBudget(unittest.TestCase):
    result=budget.execute(['/usr/bin/python3','/fixed/ha.py','--snapshot-worker','validate'],b'private-checkpoint')
   args=run.call_args.args[0]
   self.assertIn('--slice=desk-network-checkpoint.slice',args)
+  self.assertIn('--property=LogLevelMax=notice',args)
   self.assertIn('--property=BindsTo=desk-network.service',args)
   self.assertIn('--property=RuntimeMaxSec=50',args)
   self.assertIn('--property=CPUQuota=50%',args)
