@@ -81,6 +81,7 @@
     loop:
     - /etc/desk-network/config.json
     - /usr/local/libexec/desk-network/ha.py
+    - /usr/local/libexec/desk-network/checkpoint_source.py
     - /usr/local/libexec/desk-network/db-mounts-noop.py
     - /etc/systemd/system/desk-network.service
     - /etc/systemd/system/var-lib-desk\x2dnetwork-data-db.mount
@@ -121,10 +122,11 @@
       when: not (desk_network_db_tmpfs | bool) and tmpfs_previous
     - name: Install controller with host and container mount guards
       ansible.builtin.copy:
-        src: '{{ desk_repo_root }}/roles/desk_network/files/ha.py'
-        dest: /usr/local/libexec/desk-network/ha.py
+        src: '{{ desk_repo_root }}/roles/desk_network/files/{{ item }}'
+        dest: '/usr/local/libexec/desk-network/{{ item }}'
         mode: '0755'
         validate: python3 -m py_compile %s
+      loop: [checkpoint_source.py, ha.py]
     - name: Change only the DB storage flag in the installed private configuration
       ansible.builtin.command:
         argv:
@@ -244,3 +246,25 @@
         daemon_reload: true
     - ansible.builtin.fail:
         msg: DB storage canary failed; previous files and storage mode restored. Review recovery; do not advance.
+
+  post_tasks:
+  - name: Flush successful deployment handlers before backup retention
+    ansible.builtin.meta: flush_handlers
+    run_once: false
+    when: &id001
+    - ansible_play_hosts | length == ansible_play_hosts_all | length
+    - ansible_run_tags | difference(['all']) | length == 0
+    - ansible_skip_tags | length == 0
+    - ansible_failed_task is not defined
+    - ansible_play_hosts_all | map('extract', hostvars) | selectattr('ansible_failed_task', 'defined') | list | length == 0
+  - name: Retain only recent and newest owned deployment backups
+    ansible.builtin.include_role:
+      name: desk_backup_retention
+      apply:
+        become: true
+        run_once: false
+    vars:
+      desk_backup_retention_scopes:
+      - db-tmpfs
+    run_once: false
+    when: *id001

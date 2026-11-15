@@ -1,2 +1,4 @@
 ---
 desk_network_db_tmpfs: false
+desk_network_checkpoint_max_age_seconds: 21600
+desk_network_arp_grace_seconds: 600

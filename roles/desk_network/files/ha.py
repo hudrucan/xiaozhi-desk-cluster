@@ -117,6 +117,11 @@ class Store:
    self.blob(meta['digest'])
    if self.head and meta['revision']<self.head['revision']:return
    if self.head and meta['revision']==self.head['revision'] and meta['digest']!=self.head['digest']:raise Unavailable('Conflicting checkpoint')
+   # Retried commits must validate the durable blob, but need no new fsync.
+   if self.head==meta:
+    try:
+     if (self.root/'head.json').read_bytes()==encoded(meta):return
+    except FileNotFoundError:pass
    atomic(self.root/'head.json',encoded(meta));self.head=meta
    keep={meta['digest']+'.gz'}
    for p in self.root.glob('*.gz'):
@@ -135,6 +140,7 @@ def snapshot_worker(action,*,data=None,run=None,blob=None):
  # JSON/base64/SQLite scratch allocations must not accumulate in the lease/UI
  # threads' allocator arenas. A short-lived worker releases all of them.
  cmd=['/usr/local/libexec/desk-network/rust/desk-checkpoint','--snapshot-worker',action,'--bridge','/usr/local/libexec/desk-network/rust/bridge.py','--ha',str(pathlib.Path(__file__).resolve()),'--python',sys.executable]
+ if action=='semantic':cmd=[sys.executable,str(pathlib.Path(__file__).with_name('checkpoint_source.py')),'--data',str(data)]
  # Production callers share the controller runtime root for startup recovery.
  # Keep the temporary-directory fallback for standalone/source-host callers.
  if run is None:
@@ -354,6 +360,10 @@ class Cluster:
   if not self.store.head or meta['revision']>self.store.head['revision']:
    blob=base64.b64decode(self.call(n,'blob',{'digest':meta['digest']},timeout=5)['blob'],validate=True)
    self.store.stage(meta,blob,self.node);self.store.commit(meta)
+ def checkpoint_age_due(self):
+  maximum=float(getattr(self,'c',{}).get('checkpoint_max_age_seconds',21600))
+  if not 0<maximum<float('inf'):raise Unavailable('Checkpoint maximum age must be finite and positive')
+  return not self.store.head or not 0<=time.time()-self.store.head.get('at',0)<maximum
  def snapshot(self,expected_term=None,force=True):
   with self.snaplock:
    # Only the cheap change probe shares the ownership lock. Worker execution
@@ -367,23 +377,41 @@ class Cluster:
     except Exception:self.retire_checkpoint_source(source);source=None;before=None
     if not self.owned() or self.term!=term:
      self.retire_checkpoint_source(source);raise Unavailable('Lease changed during checkpoint probe')
-    if not force and source and self.store.head and source.unchanged(term,before,self.store.head['digest']):
+    due=self.checkpoint_age_due()
+    pending=getattr(self,'sync_state','synced')!='synced'
+    if not force and not due and not pending and source and self.store.head and source.unchanged(term,before,self.store.head['digest']):
      self.last_snapshot=clock();self.sync_state='synced';return
+   fingerprint=None
+   if not force:
+    try:
+     fingerprint=snapshot_worker('semantic',data=self.root/'data',run=self.run).decode().strip()
+     if len(fingerprint)!=64 or any(c not in '0123456789abcdef' for c in fingerprint):raise ValueError('Invalid semantic fingerprint')
+    except checkpoint_budget.WorkerNotStopped:raise
+    except Exception:fingerprint=None  # Uncertain probe cannot suppress a full checkpoint.
+    with self.oplock:
+     if not self.owned() or self.term!=term:raise Unavailable('Lease changed during semantic checkpoint')
+     if fingerprint and not due and not pending and self.store.head and getattr(self,'_semantic_checkpoint',None)==(tuple(term),self.store.head['digest'],fingerprint):
+      if source:source.accept(term,before,self.store.head['digest'])
+      self.last_snapshot=clock();self.sync_state='synced';return
    blob=snapshot_worker('create',data=self.root/'data',run=self.run)
    if not self.owned() or self.term!=term:raise Unavailable('Lease changed during checkpoint')
-   if not self.store.head or sha(blob)!=self.store.head['digest']:
+   if force or due or pending or not self.store.head or sha(blob)!=self.store.head['digest']:
     self.sequence+=1;meta={'revision':term+[self.sequence],'digest':sha(blob),'at':time.time()}
     replies=self.fanout('stage',{'meta':meta,'blob':base64.b64encode(blob).decode()},timeout=checkpoint_budget.STAGE_TIMEOUT)
     if len(replies)<2: self.sync_state='pending';raise Unavailable('Checkpoint needs two replicas')
     meta['certificate']=list(replies.values());self.store.verify(meta)
     if not self.owned() or self.term!=term:raise Unavailable('Lease changed during checkpoint')
     replies=self.fanout('commit',{'meta':meta},timeout=3)
-    if len(replies)<2:self.sync_state='pending';raise Unavailable('Checkpoint acknowledgment pending')
+    if len(replies)<2 or self.store.head!=meta:self.sync_state='pending';raise Unavailable('Checkpoint acknowledgment pending')
    with self.oplock:
     if not self.owned() or self.term!=term:raise Unavailable('Lease changed during checkpoint commit')
     if source:
      try:source.accept(term,before,self.store.head['digest'])
      except Exception:self.retire_checkpoint_source(source)
+    # Never associate a probe with a different backup after a concurrent writer.
+    try:stable=source is not None and source.stamp()==before
+    except Exception:stable=False
+    self._semantic_checkpoint=(tuple(term),self.store.head['digest'],fingerprint) if fingerprint and stable else None
     self.last_snapshot=clock();self.sync_state='synced'
  def retire_checkpoint_source(self,source=None):
   if source is None:source=getattr(self,'_checkpoint_source',None);self._checkpoint_source=None
@@ -437,7 +465,7 @@ class Cluster:
    cmd+=['-v','/usr/local/libexec/desk-network/mdns.py:/app/desk_network/mdns.py:ro','-v','/usr/local/libexec/desk-network/arp.py:/app/desk_network/arp.py:ro','-v','/usr/local/libexec/desk-network/discovery.py:/app/desk_network/discovery.py:ro']
    if self.c.get('db_tmpfs',False):cmd+=['-v',str(self.root/'data/db')+':/data/db:rw','-v',str(DB_MOUNTS_CHECK)+':/entrypoint.d/15-mounts.py:ro']
    if self.c.get('scan_distributed'):
-    cmd+=['-v','/run/desk-network-scan:/run/desk-network-scan:ro','-e','DESK_NETWORK_DISTRIBUTED=1']
+    cmd+=['-v','/run/desk-network-scan:/run/desk-network-scan:ro','-e','DESK_NETWORK_DISTRIBUTED=1','-e','DESK_NETWORK_ARP_GRACE_SECONDS='+str(self.c.get('arp_grace_seconds',600))]
    for cap in ('NET_ADMIN','NET_RAW','NET_BIND_SERVICE','CHOWN','SETUID','SETGID'):cmd+=['--cap-add='+cap]
    if self.warm:
     cmd+=['-v','/usr/local/libexec/desk-network/api_read_cache.py:/app/desk_network/api_read_cache.py:ro','-v',str(self.warm_path)+':/run/desk-network-warm:ro','-v','/usr/local/libexec/desk-network/warm_runtime.py:/app/desk_network/warm_runtime.py:ro','-v','/usr/local/libexec/desk-network/warm-backend.sh:/services/start-backend.sh:ro','-v','/usr/local/libexec/desk-network/warm-idle.sh:/services/start-php-fpm.sh:ro','-v','/usr/local/libexec/desk-network/warm-idle.sh:/services/start-cron.sh:ro']

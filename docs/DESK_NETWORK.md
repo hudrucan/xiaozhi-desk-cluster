@@ -214,6 +214,31 @@ than fabricating an all-offline cycle. Successful scans deduplicate VIP aliases
 by MAC, prefer physical node IPs, and include the scanning node's verified local
 interface identity (ARP cannot discover itself). An inconclusive cycle retains
 last-known presence until a later successful scan; this is not fresh health.
+Successful distributed ARP imports apply a presence grace period of 600 seconds.
+`desk_network_arp_grace_seconds` renders `arp_grace_seconds` in the controller
+config and becomes `DESK_NETWORK_ARP_GRACE_SECONDS` in the container; zero disables
+holding. The adapter stores each MAC's last observed IP and wall-clock timestamp
+in `/tmp/desk-arp-presence.json`. The container already mounts `/tmp` as a private
+256 MiB tmpfs in both disk and DB-tmpfs modes, so this file never enters durable
+checkpoints. Updates are atomic under the adapter lock, bounded to 2,048 MACs and
+256 KiB on read. Malformed/unreadable state is treated as empty; invalid, expired
+or future entries are discarded. A cache write failure is reported as
+`grace_state=unavailable` without rejecting the valid scan.
+
+Newly observed MACs appear immediately; actual sightings refresh the last IP and
+time. A missing MAC remains present for at most 600 seconds after its last real
+sighting, without extending that deadline on held scans. Current replies win if
+a different MAC takes its old IP. Stats and the `Desk ARP` log report `held`
+separately from the worker's fresh `received` count. A genuinely offline device
+will therefore disconnect only at the first successful scan after the grace
+expires (about ten minutes plus scan scheduling), rather than immediately.
+A failed scan still imports no rows and does not update grace state. The state
+is local to each container, not replicated; failover, recreation or stale state
+can reset the grace history. A warm container may retain its own recent state
+on handoff; grace continuity between owners is not guaranteed. The native
+ARPSCAN fallback is unchanged. This reduces short ARP flaps, not every source of
+checkpoint churn; no production write reduction is claimed without measurement.
+
 ARP jobs get at most two sequential 18-second attempts (45-second local socket
 timeout, 60-second native plugin timeout). Scheduled mDNS remains cached.
 If distributed execution is disabled, the adapter delegates to the unchanged
@@ -352,14 +377,59 @@ POSTs are never replayed automatically. HTTP/1.0 peers remain compatible during
 rolling updates. Idle pooled sockets are discarded on checkout after eight seconds; server-side
 request admission and idle timeouts remain bounded. TLS responses disable Nagle buffering.
 
-Periodic checkpoints may skip backup/compression only after a successful certified
-snapshot of the same source, term and head digest. A retained read-only SQLite
-connection observes external commits through `data_version`, and database inode,
-configuration and workflow contents are checked too. Missing/broken metadata
-falls back to a full checkpoint. UI writes, rebalance and drains always request
-full snapshots. The detector never holds a read transaction across calls. Fencing retires its
-connection, and both cold restore and warm promotion close it before replacing
-the database; late jobs cannot reopen a retired detector.
+Periodic checkpoint checks still run every five minutes. The retained read-only
+`data_version`/inode/configuration detector is the cheapest first gate. When it
+changes, a short-lived semantic worker reads one consistent SQLite transaction;
+it excludes only whole tables `AppEvents`, `Online_History`, `CurrentScan`,
+`sqlite_sequence`, and `Devices.devLastConnection`. All other table/column data,
+schema, configuration and workflows remain included, including unknown tables,
+Events, Sessions, Settings, Plugins_Objects, Plugins_History,
+Plugins_Language_Strings and Notifications. No scan schedule is changed.
+
+The SHA-256 fingerprint uses typed rows in deterministic SQLite/BINARY order,
+including duplicates, without rowid/page-layout dependence. SQLite sorting stays
+in RAM. The worker runs through the existing checkpoint slice, CPU/memory/time
+limits, recovery marker and kill/reap cleanup; no fingerprint is persisted. A
+fingerprint can skip backup/compression, stage/commit and head writes only for
+the same lease term and acknowledged local head. Probe/backup races invalidate
+the RAM cache. A restart/new term conservatively reestablishes that cache from a
+full checkpoint; pending acknowledgments cannot take the skip path.
+
+`desk_network_checkpoint_max_age_seconds` defaults to 21600 (six hours); the
+installed JSON key is `checkpoint_max_age_seconds`, also defaulting to 21600 when
+absent. A finite positive value is required. At the next periodic check after
+that age, even an unchanged source forces a full checkpoint and new certified
+head timestamp. UI writes, rebalance and warm-drain always force full snapshots
+and certify a new revision, even for byte-identical content; existing durable
+blobs can still be reused. Periodic byte-identical backups may avoid replication
+when not overdue. Gzip remains deterministic and checkpoint/restore format is
+unchanged. Identical commit replays still validate the blob/head before skipping
+head writes; missing heads are repaired before acknowledgment.
+
+Standby freshness remains based on certified revision and lease state, not
+`head.at` age. Semantic-only skips leave sync=synced and the prior head intact;
+they intentionally do not replicate the excluded last-seen/log/temporary data.
+Under healthy quorum that data can lag approximately six hours plus the periodic
+check and worker delay. Semantic changes become eligible at the next five-minute
+check; UI mutations continue using forced majority-acknowledged snapshots.
+Quorum/worker failure can extend either RPO, so six hours is a refresh target,
+not a durability guarantee during an outage. Restore always uses the complete
+certified SQLite backup, including excluded tables as of that checkpoint.
+
+For planned shutdown, first request `touch /run/desk-network/warm-drain`, verify a
+new full checkpoint revision/certificate on the replicas and a healthy replacement
+owner, then stop the old standby. The existing drain branch still withdraws on
+snapshot failure: handoff alone is not proof of a successful final checkpoint.
+Direct SIGTERM/systemctl stop retains the existing 12-second lifecycle and worker
+BindsTo behavior and cannot guarantee a final snapshot; drain before stop is
+required. Lease-loss fencing never waits for a checkpoint. Both cold restore and
+warm promotion retire the source connection before replacing the DB.
+
+Transient checkpoint units filter lifecycle info at notice without changing their
+pipe protocol or budgets. Savings depend on the retained data actually remaining
+stable: timestamps in any non-excluded column, real events and configuration
+changes still require checkpoints. Do not infer savings merely from a stable
+filename; measure state writes and block I/O after a canary.
 
 Static API read models use connection-local TEMP table-revision triggers for the
 exact pinned SELECTs. Resource_History writes do not invalidate Settings or

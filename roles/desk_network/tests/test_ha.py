@@ -343,7 +343,7 @@ context.window.deskNetworkSessionStorage.clear();assert.equal(session.xiaozhi,'k
  def test_snapshot_rejects_term_change_and_lease_loss_during_worker(self):
   for change in ('term','lease'):
    c=ha.Cluster.__new__(ha.Cluster);c.snaplock=threading.Lock();c.oplock=threading.RLock();c.term=[1,'a'];c.owned=lambda:True
-   c.root=pathlib.Path('/unused');c.run=c.root;c.store=MagicMock();c.fanout=MagicMock();c.last_snapshot=10.
+   c.root=pathlib.Path('/unused');c.run=c.root;c.store=MagicMock();c.store.head=None;c.fanout=MagicMock();c.last_snapshot=10.
    def changed(*args,**kwargs):
     if change=='term':c.term=[2,'a']
     else:c.owned=lambda:False

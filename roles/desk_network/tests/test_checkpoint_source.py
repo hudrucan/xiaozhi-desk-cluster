@@ -42,11 +42,13 @@ class SourceTests(unittest.TestCase):
   c.deactivate_warm=stopped;c.kill_container();self.assertEqual(c.until,0)
  def test_only_periodic_snapshot_can_skip_and_force_still_runs_worker(self):
   c=ha.Cluster.__new__(ha.Cluster);c.snaplock=threading.Lock();c.oplock=threading.RLock();c.term=[1,'a'];c.owned=lambda:True
-  c.root=self.root.parent;c.run=self.root/'run';c._checkpoint_source=self.source;c.store=MagicMock();c.store.head={'digest':ha.sha(b'blob')}
+  c.root=self.root.parent;c.run=self.root/'run';c._checkpoint_source=self.source;c.store=MagicMock();c.store.head={'digest':ha.sha(b'blob'),'at':ha.time.time()}
   c._checkpoint_source.accept(c.term,self.source.stamp(),c.store.head['digest'])
   with patch.object(ha,'snapshot_worker',return_value=b'blob') as worker:
    c.snapshot(force=False);worker.assert_not_called()
-   c.snapshot();worker.assert_called_once()
+  with patch.object(ha,'snapshot_worker',side_effect=ha.Unavailable('forced worker reached')) as worker:
+   with self.assertRaisesRegex(ha.Unavailable,'forced worker reached'):c.snapshot()
+   worker.assert_called_once()
  def test_probe_racing_fencing_closes_its_captured_handle(self):
   c=ha.Cluster.__new__(ha.Cluster);c.snaplock=threading.Lock();c.oplock=threading.RLock();c.term=[1,'a'];c.until=110
   c.owned=lambda:c.until>100;c.root=self.root.parent;c.run=self.root/'run';c._checkpoint_source=self.source
