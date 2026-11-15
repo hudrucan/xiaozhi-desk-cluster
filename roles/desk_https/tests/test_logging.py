@@ -40,7 +40,7 @@ class HealthLogging(unittest.TestCase):
             self.assertEqual(updated.count(request_rule), 1)
             # Pin the complete log action set to the two HAProxy 2.6-compatible forms.
             actions = re.findall(r'^    http-\S+ set-log-level[^\n]*\n', updated, re.MULTILINE)
-            self.assertCountEqual(actions, [request_rule, response_rule, response_rule])
+            self.assertCountEqual(actions, [request_rule, response_rule, response_rule, proxy.POLL_LOGGING.splitlines(keepends=True)[1]])
             self.assertNotIn('http-after-response set-log-level', updated)
             for name in ('cluster', 'ntfy', 'ha'):
                 block = updated.split(f'# BEGIN DESK HTTPS {name.upper()}\n')[1].split(f'# END DESK HTTPS {name.upper()}\n')[0]

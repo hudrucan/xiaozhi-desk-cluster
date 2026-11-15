@@ -9,13 +9,33 @@ this guide establishes live certificate readiness or authorizes a rollout.
 
 The shared HAProxy composer suppresses access logs only for successful (HTTP 200)
 trusted mesh GET checks of the exact `/__desk_https_health` path on the three
-local HTTP frontends. Failed checks and ordinary client requests retain existing
-logging. On HAProxy 2.6, cluster sets `http-request set-log-level silent` immediately
+local HTTP frontends. Failed checks retain existing logging; client polling has the separate policy below. On HAProxy 2.6, cluster sets `http-request set-log-level silent` immediately
 before its fixed local 200 reply; NTFY/HA use `http-response set-log-level silent`
 only after backend status 200. Do not use `http-after-response set-log-level`,
 which is unavailable on 2.6. The TCP TLS passthrough frontend cannot inspect HTTP
 paths and retains its logs; NTFY's existing `no log` policy is unchanged. Logrotate is not managed
 by this repository.
+
+On the management HTTP frontend (VIP :80 and the cluster Caddy Unix upstream
+used by :443), only GET requests to the exact paths `/api/cluster/panel`,
+`/api/cluster/status` and `/monitor/api/realtime` suppress access logs when the
+backend returns HTTP 200–299. Query strings do not change that path match.
+The request records a transaction flag before backend path rewrites; the
+`http-response set-log-level silent` rule checks that flag and `status 200:299`.
+Both the full ingress template and incremental composer emit the policy inside
+existing UI/monitoring markers; routing, ACLs and `ui_guard` remain unchanged.
+Operations, POST/PUT/DELETE/HEAD, near-match paths, 3xx/4xx/5xx and failures before
+response headers (connection refusal, empty responses, header timeout and
+`<NOSRV>`) retain their logs. These actions use HAProxy 2.6 syntax; do not replace
+them with an unsupported `http-after-response` action.
+
+Suppression happens on receipt of 2xx headers, before the body completes. A
+subsequent client abort, truncated body or body timeout can therefore also be
+silent; the policy cannot guarantee logging those late errors. The encrypted
+TCP frontend keeps its connection logs. To revert only polling suppression,
+restore the preceding composer/template, recompose the full HTTP configuration,
+validate it together with MQTT and reload one node at a time; keep the existing
+mesh health policy.
 
 The existing management VIP `192.168.1.186:443` runs HAProxy TCP passthrough to
 three native ARM64 Caddy instances on `10.10.10.11–13:8443`. Each of the four

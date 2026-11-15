@@ -91,6 +91,10 @@ def full_candidate(current, rendered):
     """A full ingress or HA rerun must retain the installed HTTPS activation."""
     return https_candidate(rendered, https_fragment(current)) if https_fragment(current) else rendered
 
+POLL_LOGGING = ('    http-request set-var(txn.desk_poll) bool(true) if { method GET } { path /api/cluster/panel /api/cluster/status /monitor/api/realtime }\n'
+                '    http-response set-log-level silent if { var(txn.desk_poll) -m bool } { status 200:299 }\n')
+
+
 ROUTE = '''# BEGIN DESK MONITORING ROUTE
     http-request redirect location /monitor/ code 302 if { path /monitor }
     use_backend desk_monitoring_hubs if { path_beg /monitor/ }
@@ -152,6 +156,12 @@ def candidate(current, backend, dns_backend=None, dashboard_backend=None, vpn_ba
     # Insert monitoring after an existing DNS block; preserve it on monitoring-only reruns.
     route = ROUTE.replace('    http-request redirect location /monitor/ code 302 if { path /monitor }\n', '') if dns_backend is not None else ROUTE
     dns_route = DNS_ROUTE
+    # Capture the original method/path before any backend rewrites. Keep the
+    # response action inside a managed route boundary already excluded by ui_guard.
+    if dns_backend is not None:
+        dns_route = dns_route.replace('# BEGIN DESK DNS UI ROUTE\n', '# BEGIN DESK DNS UI ROUTE\n' + POLL_LOGGING)
+    else:
+        route = route.replace('# BEGIN DESK MONITORING ROUTE\n', '# BEGIN DESK MONITORING ROUTE\n' + POLL_LOGGING)
     if dashboard_backend is not None:
         dns_route = dns_route.replace('!{ path_beg /dns /monitor }', '!{ path_beg /dns /monitor /api/cluster/status /api/cluster/panel /api/cluster/operations }')
         dns_route = dns_route.replace('    http-request return status 200 content-type text/html file /etc/desk-ui/index.html if { path / }\n', '')
