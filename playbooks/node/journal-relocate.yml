@@ -1,0 +1,133 @@
+---
+- name: Relocate persistent journal on one canary at a time
+  hosts: deskboxes
+  become: true
+  gather_facts: false
+  serial: 1
+  order: inventory
+  any_errors_fatal: true
+  tasks:
+  - name: Inspect journal location
+    ansible.builtin.stat:
+      path: /var/log/journal
+      follow: false
+    register: journal_location
+  - name: Relocate only the existing symlink journal
+    when:
+    - journal_location.stat.islnk | default(false)
+    - not ansible_check_mode
+    block:
+    - name: Count entries before relocation
+      ansible.builtin.command:
+        argv:
+        - python3
+        - -c
+        - '{{ lookup(''file'', playbook_dir + ''/files/journal-safety.py'') }}'
+        - count
+      register: journal_count_before
+      changed_when: false
+    - name: Flush persistent journal
+      ansible.builtin.command:
+        argv:
+        - journalctl
+        - --flush
+    - name: Synchronize journal files
+      ansible.builtin.command:
+        argv:
+        - journalctl
+        - --sync
+    - name: Atomically exchange directory and symlink
+      ansible.builtin.command:
+        argv:
+        - python3
+        - -c
+        - '{{ lookup(''file'', playbook_dir + ''/files/journal-relocate.py'') }}'
+        - move
+      register: journal_move
+      changed_when: journal_move.stdout == 'changed'
+    - name: Reopen journal in its real directory
+      ansible.builtin.systemd_service:
+        name: systemd-journald
+        state: restarted
+    - name: Flush after reopening
+      ansible.builtin.command:
+        argv:
+        - journalctl
+        - --flush
+    - name: Require persistent flush flag
+      ansible.builtin.stat:
+        path: /run/systemd/journal/flushed
+      register: journal_flag
+    - name: Seal existing journals before verifying only archives
+      ansible.builtin.command:
+        argv:
+        - journalctl
+        - --rotate
+    - name: Verify archived journals and active journal location and permissions
+      ansible.builtin.command:
+        argv:
+        - python3
+        - -c
+        - '{{ lookup(''file'', playbook_dir + ''/files/journal-relocate.py'') }}'
+        - verify-archives
+      register: journal_archives
+      changed_when: false
+      until: journal_archives.rc == 0
+      retries: 3
+      delay: 2
+    - name: Count entries after relocation
+      ansible.builtin.command:
+        argv:
+        - python3
+        - -c
+        - '{{ lookup(''file'', playbook_dir + ''/files/journal-safety.py'') }}'
+        - count
+      register: journal_count_after
+      changed_when: false
+    - name: Require preserved count and persistent writes
+      ansible.builtin.assert:
+        that:
+        - journal_flag.stat.exists
+        - journal_count_after.stdout | int >= journal_count_before.stdout | int
+    - name: Require journald and ingress services active before committing relocation
+      ansible.builtin.command:
+        argv:
+        - systemctl
+        - is-active
+        - --quiet
+        - '{{ item }}'
+      loop:
+      - systemd-journald
+      - haproxy
+      - keepalived
+      - desk-caddy
+      register: journal_services
+      until: journal_services.rc == 0
+      retries: 3
+      delay: 2
+      changed_when: false
+    - name: Retire only exchange symlink and empty old parent
+      ansible.builtin.command:
+        argv:
+        - python3
+        - -c
+        - '{{ lookup(''file'', playbook_dir + ''/files/journal-relocate.py'') }}'
+        - finish
+    rescue:
+    - name: Restore the original journal symlink and directory
+      ansible.builtin.command:
+        argv:
+        - python3
+        - -c
+        - '{{ lookup(''file'', playbook_dir + ''/files/journal-relocate.py'') }}'
+        - rollback
+      register: journal_rollback
+      changed_when: journal_rollback.stdout == 'changed'
+    - name: Reopen rolled back journal
+      ansible.builtin.systemd_service:
+        name: systemd-journald
+        state: restarted
+      when: journal_rollback.stdout == 'changed'
+    - ansible.builtin.fail:
+        msg: Journal relocation failed; restored the old path when exchange had started. Inspect journal and stage paths before
+          retry.

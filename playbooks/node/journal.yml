@@ -7,34 +7,146 @@
   serial: 1
   any_errors_fatal: true
   tasks:
-    - name: Create the journald drop-in directory
-      ansible.builtin.file:
-        path: /etc/systemd/journald.conf.d
-        state: directory
-        owner: root
-        group: root
-        mode: '0755'
-    - name: Retain up to 200M of persistent journal data
-      ansible.builtin.copy:
-        dest: /etc/systemd/journald.conf.d/90-desk-journal.conf
-        content: "[Journal]\nSystemMaxUse=200M\n"
-        owner: root
-        group: root
-        mode: '0644'
-      notify: Restart systemd-journald
-    - name: Apply journal changes before checking services
-      ansible.builtin.meta: flush_handlers
-    - name: Require journald and ingress services active before advancing
-      ansible.builtin.command:
-        argv: [/usr/bin/systemctl, is-active, --quiet, '{{ item }}']
-      loop: [systemd-journald, haproxy, keepalived, desk-caddy]
-      register: desk_journal_service
-      until: desk_journal_service.rc == 0
-      retries: 3
-      delay: 2
-      changed_when: false
+  - name: Ensure the local helper directory exists
+    ansible.builtin.file:
+      path: /usr/local/libexec
+      state: directory
+      owner: root
+      group: root
+      mode: '0755'
+  - name: Install journal safety helper
+    ansible.builtin.copy:
+      src: files/journal-safety.py
+      dest: /usr/local/libexec/desk-journal-safety.py
+      owner: root
+      group: root
+      mode: '0755'
+  - name: Install validated rotation for live Armbian log paths
+    ansible.builtin.copy:
+      src: files/desk-node-logs
+      dest: /etc/logrotate.d/desk-node-logs
+      owner: root
+      group: root
+      mode: '0644'
+      validate: /usr/bin/python3 /usr/local/libexec/desk-journal-safety.py validate %s
+  - name: Measure existing journal data and logrotate coverage before changes
+    ansible.builtin.command:
+      argv:
+      - /usr/bin/python3
+      - -c
+      - '{{ lookup(''ansible.builtin.file'', playbook_dir + ''/files/journal-safety.py'') }}'
+      - inspect
+    register: desk_journal_measurement
+    changed_when: false
+    check_mode: false
+  - name: Record the read-only journal measurements
+    ansible.builtin.set_fact:
+      desk_journal_before: '{{ desk_journal_measurement.stdout | from_json }}'
+  - name: Display journal sizes and entry count before changes
+    ansible.builtin.debug:
+      var: desk_journal_before
+  - name: Require flush headroom and log rotation before any changes
+    ansible.builtin.assert:
+      that:
+      - desk_journal_before.disk_bytes + desk_journal_before.ram_bytes <= desk_journal_before.safe_bytes
+      - desk_journal_before.rotation_rc == 0
+      - desk_journal_before.rotation_uncovered | length == 0
+      fail_msg: 'Stop: journal exceeds 160 MiB, or logrotate coverage is missing/invalid; review measurements before proceeding.'
+  - name: Inspect the persistent journal flush flag
+    ansible.builtin.stat:
+      path: /run/systemd/journal/flushed
+    register: desk_journal_flushed
+  - name: Flush the journal to disk only when not already flushed
+    ansible.builtin.command:
+      argv:
+      - /usr/bin/journalctl
+      - --flush
+    when: not desk_journal_flushed.stat.exists
+  - name: Inspect the flush flag after the flush
+    ansible.builtin.stat:
+      path: /run/systemd/journal/flushed
+    register: desk_journal_flushed_after
+  - name: Require persistent journal writes before advancing
+    ansible.builtin.assert:
+      that: desk_journal_flushed_after.stat.exists
+    when: not ansible_check_mode
+  - name: Count journal entries after the flush
+    ansible.builtin.command:
+      argv:
+      - /usr/bin/python3
+      - -c
+      - '{{ lookup(''ansible.builtin.file'', playbook_dir + ''/files/journal-safety.py'') }}'
+      - count
+    register: desk_journal_count_after
+    changed_when: false
+    check_mode: false
+  - name: Require no entry count loss before changing ramlog or retention
+    ansible.builtin.assert:
+      that: desk_journal_count_after.stdout | int >= desk_journal_before.entries
+    when: not ansible_check_mode
+  - name: Inspect the optional Armbian ramlog configuration
+    ansible.builtin.stat:
+      path: /etc/default/armbian-ramlog
+    register: desk_journal_ramlog
+  - name: Disable Armbian ramlog and its periodic journal relinquish
+    ansible.builtin.lineinfile:
+      path: /etc/default/armbian-ramlog
+      regexp: ^ENABLED=
+      line: ENABLED=false
+      create: false
+    when: desk_journal_ramlog.stat.exists
+  - name: Remove only closed rotated ramlog archives after persistent flush and disable
+    ansible.builtin.command:
+      argv:
+      - /usr/bin/python3
+      - -c
+      - '{{ lookup(''ansible.builtin.file'', playbook_dir + ''/files/journal-safety.py'') }}'
+      - cleanup
+    register: desk_journal_cleanup
+    changed_when: (desk_journal_cleanup.stdout | from_json) | length > 0
+  - name: List removed archive paths
+    ansible.builtin.debug:
+      var: desk_journal_cleanup.stdout
+  - name: Create the journald drop-in directory
+    ansible.builtin.file:
+      path: /etc/systemd/journald.conf.d
+      state: directory
+      owner: root
+      group: root
+      mode: '0755'
+  - name: Retain up to 200M of persistent journal data
+    ansible.builtin.copy:
+      dest: /etc/systemd/journald.conf.d/90-desk-journal.conf
+      content: '[Journal]
+
+        SystemMaxUse=200M
+
+        '
+      owner: root
+      group: root
+      mode: '0644'
+    notify: Restart systemd-journald
+  - name: Apply journal changes before checking services
+    ansible.builtin.meta: flush_handlers
+  - name: Require journald and ingress services active before advancing
+    ansible.builtin.command:
+      argv:
+      - /usr/bin/systemctl
+      - is-active
+      - --quiet
+      - '{{ item }}'
+    loop:
+    - systemd-journald
+    - haproxy
+    - keepalived
+    - desk-caddy
+    register: desk_journal_service
+    until: desk_journal_service.rc == 0
+    retries: 3
+    delay: 2
+    changed_when: false
   handlers:
-    - name: Restart systemd-journald
-      ansible.builtin.systemd_service:
-        name: systemd-journald
-        state: restarted
+  - name: Restart systemd-journald
+    ansible.builtin.systemd_service:
+      name: systemd-journald
+      state: restarted

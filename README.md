@@ -127,7 +127,7 @@ workers, control planes, and management ingress. Optional services use their
 own feature playbooks. Default workers are ping-only; provider execution requires
 explicit configuration. Preserve your intended overrides on every convergence run.
 
-Run `ansible-playbook -i inventory.ini playbooks/node/journal.yml` separately to manage the 200M journald drop-in, restarting journald only on changes and checking journal/ingress services serially.
+Run `ansible-playbook -i inventory.ini playbooks/node/journal.yml` separately to retain a 200M disk journal, disable optional Armbian ramlog truncation, and flush once when needed; journal/ingress checks remain serial. See [journal persistence and rollback](docs/DESK_JOURNAL.md).
 
 For example, validate the Network entrypoint without deploying it:
 
