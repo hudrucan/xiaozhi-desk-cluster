@@ -376,6 +376,14 @@ executors. Every request still verifies its HMAC, timestamp and nonce; uncertain
 POSTs are never replayed automatically. HTTP/1.0 peers remain compatible during
 rolling updates. Idle pooled sockets are discarded on checkout after eight seconds; server-side
 request admission and idle timeouts remain bounded. TLS responses disable Nagle buffering.
+The client deliberately avoids explicit TLS session resumption: reading
+`SSLSocket.session` leaks native memory on Debian 12's Python 3.11.2
+([CPython #116810](https://github.com/python/cpython/issues/116810)). Verified
+keep-alive connections still avoid repeated handshakes; reconnects use a full
+verified handshake. `PeerHTTP.public()` retains its existing `connections_created`
+(connection objects, including failed connects), `connections_reused` (pool reuse)
+and `request_errors` counters. These are transport diagnostics, not new fields in
+the controller status.
 
 Periodic checkpoint checks still run every five minutes. The retained read-only
 `data_version`/inode/configuration detector is the cheapest first gate. When it

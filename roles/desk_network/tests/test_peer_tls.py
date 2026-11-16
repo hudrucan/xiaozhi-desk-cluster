@@ -1,4 +1,4 @@
-"""Peer RPC TLS session resumption: faster handshakes without weaker pinning."""
+"""Verified TLS reconnects without the leaking SSLSession getter."""
 
 import datetime
 import http.server
@@ -11,6 +11,7 @@ import sys
 import tempfile
 import threading
 import unittest
+from unittest.mock import patch
 import urllib.error
 import urllib.request
 from types import SimpleNamespace
@@ -35,7 +36,7 @@ except ImportError:
 @unittest.skipUnless(
     HAVE_TLS_FIXTURE, "cryptography is required to mint a throwaway test certificate"
 )
-class PeerTlsResumption(unittest.TestCase):
+class VerifiedPeerTLS(unittest.TestCase):
     @staticmethod
     def mint(directory, name, san):
         key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
@@ -65,6 +66,15 @@ class PeerTlsResumption(unittest.TestCase):
         return str(crt), str(pem)
 
     def setUp(self):
+        # Also catch getters hidden by a broad exception handler in close().
+        self.session_reads = []
+        def forbidden_session(sock):
+            self.session_reads.append(sock.fileno())
+            raise AssertionError("SSLSocket.session must not be read (CPython #116810)")
+        guard = patch.object(ssl.SSLSocket, "session", property(forbidden_session))
+        guard.start()
+        self.addCleanup(guard.stop)
+        self.addCleanup(lambda: self.assertEqual(self.session_reads, []))
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
         self.dir = directory.name
@@ -107,7 +117,7 @@ class PeerTlsResumption(unittest.TestCase):
     def opener(self, cafile):
         context = ssl.create_default_context(cafile=cafile)
         return urllib.request.build_opener(
-            urllib.request.ProxyHandler({}), ha.resuming_https_handler(context)
+            urllib.request.ProxyHandler({}), urllib.request.HTTPSHandler(context=context)
         )
 
     def post(self, opener, port):
@@ -117,15 +127,15 @@ class PeerTlsResumption(unittest.TestCase):
         with opener.open(request, timeout=5) as response:
             return response.status, response.read()
 
-    def test_session_is_resumed_after_the_first_full_handshake(self):
+    def test_repeated_https_requests_never_read_session(self):
         server = self.serve(self.good)
         port = server.server_address[1]
         opener = self.opener(self.good[0])
         for _ in range(4):
             self.assertEqual(self.post(opener, port), (200, b'{"ok":true}'))
-        self.assertEqual(self.reused, [False, True, True, True])
+        self.assertEqual(self.reused, [False, False, False, False])
 
-    def test_resumption_never_weakens_certificate_pinning_or_identity(self):
+    def test_certificate_pinning_and_identity_are_verified(self):
         server = self.serve(self.good)
         port = server.server_address[1]
         loopback = x509.IPAddress(ipaddress.ip_address("127.0.0.1"))
@@ -149,11 +159,11 @@ class PeerTlsResumption(unittest.TestCase):
         first.server_close()
         self.serve(
             self.good, port
-        )  # new SSLContext: the old ticket cannot be decrypted
+        )  # fresh server SSLContext, still verified against the same certificate
         self.assertEqual(self.post(opener, port), (200, b'{"ok":true}'))
-        self.assertEqual(self.reused, [False, True, False])
+        self.assertEqual(self.reused, [False, False, False])
         self.post(opener, port)
-        self.assertTrue(self.reused[-1])
+        self.assertFalse(self.reused[-1])
 
     def test_unreachable_peer_still_raises_urlerror(self):
         with socket.socket() as probe:

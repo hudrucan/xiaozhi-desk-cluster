@@ -15,18 +15,12 @@ class PeerHTTP:
         self.capacity, self.idle_seconds = capacity, idle_seconds
         self.lock = threading.Lock()
         self.pools = {}
-        self.sessions = {}
         self.closed = False
         self.created = self.reused = self.errors = 0
 
     def connection(self, host, port, timeout):
-        outer = self
-        class Connection(http.client.HTTPSConnection):
-            def connect(self):
-                http.client.HTTPConnection.connect(self)
-                self.sock = self._context.wrap_socket(self.sock, server_hostname=self.host,
-                                                     session=outer.sessions.get((self.host, self.port)))
-        return Connection(host, port, timeout=timeout, context=self.context)
+        # Avoid SSLSocket.session: CPython #116810 leaks native memory on Debian 12.
+        return http.client.HTTPSConnection(host, port, timeout=timeout, context=self.context)
 
     def post(self, host, port, path, body, headers, timeout, channel='control'):
         deadline = time.monotonic() + timeout
@@ -81,11 +75,6 @@ class PeerHTTP:
                 if size > self.max_bytes:
                     raise ValueError('Peer response exceeds limit')
             keep = not response.will_close
-            if conn.sock is not None:
-                session = conn.sock.session
-                if session is not None and session.has_ticket:
-                    with self.lock:
-                        self.sessions[(host, port)] = session
             return response.status, b''.join(chunks)
         except Exception:
             with self.lock:

@@ -7,7 +7,7 @@ import test_peer_tls as tls
 @unittest.skipUnless(tls.HAVE_TLS_FIXTURE,'cryptography is required for local TLS fixtures')
 class PoolTests(unittest.TestCase):
  def setUp(self):
-  self.fixture=tls.PeerTlsResumption();self.fixture.setUp();self.addCleanup(self.fixture.doCleanups)
+  self.fixture=tls.VerifiedPeerTLS();self.fixture.setUp();self.addCleanup(self.fixture.doCleanups)
   self.connections=[];self.posts=[];self.entered=threading.Event();self.release=threading.Event();self.addCleanup(self.release.set)
   outer=self
   class Handler(http.server.BaseHTTPRequestHandler):
