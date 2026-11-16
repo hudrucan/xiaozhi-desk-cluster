@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"math"
 	"net/http"
 	"net/http/httptest"
@@ -824,5 +826,151 @@ func TestPanelHomeAssistantProjectionFreshnessConflictAndBudget(t *testing.T) {
 	s.Nodes[2].At = now.Add(-time.Minute)
 	if panelSnapshot(s, members, now).Nodes[2].HomeAssistant != nil {
 		t.Fatal("Offline node retained HA claim")
+	}
+}
+
+// No external device is contacted; exercise real HTTP/JSON handling and scheduling.
+type firmwareTransport struct {
+	calls int
+	body  string
+	code  int
+	err   error
+}
+
+func (f *firmwareTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	f.calls++
+	if req.URL.String() != "http://192.168.1.128:8080/api/status/system" {
+		return nil, errors.New("unexpected firmware URL")
+	}
+	if f.err != nil {
+		return nil, f.err
+	}
+	return &http.Response{StatusCode: f.code, Body: io.NopCloser(strings.NewReader(f.body)), Header: http.Header{}}, nil
+}
+func TestFirmwareBackoffAndMQTTWake(t *testing.T) {
+	now := time.Now().UTC()
+	transport := &firmwareTransport{code: 503}
+	d := &Dashboard{config: Config{ClientURL: "http://192.168.1.128:8080/"}, client: &http.Client{Transport: transport}}
+	probe := func(seconds int, count int) {
+		at := now.Add(time.Duration(seconds) * time.Second)
+		d.probeFirmware(context.Background(), []Node{{ID: "deskb2x", Online: true, At: at, MQTT: &count}}, at)
+	}
+	probe(0, 0)
+	probe(14, 0)
+	if transport.calls != 1 {
+		t.Fatal("first retry was not delayed", transport.calls)
+	}
+	probe(15, 0)
+	probe(30, 0)
+	if transport.calls != 3 || d.firmware.State != "offline" || !d.firmwareNext.Equal(now.Add(3630*time.Second)) {
+		t.Fatal("three failures did not back off for an hour", transport.calls, d.firmwareNext)
+	}
+	probe(60, 0)
+	probe(3629, 0)
+	if transport.calls != 3 {
+		t.Fatal("offline device still polled", transport.calls)
+	}
+	probe(3630, 0)
+	if transport.calls != 4 {
+		t.Fatal("hourly fallback missing", transport.calls)
+	}
+	// Peer MQTT count rising wakes a probe before the deadline; a sustained count
+	// must not cause repeated probes. This also works while admission is paused.
+	probe(3635, 1)
+	probe(3640, 1)
+	if transport.calls != 5 {
+		t.Fatal("MQTT edge was missed or treated as a level", transport.calls)
+	}
+	// A brief invalid peer sample must not reset the last valid connection count.
+	at := now.Add(3645 * time.Second)
+	count := 2
+	d.probeFirmware(context.Background(), []Node{{ID: "deskb2x", Online: true, At: now, MQTT: &count}}, at)
+	d.probeFirmware(context.Background(), []Node{{ID: "deskb2x", Online: false, At: at, MQTT: &count}}, at)
+	d.probeFirmware(context.Background(), []Node{{ID: "deskb2x", Online: true, At: at}}, at)
+	if transport.calls != 5 {
+		t.Fatal("invalid peer woke probe")
+	}
+	transport.code = 200
+	transport.body = `{"version":"1.2","ip":"192.168.1.128","uptime_sec":4,"server_connected":false}`
+	probe(3650, 2)
+	if transport.calls != 6 || d.firmware.State != "online" || d.firmware.Connected == nil || *d.firmware.Connected || d.firmwareFailures != 0 {
+		t.Fatal("successful reconnect did not reset backoff", d.firmware)
+	}
+	probe(3664, 2)
+	probe(3665, 2)
+	if transport.calls != 7 {
+		t.Fatal("successful device lost 15s cadence", transport.calls)
+	}
+	probe(3666, 0) // Observe a disconnect.
+	probe(3667, 1) // Another connect wakes even while health was online.
+	if transport.calls != 8 {
+		t.Fatal("second MQTT edge missed")
+	}
+}
+func TestFirmwareFailuresAndDisabledProbe(t *testing.T) {
+	for _, f := range []firmwareTransport{
+		{code: 200, body: `{"version":"1","ip":"192.168.1.129","uptime_sec":3}`},
+		{code: 200, body: `{"version":"1","ip":"192.168.1.128","uptime_sec":-1}`},
+		{code: 200, body: `{"ip":"192.168.1.128","uptime_sec":3}`},
+		{code: 200, body: `not json`}, {err: errors.New("timeout")},
+	} {
+		d := &Dashboard{config: Config{ClientURL: "http://192.168.1.128:8080/"}, client: &http.Client{Transport: &f}}
+		at := time.Now().UTC()
+		for i := 0; i < 4; i++ {
+			d.probeFirmware(context.Background(), nil, at.Add(time.Duration(i)*15*time.Second))
+		}
+		if f.calls != 3 || d.firmware.State != "offline" || d.firmwareFailures != 3 {
+			t.Fatal("invalid response bypassed backoff", f.calls, d.firmware)
+		}
+	}
+	f := &firmwareTransport{}
+	d := &Dashboard{client: &http.Client{Transport: f}}
+	d.probeFirmware(context.Background(), nil, time.Now())
+	if f.calls != 0 {
+		t.Fatal("disabled probe issued HTTP request")
+	}
+}
+
+// collect must actually use both fresh local MQTT and the cached peer sample.
+type firmwareCollectorTransport struct {
+	firmware firmwareTransport
+	mqtt     int
+}
+
+func (f *firmwareCollectorTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if req.URL.Hostname() == "192.168.1.128" {
+		return f.firmware.RoundTrip(req)
+	}
+	body := `{}`
+	if req.URL.Host == "10.10.10.11:8007" {
+		body = fmt.Sprintf(`{"gateway_id":"deskb1x","status":"ready","active_mqtt_connections":%d}`, f.mqtt)
+	}
+	return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(body)), Header: http.Header{}}, nil
+}
+func TestCollectorWiresFirmwareWakeFromLocalAndPeerMQTT(t *testing.T) {
+	f := &firmwareCollectorTransport{firmware: firmwareTransport{code: 503}}
+	d := &Dashboard{member: Member{ID: "deskb1x", Private: "10.10.10.11"}, config: Config{Node: "deskb1x", ClientURL: "http://192.168.1.128:8080/"}, client: &http.Client{Transport: f}, slowAt: time.Now(), firmwareNext: time.Now().Add(time.Hour), firmwareFailures: 3}
+	d.collect(context.Background())
+	if f.firmware.calls != 0 {
+		t.Fatal("collector ignored backoff")
+	}
+	f.mqtt = 1
+	d.collect(context.Background())
+	if f.firmware.calls != 1 {
+		t.Fatal("local MQTT did not wake probe")
+	}
+	d.collect(context.Background())
+	if f.firmware.calls != 1 {
+		t.Fatal("same local count kept waking probe")
+	}
+	count := 1
+	d.snapshot.Nodes = []Node{{ID: "deskb2x", Online: true, At: time.Now(), MQTT: &count}}
+	d.collect(context.Background())
+	if f.firmware.calls != 2 {
+		t.Fatal("peer MQTT did not wake probe")
+	}
+	d.collect(context.Background())
+	if f.firmware.calls != 2 {
+		t.Fatal("same peer count kept waking probe")
 	}
 }

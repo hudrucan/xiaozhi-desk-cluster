@@ -191,8 +191,23 @@ sample interval and MemoryCurrent on each node before claiming any overhead.
 ## Firmware Web Control link
 
 The optional Xiaozhi Client card probes the configured private IPv4 HTTP endpoint
-`/api/status/system` every 15 seconds, in parallel with other cached status reads.
-It verifies version, device IP and uptime, and retains no SSID or other robot status
+`/api/status/system` every 15 seconds while healthy. After three consecutive
+failures (including invalid device identity/JSON), retries fall to once per hour;
+a successful probe restores the 15-second cadence. Backoff lives only in collector
+memory, so restarting a collector starts a fresh probe sequence. Browser polling
+continues to read the cache and cannot multiply device probes.
+
+A rise in any node's fresh `active_mqtt_connections`, reused from existing gateway
+and peer telemetry, wakes a probe on the next collector pass (normally within one
+or two 5-second cycles). A sustained nonzero count does not keep waking it. This
+is an aggregate hint, not proof that this robot connected: another device can wake
+it, and an unobserved disconnect/reconnect or equal-count device swap can be missed.
+The pinned gateway exposes no per-device connect signal. For exact wakeups, add a
+bounded per-device connection generation to its existing `/status` contract and
+forward that hint through peer telemetry; no extra endpoint or MQTT subscription
+is needed. Until then the hourly retry is the fallback.
+
+The firmware probe verifies version, device IP and uptime, and retains no SSID or other robot status
 fields. Offline or stale health renders a disabled native button. It links directly
 to the device only when healthy; no firmware action or camera capture is triggered.
 

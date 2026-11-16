@@ -432,6 +432,9 @@ type Dashboard struct {
 	boots            map[string]string
 	collectors       map[string]time.Time
 	telemetry        map[string]eventTransition
+	firmwareFailures int
+	firmwareNext     time.Time
+	firmwareMQTT     map[string]int
 	firmware         Firmware
 	monitorHealthy   bool
 	preferredMonitor string
@@ -715,6 +718,47 @@ func (d *Dashboard) slow(ctx context.Context) {
 	result["monitoring"] = state
 	d.slowConfig = result
 }
+
+// Only the collector calls this method; browser requests cannot trigger probes.
+func (d *Dashboard) probeFirmware(ctx context.Context, nodes []Node, now time.Time) {
+	if d.config.ClientURL == "" {
+		return
+	}
+	if d.firmwareMQTT == nil {
+		d.firmwareMQTT = map[string]int{}
+	}
+	wake := false
+	for _, node := range nodes {
+		if !node.Online || node.MQTT == nil || !panelFresh(node.At, now, staleAfter) {
+			continue
+		}
+		if *node.MQTT > d.firmwareMQTT[node.ID] {
+			wake = true
+		}
+		d.firmwareMQTT[node.ID] = *node.MQTT
+	}
+	if !wake && now.Before(d.firmwareNext) {
+		return
+	}
+	status := Firmware{URL: d.config.ClientURL, State: "offline", At: now}
+	value := d.get(ctx, status.URL+"api/status/system")
+	parsed, _ := url.Parse(status.URL) // Validated at configuration load.
+	version, ok := value["version"].(string)
+	if ok && len(version) > 0 && len(version) <= 128 && value["ip"] == parsed.Hostname() && number(value["uptime_sec"]) != nil {
+		status.State = "online"
+		status.Connected = boolean(value["server_connected"])
+		d.firmwareFailures = 0
+	} else if d.firmwareFailures < 3 {
+		d.firmwareFailures++
+	}
+	delay := 15 * time.Second
+	if d.firmwareFailures >= 3 {
+		delay = time.Hour
+	}
+	d.firmwareNext = now.Add(delay)
+	d.firmware = status
+}
+
 func (d *Dashboard) collect(ctx context.Context) {
 	n := unknown(d.member)
 	n.Online = true
@@ -776,10 +820,6 @@ func (d *Dashboard) collect(ctx context.Context) {
 	}
 	ip := d.member.Private
 	urls := []string{"http://" + ip + ":8007/status", "http://" + ip + ":8000/status", "http://" + ip + ":8000/diagnostics", "http://127.0.0.1:3001/control/status", "http://127.0.0.1:2590/ready"}
-	probeClient := d.config.ClientURL != "" && time.Since(d.firmware.At) >= 15*time.Second
-	if probeClient {
-		urls = append(urls, d.config.ClientURL+"api/status/system")
-	}
 	values := parallelGets(ctx, d, urls)
 	gateway, core, voice, adguard := values[0], values[1], values[2], values[3]
 	// Probe only the public readiness bit; the collector never reads auth state.
@@ -794,7 +834,6 @@ func (d *Dashboard) collect(ctx context.Context) {
 	n.Connections = map[string]*int{"core": number(core["active_connections"]), "mqtt": number(gateway["open_mqtt_connections"])}
 	dnsMaintenance := readJSON("/etc/desk-dns/maintenance.json", 2048)
 	n.MaintenanceSupported = n.MaintenanceSupported && core["maintenance_supported"] == true && gateway["maintenance_supported"] == true && dnsMaintenance["protocol"] == "desk-dns-maintenance-v1" && dnsMaintenance["node"] == n.ID
-	n.DNSHealth = d.collectDNS(ctx, n)
 	n.Components["mqtt"] = "unavailable"
 	if gateway["gateway_id"] == n.ID && (gateway["status"] == "ready" || (gateway["admission_paused"] == true && gateway["mqtt_listening"] == true && gateway["udp_listening"] == true)) {
 		n.MQTT = number(gateway["active_mqtt_connections"])
@@ -802,6 +841,28 @@ func (d *Dashboard) collect(ctx context.Context) {
 			n.Components["mqtt"] = "ready"
 		}
 	}
+	// Reuse the previous peer sample plus this node's current MQTT count. No extra
+	// gateway polling or device identifiers are needed for the reconnect hint.
+	d.mu.RLock()
+	nodes := append([]Node{}, d.snapshot.Nodes...)
+	d.mu.RUnlock()
+	peers := nodes[:0]
+	for _, peer := range nodes {
+		if peer.ID != n.ID {
+			peers = append(peers, peer)
+		}
+	}
+	nodes = append(peers, n)
+	// DNS and firmware share the collection deadline without delaying each other.
+	var probes sync.WaitGroup
+	probes.Add(1)
+	go func() {
+		defer probes.Done()
+		d.probeFirmware(ctx, nodes, time.Now().UTC())
+	}()
+	n.DNSHealth = d.collectDNS(ctx, n)
+	probes.Wait()
+
 	n.Components["core"] = "unavailable"
 	if core["protocol"] == "xiaozhi-core-transport-v1" && core["core_id"] == n.ID && core["status"] == "ready" {
 		n.Core = number(core["active_sessions"])
@@ -822,21 +883,7 @@ func (d *Dashboard) collect(ctx context.Context) {
 		n.Components["dns"] = "ready"
 	}
 	d.slow(ctx)
-	if probeClient {
-		status := Firmware{URL: d.config.ClientURL, State: "offline", At: time.Now().UTC()}
-		if status.URL == "" {
-			status.State = "disabled"
-		} else {
-			value := values[5]
-			parsed, _ := url.Parse(status.URL)
-			version, ok := value["version"].(string)
-			if ok && len(version) > 0 && len(version) <= 128 && value["ip"] == parsed.Hostname() && number(value["uptime_sec"]) != nil {
-				status.State = "online"
-				status.Connected = boolean(value["server_connected"])
-			}
-		}
-		d.firmware = status
-	}
+
 	for key, s := range d.slowConfig {
 		n.Config[key] = s
 	}

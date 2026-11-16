@@ -1,0 +1,90 @@
+--- a/internal/hub/systems/system.go
++++ b/internal/hub/systems/system.go
+@@ -100,6 +100,20 @@
+ 	return system
+ }
+ 
++// deskUpdateInterval only backs off offline, on-demand SSH fallback. The cluster
++// uses SSH-only agents, so keep its normal recovery detection on either address.
++func (sys *System) deskUpdateInterval() time.Duration {
++	if sys.GetStatus() == down && sys.WsConn == nil {
++		switch sys.Host {
++		case "10.10.10.11", "10.10.10.12", "10.10.10.13",
++			"192.168.1.101", "192.168.1.102", "192.168.1.103":
++		default:
++			return time.Hour
++		}
++	}
++	return time.Duration(interval) * time.Millisecond
++}
++
+ // StartUpdater starts the system updater.
+ // It first fetches the data from the agent then updates the records.
+ // If the data is not found or the system is down, it sets the system down.
+@@ -133,7 +147,8 @@
+ 		}
+ 	}
+ 
+-	sys.updateTicker = time.NewTicker(time.Duration(interval) * time.Millisecond)
++	period := sys.deskUpdateInterval()
++	sys.updateTicker = time.NewTicker(period)
+ 	// Go 1.23+ will automatically stop the ticker when the system is garbage collected, however we seem to need this or testing/synctest will block even if calling runtime.GC()
+ 	defer sys.updateTicker.Stop()
+ 
+@@ -150,10 +165,14 @@
+ 			downChan = nil
+ 			_ = sys.setDown(nil)
+ 		case <-jitter:
+-			sys.updateTicker.Reset(time.Duration(interval) * time.Millisecond)
++			sys.updateTicker.Reset(period)
+ 			if err := sys.update(); err != nil {
+ 				_ = sys.setDown(err)
+ 			}
++		}
++		if next := sys.deskUpdateInterval(); next != period {
++			period = next
++			sys.updateTicker.Reset(period)
+ 		}
+ 	}
+ }
+--- /dev/null
++++ b/internal/hub/systems/desk_backoff_test.go
+@@ -0,0 +1,38 @@
++package systems
++
++import (
++	"testing"
++	"time"
++
++	"github.com/henrygd/beszel/internal/hub/ws"
++)
++
++func TestDeskSSHBackoff(t *testing.T) {
++	sys := &System{Host: "192.168.1.28", Status: down}
++	if got := sys.deskUpdateInterval(); got != time.Hour {
++		t.Fatalf("offline fallback: %s", got)
++	}
++	// A replacement system with a new WS connection must never inherit SSH delay.
++	sys.WsConn = &ws.WsConn{}
++	if got := sys.deskUpdateInterval(); got != time.Minute {
++		t.Fatalf("WS reconnect delayed: %s", got)
++	}
++	sys.WsConn = nil
++	for _, status := range []string{up, pending, paused} {
++		sys.swapStatus(status)
++		if got := sys.deskUpdateInterval(); got != time.Minute {
++			t.Fatalf("%s cadence: %s", status, got)
++		}
++	}
++	sys.swapStatus(down)
++	for _, host := range []string{"10.10.10.11", "10.10.10.12", "10.10.10.13", "192.168.1.101", "192.168.1.102", "192.168.1.103"} {
++		sys.Host = host
++		if got := sys.deskUpdateInterval(); got != time.Minute {
++			t.Fatalf("SSH-only cluster recovery delayed for %s: %s", host, got)
++		}
++	}
++	sys.Host = "192.168.1.115"
++	if got := sys.deskUpdateInterval(); got != time.Hour {
++		t.Fatalf("second offline device: %s", got)
++	}
++}

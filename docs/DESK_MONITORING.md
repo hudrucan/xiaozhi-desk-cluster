@@ -206,6 +206,23 @@ This rollout restarts one `beszel-hub` at a time, checks native health and share
 configuration, retains rollback copies, and verifies protected services and DNS
 configuration. Existing browser sessions need a reload to load the new bundle.
 
+## Offline on-demand agent backoff
+
+`beszel-backoff.patch` is applied after the UI and notification patches by the
+same pinned builder, included in its cache identity, and tested before building.
+After the initial startup attempt, a Down system without a WebSocket connection
+retries SSH once per hour instead of every minute. An authenticated WS reconnect
+still replaces its updater and fetches metrics immediately. Up, Pending and Paused
+cadences retain upstream behavior. The three SSH-only cluster agents are exempt
+by exact host: `10.10.10.11`–`10.10.10.13` and `192.168.1.101`–`192.168.1.103`,
+including when Down, preserving minute-scale recovery detection. Keep this small
+list aligned with agent host configuration if addresses change. Other SSH-only
+hosts may take up to one hour plus dial/update time to be rediscovered; hub restart
+or editing/recreating a system starts a fresh attempt. This changes scheduled
+system updates only; explicit operations and native network-monitor probes retain
+their own behavior. Roll out with `playbooks/monitoring/monitoring-ui.yml`, one hub
+at a time, using its health/config gates and saved binary rollback.
+
 ## Network-monitor record identity recovery
 
 Beszel 0.21.0 derives network-monitor record IDs from the native system ID and

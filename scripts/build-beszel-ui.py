@@ -13,12 +13,13 @@ VERSION = '0.21.0'
 SOURCE_SHA256 = '782378299b883d5a02fc0fad73b990a50d07c72c755df08edcf1b0530995129a'
 PATCH = Path(__file__).resolve().parents[1] / 'roles/desk_monitoring/files/beszel-ui.patch'
 NOTIFICATION_PATCH = PATCH.with_name('beszel-ntfy.patch')
+BACKOFF_PATCH = PATCH.with_name('beszel-backoff.patch')
 TEST = PATCH.parents[1] / 'tests/test_agent_install.mjs'
 
 
 def build(goos, goarch):
-    identity = hashlib.sha256(SOURCE_SHA256.encode() + PATCH.read_bytes() + NOTIFICATION_PATCH.read_bytes() + Path(__file__).read_bytes() + TEST.read_bytes()).hexdigest()
-    cache = Path('/private/tmp/desk-beszel-ui-build') / identity
+    identity = hashlib.sha256(SOURCE_SHA256.encode() + PATCH.read_bytes() + NOTIFICATION_PATCH.read_bytes() + BACKOFF_PATCH.read_bytes() + Path(__file__).read_bytes() + TEST.read_bytes()).hexdigest()
+    cache = Path(os.environ.get('DESK_BUILD_ROOT') or '/private/tmp') / 'desk-beszel-ui-build' / identity
     binary = cache / f'beszel-{goos}-{goarch}'
     if binary.exists():
         return binary
@@ -34,6 +35,8 @@ def build(goos, goarch):
         tar.extractall(cache, filter='data')
     subprocess.run(['patch', '--batch', '--fuzz=0', '-p1', '-i', str(PATCH)], cwd=source, check=True, stdout=sys.stderr)
     subprocess.run(['patch', '--batch', '--fuzz=0', '-p1', '-i', str(NOTIFICATION_PATCH)], cwd=source, check=True, stdout=sys.stderr)
+    subprocess.run(['patch', '--batch', '--fuzz=0', '-p1', '-i', str(BACKOFF_PATCH)], cwd=source, check=True, stdout=sys.stderr)
+    subprocess.run(['go', 'test', './internal/hub/systems', '-run', '^TestDeskSSHBackoff$'], cwd=source, check=True, stdout=sys.stderr)
     subprocess.run(['go', 'test', './internal/alerts', '-run', '^Test(NotificationOwnerFollowsExistingVIP|NtfyPublisherUsesNativeToken)$'], cwd=source, check=True, stdout=sys.stderr)
     site = source / 'internal/site'
     subprocess.run(['npm', 'ci', '--no-audit', '--no-fund'], cwd=site, check=True, stdout=sys.stderr)

@@ -152,8 +152,9 @@ class PortableBuildRoots(unittest.TestCase):
         self.assertEqual(options(source, '/tmp/desk build', ['--source', '/tmp/source', '--out', '/tmp/output']),
                          (Path('/tmp/source'), Path('/tmp/output')))
 
-    def test_self_hashed_builders_remain_byte_identical(self):
-        for name in ('scripts/build-beszel-ui.py', 'scripts/build-ntfy-web.py'):
+    def test_unchanged_self_hashed_builder_remains_byte_identical(self):
+        # Beszel intentionally changes its cache identity for the offline backoff patch.
+        for name in ('scripts/build-ntfy-web.py',):
             with self.subTest(file=name):
                 self.assertEqual((ROOT / name).read_text(), baseline(name))
 
