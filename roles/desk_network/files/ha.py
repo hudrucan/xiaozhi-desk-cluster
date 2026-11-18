@@ -150,7 +150,7 @@ POLICY={
  'ARPSCAN_CMD':'python3 /app/desk_network/arp.py userSubnets={subnets}','ARPSCAN_RUN_TIMEOUT':60,'ARPSCAN_RUN':'schedule','ARPSCAN_ARGS':'sudo arp-scan --ignoredups --retry=3',
  'NSLOOKUP_RUN':'disabled','AVAHISCAN_RUN':'schedule','AVAHISCAN_RUN_SCHD':'*/5 * * * *','AVAHISCAN_CMD':'python3 /app/desk_network/mdns.py','AVAHISCAN_RUN_TIMEOUT':30,'AVAHISCAN_SET_ALWAYS':[],'AVAHISCAN_SET_EMPTY':['devName','devFQDN'],'AVAHISCAN_WATCH':['watchedValue2'],'AVAHISCAN_REPORT_ON':[],'NBTSCAN_RUN':'disabled','DIGSCAN_RUN':'disabled',
  'INTRNT_RUN':'disabled','SYNC_RUN':'disabled','VNDRPDT_RUN':'disabled','WORKFLOWS_RUN':'disabled',
- 'MAINT_RUN':'schedule','MAINT_RUN_SCHD':'17 3 * * *','MAINT_PERF_DAYS':0,'DBCLNP_RUN':'schedule','DBCLNP_RUN_SCHD':'37 3 * * *',
+ 'MAINT_RUN':'schedule','MAINT_RUN_SCHD':'17 3 * * *','MAINT_PERF_DAYS':0,'DBCLNP_RUN':'schedule','DBCLNP_RUN_SCHD':'7 * * * *',
  'DAYS_TO_KEEP_EVENTS':14,'DEV_HIST_DAYS':7,'LOG_LEVEL':'minimal','SETPWD_enable_password':False,'DEEP_SLEEP':False,
  'NEWDEV_IP_MATCH_NAME':False, 'REPORT_DASHBOARD_URL':'http://192.168.1.186/network'}
 def scan_schedule(conf):

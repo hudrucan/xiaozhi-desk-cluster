@@ -33,7 +33,7 @@
   "MAINT_RUN_SCHD": "17 3 * * *",
   "MAINT_PERF_DAYS": 0,
   "DBCLNP_RUN": "schedule",
-  "DBCLNP_RUN_SCHD": "37 3 * * *",
+  "DBCLNP_RUN_SCHD": "7 * * * *",
   "DAYS_TO_KEEP_EVENTS": 14,
   "DEV_HIST_DAYS": 7,
   "LOG_LEVEL": "minimal",

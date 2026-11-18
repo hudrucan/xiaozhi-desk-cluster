@@ -59,6 +59,14 @@ are cluster managed. Those controls are explicitly marked and disabled on the
 native Settings page; an attempted change is rejected before the native write
 with a named HTTP 400 error, surfaced on the page. Other settings retain the
 native save path. History retention is bounded.
+DBCLNP runs hourly at minute 7 (`7 * * * *`): frequent presence updates grow
+AppEvents, making its API JSON export expensive enough to delay `/auth` and
+cause false readiness failures. Hourly cleanup bounds this build-up; MAINT
+keeps its separate `17 3 * * *` schedule. The controller replaces managed
+settings during checkpoint restore and warm activation; the read-only startup
+policy uses the same hourly schedule. Updating files alone does not change an
+already running app: recreate it through the controlled rollout before checking
+the effective configuration.
 This provides inventory, names/groups, presence and in-app events; it does not
 control modem DHCP reservations or disconnect clients from Wi-Fi.
 

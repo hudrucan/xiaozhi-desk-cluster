@@ -183,6 +183,33 @@ class Checks(unittest.TestCase):
  def test_policy_survives_conf_from_old_owner(self):
   raw=ha.apply_policy(b"SCAN_SUBNETS=['10.77.0.0/24']\nNSLOOKUP_RUN='before_name_updates'\n",'test-token')
   self.assertNotIn(b'10.77.0.0',raw);self.assertIn(b'192.168.1.0/24 --interface=wlan0',raw);self.assertIn(b"NSLOOKUP_RUN='disabled'",raw)
+ def test_hourly_db_cleanup_replaces_old_or_missing_managed_schedule(self):
+  import ast
+  native=json.loads((pathlib.Path(__file__).parents[1]/'files/policy.json').read_text())
+  for policy in (native,ha.POLICY):
+   self.assertEqual(policy['DBCLNP_RUN'],'schedule')
+   self.assertEqual(policy['DBCLNP_RUN_SCHD'],'7 * * * *')
+   self.assertEqual(policy['MAINT_RUN_SCHD'],'17 3 * * *')
+  for previous in (b'',b"DBCLNP_RUN='disabled'\nDBCLNP_RUN_SCHD='37 3 * * *'\nDBCLNP_RUN_SCHD='0 0 * * *'\n"):
+   with self.subTest(previous=previous):
+    conf=previous+b"ARPSCAN_RUN_SCHD='*/1 * * * *'\nMAINT_RUN_SCHD='17 3 * * *'\n"
+    saved=ha.apply_policy(conf,'test-token').decode()
+    assignments={node.targets[0].id:ast.literal_eval(node.value) for node in ast.parse(saved).body if isinstance(node,ast.Assign)}
+    self.assertEqual(assignments['DBCLNP_RUN'],'schedule')
+    self.assertEqual(assignments['DBCLNP_RUN_SCHD'],'7 * * * *')
+    self.assertEqual(assignments['MAINT_RUN_SCHD'],'17 3 * * *')
+    self.assertEqual(assignments['ARPSCAN_RUN_SCHD'],'*/1 * * * *')
+    self.assertEqual(len(re.findall(r'^DBCLNP_RUN_SCHD[ \t]*=',saved,re.M)),1)
+ def test_restore_bridge_applies_hourly_cleanup_to_old_checkpoint_config(self):
+  import ast,sys
+  conf=b"DBCLNP_RUN_SCHD='37 3 * * *'\nARPSCAN_RUN_SCHD='*/1 * * * *'\n"
+  payload=ha.encoded({'configuration':base64.b64encode(conf).decode(),'token':'fixture-token','workflows':None})
+  bridge=pathlib.Path(__file__).resolve().parents[3]/'tools/desk-checkpoint/bridge.py'
+  result=subprocess.run([sys.executable,str(bridge),'restore',ha.__file__],input=payload,capture_output=True,check=True,timeout=10)
+  assignments={node.targets[0].id:ast.literal_eval(node.value) for node in ast.parse(result.stdout).body if isinstance(node,ast.Assign)}
+  self.assertEqual(assignments['DBCLNP_RUN_SCHD'],'7 * * * *')
+  self.assertEqual(assignments['MAINT_RUN_SCHD'],'17 3 * * *')
+  self.assertEqual(assignments['ARPSCAN_RUN_SCHD'],'*/1 * * * *')
  def test_native_ntfy_policy_preserves_publisher_and_scan_settings(self):
   conf=b"NTFY_TOKEN='test-publisher'\nNTFY_RUN='on_notification'\nARPSCAN_RUN_SCHD='*/1 * * * *'\n"
   saved=ha.apply_policy(conf,'test-api')
