@@ -51,9 +51,9 @@
     mode: '0600'
   no_log: true
   register: camera_definition
-- name: Set progressive playback for configured cameras
+- name: Set progressive playback and standby cadence for configured cameras
   ansible.builtin.command:
-    argv: [python3, -c, "import json,pathlib; p=pathlib.Path('/etc/desk-camera/config.json'); v=json.loads(p.read_bytes()); desired={{ desk_camera_progressive | bool | ternary('True','False') }}; changed=any(c.get('progressive',False)!=desired for c in v['cameras']); [c.update(progressive=desired) for c in v['cameras']]; q=p.with_suffix('.candidate'); q.write_text(json.dumps(v)) if changed else None; q.chmod(0o600) if changed else None; q.replace(p) if changed else None; print('changed' if changed else 'unchanged')"]
+    argv: [python3, -c, "import json,pathlib; p=pathlib.Path('/etc/desk-camera/config.json'); v=json.loads(p.read_bytes()); desired={{ desk_camera_progressive | bool | ternary('True','False') }}; interval=float({{ desk_camera_standby_interval_seconds | to_json }}); assert 2<=interval<=5; changed=any(c.get('progressive',False)!=desired or c.get('standby_interval_seconds')!=interval for c in v['cameras']); [c.update(progressive=desired,standby_interval_seconds=interval) for c in v['cameras']]; q=p.with_suffix('.candidate'); q.write_text(json.dumps(v)) if changed else None; q.chmod(0o600) if changed else None; q.replace(p) if changed else None; print('changed' if changed else 'unchanged')"]
   register: camera_progressive
   changed_when: camera_progressive.stdout == 'changed'
   no_log: true

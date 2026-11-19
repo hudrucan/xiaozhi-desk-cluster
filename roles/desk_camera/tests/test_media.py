@@ -35,7 +35,7 @@ class MediaTests(unittest.TestCase):
   self.assertEqual(r.render(camera,'a'*32)['webrtc']['candidates'],['192.0.2.1:18655'])
   self.assertEqual(r.render(base,'b'*32)['api']['listen'],'10.0.0.1:1984')
  def test_placement_penalizes_other_live_camera_slots_only(self):
-  with tempfile.TemporaryDirectory() as tmp:
+  with tempfile.TemporaryDirectory() as tmp,patch.object(c,'clock',return_value=100.):
    c.RUN=pathlib.Path(tmp);own=c.RUN/'tapo_c222_161';own.mkdir();other=c.RUN/'tapo_c222_163';other.mkdir()
    agent=c.Controller.__new__(c.Controller);agent.run_dir=own;agent.local={'cpu':12}
    (own/'permit.json').write_text(json.dumps({'until':110,'generation':'a'*32}))

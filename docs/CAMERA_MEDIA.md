@@ -239,3 +239,23 @@ test discovery. `verify_transfer.py` and `verify_camera_transfer.py` create real
 owner drains. `verify_bundle.py` reads/decrypts an installed recovery bundle;
 measurement/fleet/control tools also require node state and credentials. These
 are operator tools, not offline tests, and are never auto-run.
+
+### Controller standby cadence
+
+A node holding any camera, a local lease, or active playback keeps all workload
+loops at 2 seconds. Otherwise `desk_camera_standby_interval_seconds` defaults to
+5 seconds; supported overrides are 2–5 seconds. The role writes this setting to
+each camera definition; helper-only rollouts use the controller's default when
+it is absent. Cadence is a wait after reconciliation, so RPC/work time adds to it.
+Known peer lease and local quarantine deadlines shorten that wait. The existing
+stop event interrupts waits immediately, including staggered startup. There is
+no config-watch or peer-loss event bus: config changes require a restart and
+unannounced peer loss is detected on the next poll.
+
+Standby permits with identical on-disk bytes are retained; missing or changed
+permits are rewritten, and owner renewals/revocation still write as needed.
+The 15-second voter TTL, 17-second quarantine, 10-second owner permit and runtime
+fence remain unchanged. A 5-second standby poll gives a nominal ~20-second
+last-grant-to-takeover envelope, with RPC, scheduling and startup time additional;
+it is not a hard failover SLA. Roll out idle standbys first and drain owners
+before restarting their controller and dependent media workers.

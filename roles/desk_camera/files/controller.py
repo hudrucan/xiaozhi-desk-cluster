@@ -91,7 +91,13 @@ class Controller:
    mem={k:int(v.split()[0]) for k,v in (line.split(':',1) for line in pathlib.Path('/proc/meminfo').read_text().splitlines())}
    v['memory_available_mib']=mem['MemAvailable']//1024;self.local=v;self.local_at=clock()
   except Exception:pass
- def permit(self):atomic(self.run_dir/'permit.json',encoded({'until':self.until,'generation':self.generation if self.owned() else None}))
+ def permit(self):
+  path=self.run_dir/'permit.json';value=encoded({'until':self.until,'generation':self.generation if self.owned() else None})
+  if not self.owned():
+   try:
+    if path.read_bytes()==value:return
+   except FileNotFoundError:pass
+  atomic(path,value)
  def rpc(self,action,value,sender):
   if action=='delivery_issue':
    if value.get('workload')!=self.c['workload']:raise ValueError('Delivery workload')
@@ -173,14 +179,27 @@ class Controller:
     votes=await self.fanout('lease',{'term':term,'definition':self.c['definition']})
     if len(votes)>=2:self.term=term;self.until=stamp+10;self.started_at=clock();self.generation=secrets.token_hex(16);self.permit()
   atomic(self.run_dir/'public.json',encoded(self.public()));os.chmod(self.run_dir/'public.json',0o644)
+ def reconcile_interval(self):
+  agents=self.fleet.agents if self.fleet else [self]
+  # Keep all workload loops fast on a node holding any camera or active playback.
+  if any(a.owned() or a.term is not None or a.playback.active() or a.lease.status()['holder']==a.node for a in agents):return 2.
+  try:interval=float(self.c.get('standby_interval_seconds',5))
+  except (TypeError,ValueError):interval=5.
+  # A longer standby wait would exceed the intended ~20 s takeover envelope.
+  if not math.isfinite(interval) or not 2<=interval<=5:interval=5.
+  deadlines=[self.lease.quarantine-clock()]
+  deadlines.extend(h['lease']['remaining'] for h in self.heads.values())
+  return min([interval]+[d for d in deadlines if d>0])
+ async def wait(self,delay):
+  try:await asyncio.wait_for(self.stop.wait(),delay)
+  except TimeoutError:pass
  async def run(self,delay=0):
-  await asyncio.sleep(delay)
+  await self.wait(delay)
   try:
    while not self.stop.is_set():
     try:await self.reconcile()
     except Exception:logging.warning('Camera placement deferred; details withheld')
-    try:await asyncio.wait_for(self.stop.wait(),2)
-    except TimeoutError:pass
+    await self.wait(self.reconcile_interval())
   finally:self.until=0;self.permit()
 
 async def local_client(reader,writer,agents):
