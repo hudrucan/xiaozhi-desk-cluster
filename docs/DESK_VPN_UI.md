@@ -53,3 +53,7 @@ directories. No upstream checkout, network access or production credentials are
 needed. An explicit `WG_EASY_SOURCE` still selects an external source checkout;
 missing migrations fail instead of silently falling back to the bundled fixture.
 See the fixture README for provenance, licensing and pin-update instructions.
+
+UI health checks use 10-second intervals, 3-second transition checks and
+10-second down checks (fall/rise 3/2). This affects UI failover latency only;
+WireGuard tunnel health and ownership retain their existing settings.

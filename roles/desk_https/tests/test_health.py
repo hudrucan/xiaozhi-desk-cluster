@@ -98,7 +98,7 @@ class EndToEndHealth(unittest.TestCase):
                 stats=tmp/'stats.sock';public_port=port()
                 fragment=fragment.replace('192.168.1.186:443',f'127.0.0.1:{public_port}').replace('source 10.10.10.11','source 127.0.0.1').replace('/etc/ssl/certs/ca-certificates.crt',str(cert))
                 for i,node in enumerate(NODES):fragment=fragment.replace(f'10.10.10.{11+i}:8443',f'127.0.0.1:{caddy_ports[node]}')
-                fragment=fragment.replace('inter 2s','inter 100ms').replace('    tcp-request inspect-delay', '    tcp-request connection set-src ipv4(192.168.1.123)\n    tcp-request inspect-delay')
+                fragment=re.sub(r'\b(inter|fastinter|downinter) \d+s',r'\1 100ms',fragment).replace('    tcp-request inspect-delay', '    tcp-request connection set-src ipv4(192.168.1.123)\n    tcp-request inspect-delay')
                 path=tmp/'router.cfg';path.write_text(f'global\n    stats socket {stats} level admin\ndefaults\n    mode tcp\n    timeout connect 1s\n    timeout client 2s\n    timeout server 2s\n'+fragment)
                 start(os.environ['HAPROXY_BIN'],path)
                 def states():

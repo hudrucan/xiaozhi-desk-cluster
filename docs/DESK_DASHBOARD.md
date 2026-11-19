@@ -254,3 +254,8 @@ The dashboard role and scoped panel/helper refresh playbooks import
 `roles/desk_dashboard/tasks/build.yml` for the same source-addressed ARM64 build
 cache. Their installation, readiness, isolation guards and rollback paths remain
 separate; importing the build tasks does not deploy or restart a service.
+
+Dashboard and node-control health checks use 10-second intervals, 5-second
+transition checks and 10-second down checks (fall/rise 2/2). Initial failure or
+recovery observation can take 5 seconds longer. Control-plane/VIP health gates
+and request retry rules retain their existing settings.

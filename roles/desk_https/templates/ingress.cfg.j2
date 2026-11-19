@@ -24,7 +24,7 @@ backend desk_caddy_{{ backend }}
     http-check expect status 200
     # check-ssl secures only probes. Client TLS passes through unchanged.
 {% for node in groups['xiaozhi_ingress'] | sort %}
-    server {{ node }} {{ hostvars[node].cluster_ip }}:{{ desk_https_port }} source {{ cluster_ip }} check inter 2s fall 2 rise 2 send-proxy-v2 check-send-proxy check-ssl check-sni {{ name }} verify required verifyhost {{ name }} ca-file /etc/ssl/certs/ca-certificates.crt
+    server {{ node }} {{ hostvars[node].cluster_ip }}:{{ desk_https_port }} source {{ cluster_ip }} check inter 5s fastinter 2s downinter 5s fall 2 rise 2 send-proxy-v2 check-send-proxy check-ssl check-sni {{ name }} verify required verifyhost {{ name }} ca-file /etc/ssl/certs/ca-certificates.crt
 {% endfor %}
 {% endfor %}
 # END DESK HTTPS

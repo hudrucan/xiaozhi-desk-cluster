@@ -89,9 +89,9 @@ backend desk_monitoring_hubs
     http-request replace-path ^/monitor/(.*)$ /\1
 {% for node in groups.get('desk_monitoring', []) | sort %}
 {% if desk_monitoring_load_aware_enabled | default(false) %}
-    server {{ node }} {{ hostvars[node].cluster_ip }}:{{ desk_monitoring_proxy_port | default(8091) if desk_monitoring_sync_enabled | default(false) else 8090 }} cookie {{ node }} check inter 5s fall 2 rise 2 weight 100 agent-check agent-addr {{ cluster_ip }} agent-port 8012 agent-inter 30s agent-send "{{ node }}\n"
+    server {{ node }} {{ hostvars[node].cluster_ip }}:{{ desk_monitoring_proxy_port | default(8091) if desk_monitoring_sync_enabled | default(false) else 8090 }} cookie {{ node }} check inter 10s fastinter 5s downinter 10s fall 2 rise 2 weight 100 agent-check agent-addr {{ cluster_ip }} agent-port 8012 agent-inter 30s agent-send "{{ node }}\n"
 {% else %}
-    server {{ node }} {{ hostvars[node].cluster_ip }}:{{ desk_monitoring_proxy_port | default(8091) if desk_monitoring_sync_enabled | default(false) else 8090 }} cookie {{ node }} check inter 5s fall 2 rise 2
+    server {{ node }} {{ hostvars[node].cluster_ip }}:{{ desk_monitoring_proxy_port | default(8091) if desk_monitoring_sync_enabled | default(false) else 8090 }} cookie {{ node }} check inter 10s fastinter 5s downinter 10s fall 2 rise 2
 {% endif %}
 {% endfor %}
 # END DESK MONITORING BACKEND
@@ -118,7 +118,7 @@ backend desk_dashboard
     http-check send meth GET uri /health ver HTTP/1.1 hdr Host localhost
     http-check expect status 200
 {% for node in groups['deskboxes'] | sort %}
-    server {{ node }} {{ hostvars[node].cluster_ip }}:{{ desk_dashboard_port | default(8010) }} check inter 5s fall 2 rise 2
+    server {{ node }} {{ hostvars[node].cluster_ip }}:{{ desk_dashboard_port | default(8010) }} check inter 10s fastinter 5s downinter 10s fall 2 rise 2
 {% endfor %}
 {% if desk_node_control_enabled | default(false) %}
 backend desk_node_control
@@ -128,7 +128,7 @@ backend desk_node_control
     http-check send meth GET uri /health ver HTTP/1.1 hdr Host localhost
     http-check expect status 200
 {% for node in groups['deskboxes'] | sort %}
-    server {{ node }} {{ hostvars[node].cluster_ip }}:{{ desk_node_control_port | default(8011) }} check inter 5s fall 2 rise 2
+    server {{ node }} {{ hostvars[node].cluster_ip }}:{{ desk_node_control_port | default(8011) }} check inter 10s fastinter 5s downinter 10s fall 2 rise 2
 {% endfor %}
 {% endif %}
 # END DESK DASHBOARD BACKEND

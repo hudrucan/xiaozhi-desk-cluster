@@ -314,3 +314,11 @@ The device UI `http://192.168.1.128:8080/` remains an explicit blocker: no devic
 hostname or device proxy is added. Detailed Xiaozhi Settings API/WS/callback source
 lives in the separately pinned server checkout; its complete browser compatibility
 also requires verification against that exact deployed revision.
+
+### Health-check cadence
+
+Each SNI backend uses verified TLS/HTTP checks every 5 seconds, with 2-second
+transition checks and 5-second down checks; fall/rise remain 2/2. Certificate,
+PROXY v2 and local HTTP readiness checks remain required. Initial fault detection
+can take 3 seconds longer than the former 2-second cadence; PC availability is
+still excluded from the synthetic herdr health response.

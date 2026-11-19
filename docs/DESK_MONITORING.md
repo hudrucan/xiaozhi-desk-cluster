@@ -328,3 +328,8 @@ paths are repository symlinks to it; Ansible copies the resolved file into each
 service's existing private runtime. DNS also copies this canonical source.
 No runtime imports cross service directories, and journal/checkpoint formats,
 certificate validation and service-specific keys remain unchanged.
+
+Hub health checks run every 10 seconds, with 5-second transition checks and
+10-second down checks (fall/rise 2/2). Load-aware agent checks remain at 30 seconds.
+This reduces idle work but can delay UI failover/recovery by roughly 5 seconds,
+plus probe timeout effects.
